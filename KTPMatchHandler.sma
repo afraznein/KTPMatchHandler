@@ -21,10 +21,12 @@
 #include <amxmisc>
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.2.5"
+#define PLUGIN_VERSION "0.2.6"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
+new g_pcvarPausable;
+new g_cvarForcePausable;
 new g_cvarCountdown;
 new g_cvarHud;
 new g_cvarLogFile;
@@ -191,6 +193,14 @@ stock strtolower_inplace(s[]) {
     for (new i = 0; s[i]; i++) if (s[i] >= 'A' && s[i] <= 'Z') s[i] += 32;
 }
 
+stock strip_bsp_suffix(s[]) {
+    new n = strlen(s);
+    if (n >= 4 && equali(s[n-4], ".bsp")) {
+        s[n-4] = EOS;
+    }
+    trim(s);
+}
+
 stock fmt_seconds(sec) {
     static buf[16];
     if (sec < 60) formatex(buf, charsmax(buf), "%ds", sec);
@@ -229,11 +239,8 @@ stock load_map_mappings() {
         new eq = contain(line, "=");
         if (eq <= 0) continue;
 
-        copy(key, min(eq, charsmax(key)), line); trim(key); strtolower_inplace(key);
-        copy(val, charsmax(val), line[eq + 1]); trim(val);
-
         strip_bsp_suffix(key);
-
+        
         if (!key[0] || !val[0]) continue;
 
         copy(g_mapKeys[added], charsmax(g_mapKeys[]), key);
@@ -248,45 +255,56 @@ stock load_map_mappings() {
 
 stock lookup_cfg_for_map(const map[], outCfg[], outLen) {
     outCfg[0] = EOS;
-
-    // Normalize the map name to lowercase, no extension
-    new lower[64]; copy(lower, charsmax(lower), map); strtolower_inplace(lower);
-    // If someone passes a map *with* extension by mistake, strip it too
     strip_bsp_suffix(lower);
-
     for (new i = 0; i < g_mapRows; i++) {
         if (!g_mapKeys[i][0]) continue;
-        if (equali(lower, g_mapKeys[i])) {
-            copy(outCfg, outLen, g_mapCfgs[i]);
-            return 1;
-        }
+        if (equali(lower, g_mapKeys[i])) { copy(outCfg, outLen, g_mapCfgs[i]); return 1; }
     }
     return 0;
 }
-
 
 stock exec_map_config() {
     new map[32]; get_mapname(map, charsmax(map));
 
     new base[96]; get_pcvar_string(g_cvarCfgBase, base, charsmax(base));
-    if (!base[0]) copy(base, charsmax(base), "cfg/ktp/");
+    if (!base[0]) copy(base, charsmax(base), "dod/");
 
     new cfg[128];
     if (!lookup_cfg_for_map(map, cfg, charsmax(cfg))) {
-        log_ktp("event=MAPCFG status=miss map=%s rows=%d", map, g_mapRows);
+        log_ktp("event=MAPCFG status=miss map=%s", map);
         return 0;
     }
 
     new fullpath[192]; formatex(fullpath, charsmax(fullpath), "%s%s", base, cfg);
-    log_ktp("event=MAPCFG status=exec map=%s cfg=%s path='%s'", map, cfg, fullpath);
 
+    log_ktp("event=MAPCFG status=exec map=%s cfg=%s path=\'%s\'", map, cfg, fullpath);
     announce_all("Applying match config: %s", cfg);
+
     server_cmd("exec %s", fullpath);
     server_exec();
     return 1;
 }
 
+stock ktp_force_pausable_if_needed() {
+    if (!get_pcvar_num(g_cvarForcePausable)) return;
+    if (g_pcvarPausable) {
+        if (get_pcvar_num(g_pcvarPausable) != 1) set_pcvar_num(g_pcvarPausable, 1);
+    } else {
+        if (get_cvar_num("pausable") != 1) set_cvar_num("pausable", 1);
+    }
+}
 
+stock ktp_pause_now(const reason[]) {
+    ktp_force_pausable_if_needed();
+    if (!g_isPaused) {
+        g_allowInternalPause = true;
+        server_cmd("pause");
+        server_exec();
+        g_allowInternalPause = false;
+        g_isPaused = true;
+        log_ktp("event=PAUSE_TOGGLE source=plugin reason='%s'", reason);
+    }
+}
 // ================= Countdown & Pause HUD =================
 public start_unpause_countdown(const who[]) {
     if (!g_isPaused) return;
@@ -319,7 +337,7 @@ public countdown_tick() {
     log_ktp("event=LIVE map=%s requested_by=\'%s\'", map, g_lastUnpauseBy[0] ? g_lastUnpauseBy : "unknown");
     announce_all("Live! (Unpaused by %s)", g_lastUnpauseBy[0] ? g_lastUnpauseBy : "unknown");
 
-    g_allowInternalPause = true; server_cmd("pause"); server_exec(); g_allowInternalPause = false;
+    ktp_pause_now("auto")
     g_isPaused = false;
 
     // Clear pause-session state
@@ -378,7 +396,7 @@ public pending_hud_tick() {
     set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 1.2, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "KTP Match Pending |^nAllies: %d/%d ready |^nAxis: %d/%d ready |^nNeed %d/team^nType /ready when ready.",
+        "KTP Match Pending^nAllies: %d/%d ready^nAxis: %d/%d ready^nNeed %d/team^nType /ready when ready.",
         ar, ap, xr, xp, need);
 }
 
@@ -387,7 +405,7 @@ public prestart_hud_tick() {
     set_hudmessage(255, 210, 0, 0.02, 0.08, 0, 0.0, 1.2, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "KTP Pre-Start: Waiting for /confirm from each team.^nAllies: %s^nAxis: %s^nCommands: /confirm, /prestatus, /cancel",
+        "KTP Pre-Start: Waiting for /confirm from each team^nAllies: %s^nAxis: %s^nCommands: /confirm, /prestatus, /cancel",
         g_preConfirmAllies ? g_confirmAlliesBy : "—",
         g_preConfirmAxis   ? g_confirmAxisBy   : "—"
     );
@@ -400,6 +418,7 @@ stock prestart_reset() {
     g_confirmAlliesBy[0] = EOS;
     g_confirmAxisBy[0]   = EOS;
     if (task_exists(g_taskPrestartHudId)) remove_task(g_taskPrestartHudId);
+
     // New half starting soon; reset pause limits for both teams
     g_pauseCountTeam[1] = 0;
     g_pauseCountTeam[2] = 0;
@@ -423,43 +442,47 @@ public plugin_init() {
     num_to_str(g_readyRequired,   tmpReady,     charsmax(tmpReady));
 
     g_cvarCountdown  = register_cvar("ktp_pause_countdown", tmpCountdown);
-    g_cvarHud        = register_cvar("ktp_pause_hud", "1");
-    g_cvarLogFile    = register_cvar("ktp_match_logfile", DEFAULT_LOGFILE);
-    g_cvarReadyReq   = register_cvar("ktp_ready_required", tmpReady);
-    g_cvarCfgBase    = register_cvar("ktp_cfg_basepath", "dod/");
-    g_cvarMapsFile   = register_cvar("ktp_maps_file", "addons/amxmodx/configs/ktp_maps.ini");
-    g_cvarAutoReqSec = register_cvar("ktp_unpause_autorequest_secs", "300");
+    g_cvarReadyReq      = register_cvar("ktp_ready_required", tmpReady);
+    g_cvarLogFile       = register_cvar("ktp_match_logfile", DEFAULT_LOGFILE);
+    g_cvarForcePausable = register_cvar("ktp_force_pausable", "1");
+    g_cvarCountdown     = register_cvar("ktp_pause_countdown", "5");
+    g_cvarHud           = register_cvar("ktp_pause_hud", "1");
+    g_cvarCfgBase       = register_cvar("ktp_cfg_basepath", "dod/");
+    g_cvarMapsFile      = register_cvar("ktp_maps_file", "addons/amxmodx/configs/ktp_maps.ini");
+    g_cvarAutoReqSec    = register_cvar("ktp_unpause_autorequest_secs", "300");
 
     ktp_sync_config_from_cvars();
 
     // Chat controls
-    register_clcmd("say /pause",        "cmd_chat_toggle");
-    register_clcmd("say_team /pause",   "cmd_chat_toggle");
-    register_clcmd("say pause",        "cmd_chat_toggle");
-    register_clcmd("say_team pause",   "cmd_chat_toggle");
-    register_clcmd("say /resume",       "cmd_chat_resume");
-    register_clcmd("say_team /resume",  "cmd_chat_resume");
-    register_clcmd("say resume",       "cmd_chat_resume");
-    register_clcmd("say_team resume",  "cmd_chat_resume");
+    register_clcmd("say /pause",               "cmd_chat_toggle");
+    register_clcmd("say_team /pause",          "cmd_chat_toggle");
+    register_clcmd("say pause",                "cmd_chat_toggle");
+    register_clcmd("say_team pause",           "cmd_chat_toggle");
+    register_clcmd("say /resume",              "cmd_chat_resume");
+    register_clcmd("say_team /resume",         "cmd_chat_resume");
+    register_clcmd("say resume",               "cmd_chat_resume");
+    register_clcmd("say_team resume",          "cmd_chat_resume");
     register_clcmd("say /confirmunpause",      "cmd_confirm_unpause");
     register_clcmd("say_team /confirmunpause", "cmd_confirm_unpause");
-    register_clcmd("say /cresume",      "cmd_confirm_unpause");
-    register_clcmd("say_team /cresume", "cmd_confirm_unpause");
-    register_clcmd("say /cunpause",      "cmd_confirm_unpause");
-    register_clcmd("say_team /cunpause", "cmd_confirm_unpause");
+    register_clcmd("say /cresume",             "cmd_confirm_unpause");
+    register_clcmd("say_team /cresume",        "cmd_confirm_unpause");
+    register_clcmd("say /cunpause",            "cmd_confirm_unpause");
+    register_clcmd("say_team /cunpause",       "cmd_confirm_unpause");
 
     // Start / Pre-Start
-    register_clcmd("say /start",        "cmd_match_start");
-    register_clcmd("say_team /start",   "cmd_match_start");
-    register_clcmd("say start",        "cmd_match_start");
-    register_clcmd("say_team start",   "cmd_match_start");
+    register_clcmd("say /start",           "cmd_match_start");
+    register_clcmd("say_team /start",      "cmd_match_start");
+    register_clcmd("say start",            "cmd_match_start");
+    register_clcmd("say_team start",       "cmd_match_start");
     register_clcmd("say /startmatch",      "cmd_match_start");
     register_clcmd("say_team /startmatch", "cmd_match_start");
+    register_clcmd("say startmatch",       "cmd_match_start");
+    register_clcmd("say_team startmatch",  "cmd_match_start");
 
     register_clcmd("say /confirm",        "cmd_pre_confirm");
     register_clcmd("say_team /confirm",   "cmd_pre_confirm");
-    register_clcmd("say confirm",        "cmd_pre_confirm");
-    register_clcmd("say_team confirm",   "cmd_pre_confirm");
+    register_clcmd("say confirm",         "cmd_pre_confirm");
+    register_clcmd("say_team confirm",    "cmd_pre_confirm");
     register_clcmd("say /notconfirm",     "cmd_pre_notconfirm");
     register_clcmd("say_team /notconfirm","cmd_pre_notconfirm");
     register_clcmd("say /prestatus",      "cmd_pre_status");
@@ -470,37 +493,43 @@ public plugin_init() {
     // Ready (+ alias /ktp) + notready
     register_clcmd("say /ready",         "cmd_ready");
     register_clcmd("say_team /ready",    "cmd_ready");
-    register_clcmd("say ready",         "cmd_ready");
-    register_clcmd("say_team ready",    "cmd_ready");
+    register_clcmd("say ready",          "cmd_ready");
+    register_clcmd("say_team ready",     "cmd_ready");
     register_clcmd("say /ktp",           "cmd_ready");
     register_clcmd("say_team /ktp",      "cmd_ready");
-    register_clcmd("say ktp",           "cmd_ready");
-    register_clcmd("say_team ktp",      "cmd_ready");
+    register_clcmd("say ktp",            "cmd_ready");
+    register_clcmd("say_team ktp",       "cmd_ready");
     register_clcmd("say /notready",      "cmd_notready");
     register_clcmd("say_team /notready", "cmd_notready");
 
     // Status + cancel
-    register_clcmd("say /status",       "cmd_status");
-    register_clcmd("say_team /status",  "cmd_status");
-    register_clcmd("say status",       "cmd_status");
-    register_clcmd("say_team status",  "cmd_status");
-    register_clcmd("say /cancel",       "cmd_cancel");
-    register_clcmd("say_team /cancel",  "cmd_cancel");    
+    register_clcmd("say /status",         "cmd_status");
+    register_clcmd("say_team /status",    "cmd_status");
+    register_clcmd("say status",          "cmd_status");
+    register_clcmd("say_team status",     "cmd_status");
+    register_clcmd("say /cancel",         "cmd_cancel");
+    register_clcmd("say_team /cancel",    "cmd_cancel");
     register_clcmd("say cancel",       "cmd_cancel");
     register_clcmd("say_team cancel",  "cmd_cancel");
 
     // Mapping maintenance
     register_clcmd("say /reloadmaps",        "cmd_reload_maps");
     register_clcmd("say_team /reloadmaps",   "cmd_reload_maps");
+    
+    // Mapping maintenance
+    register_clcmd("say /ktpconfig",      "cmd_ktpconfig");
+    register_clcmd("say_team /ktpconfig", "cmd_ktpconfig");
 
     // Block client console "pause" and attribute it
     register_clcmd("pause", "cmd_client_pause");
 
     // Block server/RCON pause/unpause entirely
+    // AMXX seems unable to block server rcon. Would need other modules for this
     //register_srvcmd("pause",   "srv_block_pause");
     //register_srvcmd("unpause", "srv_block_unpause");
 
     g_hudSync = CreateHudSyncObj();
+    g_pcvarPausable = get_cvar_pointer("pausable");
     g_lastUnpauseBy[0] = EOS;
     g_lastPauseBy[0] = EOS;
 
@@ -636,7 +665,7 @@ public cmd_chat_toggle(id) {
         }
 
         // Actually pause
-        g_allowInternalPause = true; server_cmd("pause"); server_exec(); g_allowInternalPause = false; g_isPaused = true;
+        ktp_pause_now("auto")
 
         // record who paused for HUD
         formatex(g_lastPauseBy, charsmax(g_lastPauseBy), "%s", name2);
@@ -757,10 +786,7 @@ public cmd_match_start(id) {
 
     // Pre-start pause (does NOT count)
     if (!g_isPaused) {
-        g_allowInternalPause = true;
-        server_cmd("pause");
-        server_exec();
-        g_allowInternalPause = false;
+        ktp_pause_now("auto")
         g_isPaused = true;
         log_ktp("event=PRESTART_AUTOPAUSE");
     }
@@ -823,19 +849,9 @@ public cmd_pre_confirm(id) {
         log_ktp("event=PRESTART_COMPLETE");
         prestart_reset();
 
-        g_matchPending = true;
-        
-        // Ensure server is paused during pending phase
-        if (!g_isPaused) {
-            g_allowInternalPause = true;
-            server_cmd("pause");
-            server_exec();
-            g_allowInternalPause = false;
-            g_isPaused = true;
-            log_ktp("event=PENDING_ENFORCE_PAUSE");
-        }
-
+        ktp_pause_now("pending_enforce");
         arrayset(g_ready, 0, sizeof g_ready);
+
         if (!task_exists(g_taskPendingHudId)) set_task(1.0, "pending_hud_tick", g_taskPendingHudId, _, _, "b");
 
         new map[32]; get_mapname(map, charsmax(map));
@@ -896,8 +912,8 @@ public cmd_cancel(id) {
     return PLUGIN_HANDLED;
 }
 
-// ----- Ready / NotReady / Status -----
-public cmd_ready(id) {
+    // ----- Ready / NotReady / Status -----
+    ktp_sync_config_from_cvars();
     if (!g_matchPending) { client_print(id, print_chat, "[KTP] No pending match. Use /start to begin."); return PLUGIN_HANDLED; }
     if (!is_user_connected(id)) return PLUGIN_HANDLED;
     if (g_ready[id]) { client_print(id, print_chat, "[KTP] You are already READY."); return PLUGIN_HANDLED; }
@@ -913,7 +929,7 @@ public cmd_ready(id) {
     new need = g_readyRequired;
     announce_all("%s is READY. Allies %d/%d | Axis %d/%d (need %d each).", name, ar, ap, xr, xp, need);
 
-    if (ar >= need && xr >= need) {
+    if (ar >= g_readyRequired && xr >= g_readyRequired) {
         exec_map_config();
 
         new alliesTag[64], axisTag[64];
@@ -927,7 +943,7 @@ public cmd_ready(id) {
         arrayset(g_ready, 0, sizeof g_ready);
         if (task_exists(g_taskPendingHudId)) remove_task(g_taskPendingHudId);
 
-        if (!g_isPaused) { g_allowInternalPause = true; server_cmd("pause"); server_exec(); g_allowInternalPause = false; g_isPaused = true; }
+        if (!g_isPaused) { ktp_pause_now("auto") }
         if (!g_lastUnpauseBy[0]) copy(g_lastUnpauseBy, charsmax(g_lastUnpauseBy), "system");
 
         // First LIVE of this half → mark match live and reset pause-session vars
@@ -989,115 +1005,61 @@ public cmd_status(id) {
 //}
 
 // ================= Name Sanitizers and Team Team tag inference (compact) =================
-// ---- Safe LCP (longest common prefix)
 stock lcp(const namesLower[][], total, out[], outLen) {
-    out[0] = EOS;
-    if (total <= 0 || outLen <= 1) return;
+    if (total <= 0) { out[0] = EOS; return; }
 
-    new pos = 0, i;
+    new i, pos = 0;
+
+    // Loop while the first string still has characters
     while (namesLower[0][pos] != EOS) {
         new ch = namesLower[0][pos];
+
+        // Verify all other strings share this character at 'pos'
         for (i = 1; i < total; i++) {
             if (namesLower[i][pos] == EOS || namesLower[i][pos] != ch) {
                 out[pos] = EOS;
                 return;
             }
         }
-        if (pos >= outLen - 1) break;
-        out[pos++] = ch;
+
+        // Append if room remains; otherwise stop and terminate
+        if (pos < outLen - 1) {
+            out[pos++] = ch;
+        } else {
+            break;
+        }
     }
+
     out[pos] = EOS;
 }
 
 
-// Longest common suffix (safe)
-// Safe longest common suffix (no var reuse, no negative indexes)
 stock lcs(const namesLower[][], total, out[], outLen) {
-    out[0] = EOS;
-    if (total <= 0 || outLen <= 1) return;
+    if (total <= 0) { out[0] = EOS; return; }
+    new i, minlen = 9999, len;
+    for (i = 0; i < total; i++) { len = strlen(namesLower[i]); if (len < minlen) minlen = len; }
 
-    // Clamp total to our fixed buffer size
-    new count = total;
-    if (count > 32) count = 32;
-
-    // Precompute lengths and shortest length
-    new lens[32];
-    new i;
-    new minlen = 9999;
-    for (i = 0; i < count; i++) {
-        lens[i] = strlen(namesLower[i]);
-        if (lens[i] < minlen) minlen = lens[i];
-    }
-    if (minlen <= 0) return;
-
-    // Walk from the end while all strings share the same char
-    new matched = 0;
-    while (matched < minlen && matched < outLen - 1) {
-        new ch = namesLower[0][lens[0] - 1 - matched];
-
-        // Verify all other strings match at this suffix offset
-        new ok = 1;
-        for (i = 1; i < count; i++) {
-            if (namesLower[i][lens[i] - 1 - matched] != ch) {
-                ok = 0;
-                break;
+    new pos = 0;
+    while (pos < minlen) {
+        new ch = namesLower[0][strlen(namesLower[0]) - 1 - pos];
+        for (i = 1; i < total; i++) {
+            if (namesLower[i][strlen(namesLower[i]) - 1 - pos] != ch) {
+                new rev[64], j;
+                for (j = 0; j < pos && j < outLen - 1; j++) rev[j] = namesLower[0][strlen(namesLower[0]) - pos + j];
+                rev[j] = EOS; copy(out, outLen, rev); return;
             }
         }
-        if (!ok) break;
-        matched++;
+        pos++; if (pos >= outLen - 1) break;
     }
 
-    if (matched <= 0) { out[0] = EOS; return; }
-
-    // Copy the suffix (preserves original characters)
-    new start = lens[0] - matched;
-    new j = 0;
-    while (j < matched && j < outLen - 1) {
-        out[j] = namesLower[0][start + j];
-        j++;
-    }
-    out[j] = EOS;
+    new rev2[64], k;
+    for (k = 0; k < pos && k < outLen - 1; k++) rev2[k] = namesLower[0][strlen(namesLower[0]) - pos + k];
+    rev2[k] = EOS; copy(out, outLen, rev2);
 }
 
-
-
-// ---- Project case from a sample, with safe suffix handling
 stock project_case_from_sample(const sampleOrig[], const tagLower[], out[], outLen, bool:useSuffix) {
-    out[0] = EOS;
-    if (outLen <= 1) return;
-
-    new soLen = strlen(sampleOrig);
-    new tLen  = strlen(tagLower);
-
-    if (tLen <= 0) return;
-
-    if (useSuffix) {
-        if (soLen >= tLen) {
-            new start = soLen - tLen;
-            new j = 0;
-            while (j < tLen && j < outLen - 1) {
-                out[j] = sampleOrig[start + j];
-                j++;
-            }
-            out[j] = EOS;
-        } else {
-            copy(out, outLen, tagLower);
-        }
-        return;
-    }
-
-    new i, w = 0;
-    for (i = 0; i < soLen && w < tLen && w < outLen - 1; i++) {
-        new c = sampleOrig[i];
-        new lower = (c >= 'A' && c <= 'Z') ? (c + 32) : c;
-        if (lower == tagLower[w]) {
-            out[w++] = c; // preserve case from sample
-        }
-    }
-    out[w] = EOS;
-
-    if (out[0] == EOS) copy(out, outLen, tagLower);
-
+    new soLen = strlen(sampleOrig), tLen = strlen(tagLower);
+    if (!tLen) { out[0] = EOS; return; }
     if (!useSuffix) {
         new i, w = 0;
         for (i = 0; i < soLen && w < tLen && w < outLen - 1; i++) {
@@ -1112,67 +1074,31 @@ stock project_case_from_sample(const sampleOrig[], const tagLower[], out[], outL
     }
 }
 
-
-// Safe team-tag inference: longest common prefix/suffix in lowercase; no case projection.
-// Returns length of tag written into outTag, or 0 if none (caller should fallback).
 stock infer_team_tag(teamId, outTag[], outLen, bool:preferSuffix = true) {
-    if (outLen <= 1) { outTag[0] = EOS; return 0; }
-
-    new ids[32], num;
-    get_players(ids, num, "ch"); // connected & alive/have name; adjust flags if needed
-
-    // Collect sanitized names for the requested team
-    new lower[32][64];   // lowercased filtered names
-    new total = 0;
+    new ids[32], num; get_players(ids, num, "ch");
+    new lower[32][64], orig[32][64], total = 0;
 
     for (new i = 0; i < num && total < 32; i++) {
-        new id = ids[i], tname[16];
-        new tid = get_user_team(id, tname, charsmax(tname));
+        new id = ids[i], tname[16]; new tid = get_user_team(id, tname, charsmax(tname));
         if (tid != teamId) continue;
-
-        new pname[64];
-        get_user_name(id, pname, charsmax(pname));
-
-        // We only need lowercase for the common-substring calculation
-        // (outOrig isn’t used anymore to avoid case-projection complexity)
-        new dummy[64];
-        sanitize_name(pname, lower[total], dummy, sizeof lower[]);
-        if (strlen(lower[total]) < 2) continue; // ignore extremely short/empty names
-
+        new pname[64]; get_user_name(id, pname, charsmax(pname));
+        sanitize_name(pname, lower[total], orig[total], 64);
+        if (strlen(lower[total]) < 2) continue;
         total++;
     }
 
-    outTag[0] = EOS;
-    if (total <= 0) return 0;
+    if (total <= 0) { outTag[0] = EOS; return 0; }
 
-    // Compute prefix/suffix (both already safe implementations)
-    new pfx[64], sfx[64];
-    lcp(lower, total, pfx, charsmax(pfx));
-    lcs(lower, total, sfx, charsmax(sfx));
-    trim(pfx);
-    trim(sfx);
+    new pfx[64], sfx[64]; lcp(lower, total, pfx, 64); lcs(lower, total, sfx, 64); trim(pfx); trim(sfx);
 
-    // Choose a tag
-    new chosen[64];
-    chosen[0] = EOS;
+    new best[64];
+    if (preferSuffix && strlen(sfx) >= 2 && strlen(sfx) >= strlen(pfx)) project_case_from_sample(orig[0], sfx, best, 64, true);
+    else if (strlen(pfx) >= 2) project_case_from_sample(orig[0], pfx, best, 64, false);
+    else if (strlen(sfx) >= 2) project_case_from_sample(orig[0], sfx, best, 64, true);
+    else { outTag[0] = EOS; return 0; }
 
-    if (preferSuffix && strlen(sfx) >= 2 && strlen(sfx) >= strlen(pfx)) {
-        copy(chosen, charsmax(chosen), sfx);
-    } else if (strlen(pfx) >= 2) {
-        copy(chosen, charsmax(chosen), pfx);
-    } else if (strlen(sfx) >= 2) {
-        copy(chosen, charsmax(chosen), sfx);
-    } else {
-        // No meaningful common substring; caller should fallback to "Allies"/"Axis"
-        outTag[0] = EOS;
-        return 0;
-    }
-
-    // Write to output (lowercase—as computed). Caller can case/format if desired.
-    copy(outTag, outLen, chosen);
-    return strlen(outTag);
+    copy(outTag, outLen, best); trim(outTag); return strlen(outTag);
 }
-
 
 stock sanitize_name(const src[], outLower[], outOrig[], outLen) {
     new i = 0, jLower = 0, jOrig = 0, c;
@@ -1196,11 +1122,12 @@ stock sanitize_name(const src[], outLower[], outOrig[], outLen) {
     outLower[jLower] = EOS;
 }
 
-stock strip_bsp_suffix(s[]) {
-    new n = strlen(s);
-    if (n >= 4 && (s[n-4] == '.' || s[n-4] == '.') && equali(s[n-4], ".bsp")) {
-        s[n-4] = EOS;
-    }
-    trim(s);
+public cmd_ktpconfig(id) {
+    new ap, xp, ar, xr; get_ready_counts(ap, xp, ar, xr);
+    new map[32]; get_mapname(map, charsmax(map));
+    new cfg[128]; new found = lookup_cfg_for_map(map, cfg, charsmax(cfg));
+    client_print(id, print_chat,
+        "[KTP] need=%d, countdown=%d | Allies %d/%d, Axis %d/%d | map=%s cfg=%s (%s)",
+        g_readyRequired, g_countdownSeconds, ar, ap, xr, xp, map, found?cfg:"-", found?"found":"MISS");
+    return PLUGIN_HANDLED;
 }
-
