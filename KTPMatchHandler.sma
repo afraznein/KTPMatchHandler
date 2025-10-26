@@ -21,12 +21,12 @@
 #include <amxmisc>
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.2.6"
+#define PLUGIN_VERSION "0.2.7"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
-new g_pcvarPausable;
-new g_cvarForcePausable;
+new g_cvarPrePauseSec;
+new g_cvarTechBudgetSec;
 new g_cvarCountdown;
 new g_cvarHud;
 new g_cvarLogFile;
@@ -36,6 +36,7 @@ new g_cvarMapsFile;
 new g_cvarAutoReqSec;
 
 // ---------- State ----------
+new g_prePauseSeconds = 5;
 new bool: g_isPaused = false;
 new bool: g_matchPending = false;
 new bool: g_countdownActive = false;
@@ -126,8 +127,15 @@ stock announce_all(const fmt[], any:...) {
     }
 }
 
-// If CVARs exist, let them override the globals (useful in production).
 stock ktp_sync_config_from_cvars() {
+    if (g_cvarPrePauseSec) { 
+        new v3 = get_pcvar_num(g_cvarPrePauseSec); 
+        if (v3 > 0) g_prePauseSeconds = v3; 
+    }
+    if (g_cvarTechBudgetSec) { 
+        new v4 = get_pcvar_num(g_cvarTechBudgetSec); 
+        if (v4 > 0) g_techBudgetSecs = v4; 
+    }
     if (g_cvarReadyReq) {
         new v = get_pcvar_num(g_cvarReadyReq);
         if (v > 0) g_readyRequired = v;
@@ -188,7 +196,6 @@ stock get_who_str(id, out[], len) {
     formatex(out, len, "%s[%s]", name, sid);
 }
 
-
 stock strtolower_inplace(s[]) {
     for (new i = 0; s[i]; i++) if (s[i] >= 'A' && s[i] <= 'Z') s[i] += 32;
 }
@@ -199,6 +206,11 @@ stock strip_bsp_suffix(s[]) {
         s[n-4] = EOS;
     }
     trim(s);
+}
+
+
+stock strtolower_inplace(s[]) {
+    for (new i = 0; s[i]; i++) if (s[i] >= 'A' && s[i] <= 'Z') s[i] += 32;
 }
 
 stock fmt_seconds(sec) {
@@ -240,7 +252,13 @@ stock load_map_mappings() {
         if (eq <= 0) continue;
 
         strip_bsp_suffix(key);
-        
+
+        copy(key, min(eq, charsmax(key)), line);
+        trim(key);
+        strtolower_inplace(key);
+        copy(val, charsmax(val), line[eq + 1]);
+        trim(val);
+
         if (!key[0] || !val[0]) continue;
 
         copy(g_mapKeys[added], charsmax(g_mapKeys[]), key);
@@ -255,10 +273,14 @@ stock load_map_mappings() {
 
 stock lookup_cfg_for_map(const map[], outCfg[], outLen) {
     outCfg[0] = EOS;
+    new lower[64];
     strip_bsp_suffix(lower);
+    copy(lower, charsmax(lower), map);
+    strtolower_inplace(lower);
+
     for (new i = 0; i < g_mapRows; i++) {
         if (!g_mapKeys[i][0]) continue;
-        if (equali(lower, g_mapKeys[i])) { copy(outCfg, outLen, g_mapCfgs[i]); return 1; }
+        if (containi(lower, g_mapKeys[i]) == 0) { copy(outCfg, outLen, g_mapCfgs[i]); return 1; }
     }
     return 0;
 }
@@ -305,6 +327,7 @@ stock ktp_pause_now(const reason[]) {
         log_ktp("event=PAUSE_TOGGLE source=plugin reason='%s'", reason);
     }
 }
+
 // ================= Countdown & Pause HUD =================
 public start_unpause_countdown(const who[]) {
     if (!g_isPaused) return;
@@ -391,13 +414,12 @@ public pause_hud_tick() {
 public pending_hud_tick() {
     if (!g_matchPending) { remove_task(g_taskPendingHudId); return; }
     new ap, xp, ar, xr; get_ready_counts(ap, xp, ar, xr);
+    new techA = g_techBudget[1]; new techX = g_techBudget[2];
     new need = g_readyRequired;
 
     set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 1.2, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
-    ShowSyncHudMsg(0, g_hudSync,
-        "KTP Match Pending^nAllies: %d/%d ready^nAxis: %d/%d ready^nNeed %d/team^nType /ready when ready.",
-        ar, ap, xr, xp, need);
+    ShowSyncHudMsg(0, g_hudSync,"KTP Match Pending^nAllies: %d/%d ready^nAxis: %d/%d ready^nNeed %d/team^nType /ready when ready.", ar, ap, xr, xp, need);
 }
 
 public prestart_hud_tick() {
@@ -437,31 +459,38 @@ stock ktp_banner_enabled() {
 public plugin_init() {
     register_plugin(PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR);
 
-    new tmpCountdown[8], tmpReady[8];
+    new tmpCountdown[8];
+    new tmpReady[8];
+    new tmpPre[8];
+    new tmpTech[8];
+
     num_to_str(g_countdownSeconds, tmpCountdown, charsmax(tmpCountdown));
     num_to_str(g_readyRequired,   tmpReady,     charsmax(tmpReady));
+    num_to_str(g_prePauseSeconds, tmpPre, charsmax(tmpPre));
+    num_to_str(g_techBudgetSecs, tmpTech, charsmax(tmpTech));
 
-    g_cvarCountdown  = register_cvar("ktp_pause_countdown", tmpCountdown);
-    g_cvarReadyReq      = register_cvar("ktp_ready_required", tmpReady);
-    g_cvarLogFile       = register_cvar("ktp_match_logfile", DEFAULT_LOGFILE);
-    g_cvarForcePausable = register_cvar("ktp_force_pausable", "1");
-    g_cvarCountdown     = register_cvar("ktp_pause_countdown", "5");
-    g_cvarHud           = register_cvar("ktp_pause_hud", "1");
-    g_cvarCfgBase       = register_cvar("ktp_cfg_basepath", "dod/");
-    g_cvarMapsFile      = register_cvar("ktp_maps_file", "addons/amxmodx/configs/ktp_maps.ini");
-    g_cvarAutoReqSec    = register_cvar("ktp_unpause_autorequest_secs", "300");
+    g_cvarCountdown      = register_cvar("ktp_pause_countdown", tmpCountdown);
+    g_cvarReadyReq       = register_cvar("ktp_ready_required", tmpReady);
+    g_cvarPrePauseSec    = register_cvar("ktp_prepause_seconds", tmpPre);
+    g_cvarTechBudgetSec  = register_cvar("ktp_tech_budget_seconds", tmpTech);
+    g_cvarLogFile        = register_cvar("ktp_match_logfile", DEFAULT_LOGFILE);
+    g_cvarForcePausable  = register_cvar("ktp_force_pausable", "1");
+    g_cvarHud            = register_cvar("ktp_pause_hud", "1");
+    g_cvarCfgBase        = register_cvar("ktp_cfg_basepath", "dod/");
+    g_cvarMapsFile       = register_cvar("ktp_maps_file", "addons/amxmodx/configs/ktp_maps.ini");
+    g_cvarAutoReqSec     = register_cvar("ktp_unpause_autorequest_secs", "300");
 
     ktp_sync_config_from_cvars();
 
     // Chat controls
-    register_clcmd("say /pause",               "cmd_chat_toggle");
-    register_clcmd("say_team /pause",          "cmd_chat_toggle");
-    register_clcmd("say pause",                "cmd_chat_toggle");
-    register_clcmd("say_team pause",           "cmd_chat_toggle");
-    register_clcmd("say /resume",              "cmd_chat_resume");
-    register_clcmd("say_team /resume",         "cmd_chat_resume");
-    register_clcmd("say resume",               "cmd_chat_resume");
-    register_clcmd("say_team resume",          "cmd_chat_resume");
+    register_clcmd("say /pause",        "cmd_chat_toggle");
+    register_clcmd("say_team /pause",   "cmd_chat_toggle");
+    register_clcmd("say pause",         "cmd_chat_toggle");
+    register_clcmd("say_team pause",    "cmd_chat_toggle");
+    register_clcmd("say /resume",       "cmd_chat_resume");
+    register_clcmd("say_team /resume",  "cmd_chat_resume");
+    register_clcmd("say resume",        "cmd_chat_resume");
+    register_clcmd("say_team resume",   "cmd_chat_resume");
     register_clcmd("say /confirmunpause",      "cmd_confirm_unpause");
     register_clcmd("say_team /confirmunpause", "cmd_confirm_unpause");
     register_clcmd("say /cresume",             "cmd_confirm_unpause");
@@ -487,8 +516,8 @@ public plugin_init() {
     register_clcmd("say_team /notconfirm","cmd_pre_notconfirm");
     register_clcmd("say /prestatus",      "cmd_pre_status");
     register_clcmd("say_team /prestatus", "cmd_pre_status");
-    register_clcmd("say prestatus",      "cmd_pre_status");
-    register_clcmd("say_team prestatus", "cmd_pre_status");
+    register_clcmd("say prestatus",       "cmd_pre_status");
+    register_clcmd("say_team prestatus",  "cmd_pre_status");
 
     // Ready (+ alias /ktp) + notready
     register_clcmd("say /ready",         "cmd_ready");
@@ -507,18 +536,19 @@ public plugin_init() {
     register_clcmd("say_team /status",    "cmd_status");
     register_clcmd("say status",          "cmd_status");
     register_clcmd("say_team status",     "cmd_status");
-    register_clcmd("say /cancel",         "cmd_cancel");
-    register_clcmd("say_team /cancel",    "cmd_cancel");
-    register_clcmd("say cancel",       "cmd_cancel");
-    register_clcmd("say_team cancel",  "cmd_cancel");
+
+    register_clcmd("say /cancel",       "cmd_cancel");
+    register_clcmd("say_team /cancel",  "cmd_cancel");
+    register_clcmd("say cancel",        "cmd_cancel");
+    register_clcmd("say_team cancel",   "cmd_cancel");
 
     // Mapping maintenance
-    register_clcmd("say /reloadmaps",        "cmd_reload_maps");
-    register_clcmd("say_team /reloadmaps",   "cmd_reload_maps");
-    
-    // Mapping maintenance
-    register_clcmd("say /ktpconfig",      "cmd_ktpconfig");
-    register_clcmd("say_team /ktpconfig", "cmd_ktpconfig");
+    register_clcmd("say /reloadmaps",       "cmd_reload_maps");
+    register_clcmd("say_team /reloadmaps",  "cmd_reload_maps");
+    register_clcmd("say /ktpconfig",        "cmd_ktpconfig");
+    register_clcmd("say_team /ktpconfig",   "cmd_ktpconfig");
+    register_clcmd("say ktpconfig",         "cmd_ktpconfig");
+    register_clcmd("say_team ktpconfig",    "cmd_ktpconfig");
 
     // Block client console "pause" and attribute it
     register_clcmd("pause", "cmd_client_pause");
@@ -535,7 +565,6 @@ public plugin_init() {
 
     // Announce on load
     ktp_banner_enabled();
-
     load_map_mappings();
 }
 
@@ -566,7 +595,10 @@ public client_disconnect(id) { on_client_left(id); }
 
 public client_putinserver(id) {
     // Quick heads-up in chat for late joiners
-    client_print(id, print_chat, "[KTP] %s v%s by %s enabled", PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR);
+    client_print(id, print_chat,
+        "[KTP] need=%d | unpause_countdown=%d | prepause=%d | tech_budget=%d | Allies %d/%d (tech:%ds), Axis %d/%d (tech:%ds) | map=%s cfg=%s (%s)",
+        g_readyRequired, g_countdownSeconds, g_prePauseSeconds, g_techBudgetSecs,
+        ar, ap, techA, xr, xp, techX, map, found?cfg:"-", found?"found":"MISS");
     client_print(id, print_console, "[KTP] %s v%s by %s enabled", PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR);
 }
 
@@ -912,8 +944,8 @@ public cmd_cancel(id) {
     return PLUGIN_HANDLED;
 }
 
-    // ----- Ready / NotReady / Status -----
-    ktp_sync_config_from_cvars();
+// ----- Ready / NotReady / Status -----
+public cmd_ready(id) {
     if (!g_matchPending) { client_print(id, print_chat, "[KTP] No pending match. Use /start to begin."); return PLUGIN_HANDLED; }
     if (!is_user_connected(id)) return PLUGIN_HANDLED;
     if (g_ready[id]) { client_print(id, print_chat, "[KTP] You are already READY."); return PLUGIN_HANDLED; }
@@ -929,7 +961,7 @@ public cmd_cancel(id) {
     new need = g_readyRequired;
     announce_all("%s is READY. Allies %d/%d | Axis %d/%d (need %d each).", name, ar, ap, xr, xp, need);
 
-    if (ar >= g_readyRequired && xr >= g_readyRequired) {
+    if (ar >= need && xr >= need) {
         exec_map_config();
 
         new alliesTag[64], axisTag[64];
@@ -1122,12 +1154,14 @@ stock sanitize_name(const src[], outLower[], outOrig[], outLen) {
     outLower[jLower] = EOS;
 }
 
+
 public cmd_ktpconfig(id) {
     new ap, xp, ar, xr; get_ready_counts(ap, xp, ar, xr);
     new map[32]; get_mapname(map, charsmax(map));
     new cfg[128]; new found = lookup_cfg_for_map(map, cfg, charsmax(cfg));
     client_print(id, print_chat,
-        "[KTP] need=%d, countdown=%d | Allies %d/%d, Axis %d/%d | map=%s cfg=%s (%s)",
-        g_readyRequired, g_countdownSeconds, ar, ap, xr, xp, map, found?cfg:"-", found?"found":"MISS");
+        "[KTP] need=%d | unpause_countdown=%d | prepause=%d | tech_budget=%d | Allies %d/%d, Axis %d/%d | map=%s cfg=%s (%s)",
+        g_readyRequired, g_countdownSeconds, g_prePauseSeconds, g_techBudgetSecs,
+        ar, ap, xr, xp, map, found?cfg:"-", found?"found":"MISS");
     return PLUGIN_HANDLED;
 }
