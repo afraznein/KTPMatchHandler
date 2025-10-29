@@ -1,0 +1,33 @@
+; ==========================================
+; KTP Match Handler - Discord Configuration
+; ==========================================
+;
+; This file configures Discord relay integration for match notifications.
+;
+; IMPORTANT SECURITY NOTES:
+; - Copy this file to discord.ini and fill in your actual values
+; - DO NOT commit discord.ini to git (add it to .gitignore)
+; - The auth_secret field contains sensitive authentication data
+; - Keep this file readable only by the server process
+;
+; The plugin will send match event notifications (pauses, unpauses,
+; disconnects, etc.) to your Discord channel via the relay service.
+;
+; To disable Discord integration, simply leave this file empty or
+; delete discord.ini entirely.
+; ==========================================
+
+; Discord Relay Service URL
+; This is the endpoint that will forward messages to Discord
+discord_relay_url=YOUR_RELAY_URL_HERE
+
+; Discord Channel ID
+; The target Discord channel to send messages to
+; Example: 1234567890123456789
+discord_channel_id=YOUR_CHANNEL_ID_HERE
+
+; Authentication Secret
+; The secret key for X-Relay-Auth header authentication
+; Keep this value secure and private!
+; Example: your-secret-auth-token-here
+discord_auth_secret=YOUR_SECRET_HERE
