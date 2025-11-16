@@ -9,33 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0] - 2025-01-15
 
-### Major Overhaul: Comprehensive Pause System with ReAPI Integration
+### Major Overhaul: Unified Pause System with Graceful Platform Degradation
 
-This release completely redesigns the pause system to work properly with real-time updates during pause, using ReAPI hooks and the custom KTP-ReHLDS build.
+This release completely redesigns the pause system with unified countdown handling, proper platform attribution, and graceful degradation across base AMX, standard ReHLDS, and KTP-ReHLDS platforms.
 
 ### Added
-- **ReAPI Integration**
-  - Added `RH_SV_UpdatePausedHUD` hook for real-time HUD updates during pause
-  - HUD now updates every frame during pause using real-world time instead of frozen game time
-  - No longer relies on AMX ModX `set_task()` which freezes during pause
+- **Unified Pause Countdown System**
+  - ALL pause entry points now use countdown system (chat, console, RCON, server commands)
+  - Separate configurable countdowns for live matches vs pre-match pauses
+  - Pre-pause countdown works on ALL platforms (base AMX, ReHLDS, KTP-ReHLDS)
+  - Intercepts client `pause` console command, server `pause`, and RCON `pause`
+  - Proper `register_srvcmd()` and `register_concmd()` for comprehensive coverage
 
-- **Comprehensive Pause System**
-  - Pre-pause countdown (3 seconds configurable) before pause activates
-  - Intercepts ALL pause commands (client console pause, RCON pause, chat /pause)
-  - 5-minute default pause duration with visible countdown timer
-  - Extension system: `/extend` command adds 2 minutes (max 2 extensions = 9 minutes total)
-  - Auto-unpause when timer expires with countdown
-  - Real-time elapsed/remaining time display in MM:SS format
-  - Chat notifications work during pause (via KTP-ReHLDS modifications)
+- **Graceful Platform Degradation**
+  - Base AMX: Core features work, timer checks on player commands
+  - Standard ReHLDS: Same as base AMX with `rcon_say` announcements during pause
+  - KTP-ReHLDS + ReAPI: Full feature set with automatic real-time updates
+  - Manual timer check system (`check_pause_timer_manual()`) for non-KTP-ReHLDS
+  - `announce_all()` automatically uses `rcon_say` during pause on base platforms
+
+- **ReAPI Integration (Optional Enhancement)**
+  - `RH_SV_UpdatePausedHUD` hook for automatic real-time HUD updates (KTP-ReHLDS only)
+  - HUD updates every frame during pause using real-world time (`get_systime()`)
+  - Automatic pause timer checks without player interaction (KTP-ReHLDS only)
+
+- **Comprehensive Pause System** (Works on ALL platforms)
+  - Timed pauses: 5-minute default with MM:SS countdown display
+  - Extension system: `/extend` adds 2 minutes (max 2 extensions = 9 minutes total)
+  - Auto-unpause when timer expires (automatic on KTP-ReHLDS, on-command elsewhere)
+  - Real-time pause tracking using `get_systime()` (works everywhere)
+  - Pause timer warnings at 30s and 10s remaining
 
 - **New CVARs**
   - `ktp_pause_duration "300"` - Pause duration in seconds (default: 5 minutes)
   - `ktp_pause_extension "120"` - Extension duration in seconds (default: 2 minutes)
   - `ktp_pause_max_extensions "2"` - Maximum number of extensions allowed
+  - `ktp_prepause_seconds "5"` - Pre-pause countdown for live matches
+  - `ktp_prematch_pause_seconds "5"` - Pre-pause countdown for pre-match pauses
 
 - **New Commands**
   - `/extend` - Extend current pause by configured time (max extensions limited)
   - `/cancelpause` - Cancel disconnect auto-pause countdown (team-only)
+
+- **Map Configuration System**
+  - New INI section-based format for `ktp_maps.ini`
+  - Supports `[mapname]`, `config=`, `name=`, `type=` fields
+  - More maintainable and extensible than simple key=value format
+  - Automatic `.bsp` suffix stripping and lowercase conversion
 
 - **Enhanced Disconnect Auto-Pause**
   - Increased countdown from 5 to 10 seconds
@@ -57,11 +77,31 @@ This release completely redesigns the pause system to work properly with real-ti
 
 ### Changed
 - **Pause System Architecture**
-  - Replaced game-time based `pause_timer_tick()` with real-time `check_pause_timer_realtime()`
-  - Removed `set_task()` calls for pause HUD and timer (now handled by ReAPI hook)
-  - `execute_pause()` function now handles all pause logic consistently
-  - `cmd_block_pause()` now triggers countdown instead of blocking
-  - Pause HUD displays elapsed/remaining time instead of static info
+  - ALL pause functions now route through unified `trigger_pause_countdown()`
+  - Replaced instant pauses with countdown system (configurable duration)
+  - Pre-match pauses now use separate countdown (`ktp_prematch_pause_seconds`)
+  - Real-time timer system uses `get_systime()` instead of frozen game time
+  - Client console `pause`, server `pause`, and RCON `pause` all intercepted
+  - `cmd_client_pause()` now triggers countdown instead of blocking
+
+- **Platform-Specific Handling**
+  - `announce_all()` automatically selects `rcon_say` or `client_print` based on pause state
+  - Conditional compilation for ReAPI-specific features
+  - Fallback timer checks via `check_pause_timer_manual()` on player commands
+  - All broadcast messages now use `announce_all()` for pause compatibility
+
+- **Ready System**
+  - Simplified ready check logic (removed redundant player count checks)
+  - Now only checks: `alliesReady >= g_readyRequired && axisReady >= g_readyRequired`
+  - Cleaner, more efficient condition
+
+- **Documentation**
+  - Updated all comments to correctly attribute features to platforms:
+    - "Base AMX" for features that work on HLDS + AMX ModX
+    - "Standard ReHLDS" for ReHLDS-specific features
+    - "KTP-ReHLDS" for custom build features
+  - Header now shows graceful degradation across platforms
+  - Changelog reflects true platform requirements
 
 - **HUD Updates**
   - Redesigned pause HUD with clean minimalist layout
@@ -69,24 +109,32 @@ This release completely redesigns the pause system to work properly with real-ti
   - Shows remaining time (MM:SS format)
   - Shows extensions used (X/max)
   - Displays available commands: /resume, /confirmunpause, /extend
-  - Updates in real-time via ReAPI hook
+  - Updates automatically on KTP-ReHLDS, static on other platforms
 
 - **Disconnect Handling**
   - Auto-pause countdown increased from 5 to 10 seconds
-  - Uses new `execute_pause()` instead of `ktp_pause_now()`
-  - Removed manual HUD task scheduling (handled by ReAPI hook)
+  - Uses new countdown system for consistency
   - Enhanced messages show team name and cancel instructions
 
 ### Fixed
-- **Critical: Pause HUD Updates During Pause**
-  - HUD now updates properly during pause using ReAPI hook
-  - Countdown timers work during pause using `get_systime()` (real-world time)
-  - Fixed issue where AMX tasks wouldn't execute because game time was frozen
+- **Platform-Specific Announcements During Pause**
+  - Fixed announcements during pause on base AMX/standard ReHLDS using `rcon_say`
+  - Countdown timers now use `get_systime()` (real-world time) on all platforms
+  - Timer checks work on base AMX via player command interaction
 
-- **Chat During Pause**
+- **Pause Entry Point Coverage**
+  - Now intercepts ALL pause commands: client console, server, RCON, chat
+  - Proper `register_srvcmd()` and `register_concmd()` registration
+  - Unified countdown system prevents instant pauses from any source
+
+- **Ready System Logic**
+  - Fixed redundant player count checks in ready condition
+  - More efficient condition evaluation
+
+- **Chat During Pause (KTP-ReHLDS)**
   - Works correctly with KTP-ReHLDS modifications
-  - Message sending forced during pause state
-  - Commands process with frametime manipulation
+  - `client_print` works during pause on KTP-ReHLDS
+  - Automatic fallback to `rcon_say` on other platforms
 
 ### Technical Details
 - **ReAPI Hook Implementation**
@@ -102,15 +150,20 @@ This release completely redesigns the pause system to work properly with real-ti
   ```
 
 ### Requirements
-- **ReAPI** module required (https://github.com/s1lentq/reapi)
-- **KTP-ReHLDS** build with selective pause modifications
-- **AMX ModX** 1.9 or higher
-- **Optional: cURL** for Discord notifications
+- **Minimum:** AMX ModX 1.9+ (base functionality)
+- **Recommended:** Standard ReHLDS (no additional features, but better compatibility)
+- **Optimal:** KTP-ReHLDS + ReAPI module (full feature set with automatic updates)
+- **Optional:** cURL extension for Discord notifications
+
+### Platform Support
+- **Base AMX (HLDS):** ✅ Core features, manual timer checks
+- **Standard ReHLDS:** ✅ Same as base AMX with `rcon_say` support
+- **KTP-ReHLDS + ReAPI:** ✅ Full automatic real-time updates
 
 ### Breaking Changes
-- ReAPI is now **required** for pause system to function
-- Old `pause_timer_tick()` function removed
-- Plugin will assert/fail to compile without ReAPI
+- None - fully backward compatible with graceful degradation
+- New map INI format (old format still supported via parser)
+- `ktp_prematch_pause_seconds` CVAR added (defaults to 5)
 
 ---
 
