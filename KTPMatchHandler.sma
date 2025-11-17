@@ -1359,7 +1359,7 @@ public plugin_init() {
 
     // Register ReAPI hook for automatic pause HUD updates (KTP-ReHLDS + ReAPI only)
     // This enables real-time HUD updates during pause without player interaction
-    #if defined _reapi_included
+    #if defined _reapi_included && defined RH_SV_UpdatePausedHUD
     RegisterHookChain(RH_SV_UpdatePausedHUD, "OnPausedHUDUpdate", .post = false);
     #endif
 
