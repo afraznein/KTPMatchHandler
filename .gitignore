@@ -1,2 +1,7 @@
 /.claude
 /deployment
+
+# Sensitive configuration files
+discord.ini
+servers.ini
+*.local.ini

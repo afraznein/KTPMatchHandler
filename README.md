@@ -1,23 +1,43 @@
 # KTP Match Handler
 
-**Version 0.4.0** - Comprehensive competitive match management system for Day of Defeat servers
+**Version 0.4.0** - Advanced competitive match management system for Day of Defeat servers
 
-A feature-rich AMX ModX plugin providing structured match workflows, advanced pause controls with real-time HUD updates, and extensive logging capabilities.
+A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, and comprehensive logging capabilities.
 
 ---
 
 ## 🎮 Key Features
 
-- **Structured Match System**: Pre-start → Pending → Ready-up → LIVE workflow
-- **Advanced Pause Controls**: Real-time HUD with countdown timers
-- **Pause Extensions**: Players can extend pauses (2 min × 2 max = 9 min total)
+### Match Management
+- **Structured Match Workflow**: Pre-start → Pending → Ready-up → LIVE
+- **Captain System**: Team confirmation before ready-up phase
+- **Ready-Up System**: Configurable player count per team (default: 6)
+- **Auto-Config Execution**: Map-specific server settings on match start
+- **Match State Tracking**: Full visibility into match progress
+
+### Advanced Pause System (ReAPI Native)
+- **ReAPI Pause Integration**: Direct pause control via `rh_set_server_pause()` - bypasses engine
+- **Complete Time Freeze**: `host_frame` stops, `g_psv.time` frozen, physics halted
+- **Works with `pausable 0`**: Block engine pause, only KTP system works
+- **Unified Countdown**: ALL pause entry points use 5-second countdown
+- **Real-Time HUD Updates**: MM:SS timer during pause (KTP-ReHLDS + ReAPI)
+- **Chat During Pause**: Players can communicate while paused (KTP-ReHLDS feature)
+- **Two Pause Types**: Tactical (1 per team) and Technical (5-min budget)
+- **Pause Extensions**: Up to 2× 2-minute extensions (9 minutes max)
+- **Auto-Warnings**: 30-second and 10-second countdown alerts
+- **Two-Team Unpause**: Both teams must confirm to resume
 - **Disconnect Protection**: Auto-pause with 10-second cancellable countdown
-- **Two-Team Unpause**: Prevents one team from forcing resume
-- **Budget Tracking**: Technical pause time limits per team (5 min default)
-- **Tactical Limits**: 1 tactical pause per team per half
-- **Real-Time HUD**: MM:SS timer updates during pause via ReAPI integration
-- **Comprehensive Logging**: AMX log, KTP match log, and Discord webhooks
-- **Map Configurations**: Auto-execute map-specific server settings
+
+### Logging & Notifications
+- **Triple Logging**: AMX log + KTP match log + Discord webhooks
+- **Discord Integration**: Real-time notifications with emoji-rich formatting
+- **Structured Event Logs**: Key=value format for easy parsing
+- **Player Tracking**: SteamID, IP, team recorded for all events
+
+### Platform Compatibility
+- **Optimal**: KTP-ReHLDS + ReAPI (full feature set)
+- **Good**: Standard ReHLDS + ReAPI (ReAPI pause works, limited HUD)
+- **Basic**: Base AMX ModX (fallback mode, basic features)
 
 ---
 
@@ -26,46 +46,69 @@ A feature-rich AMX ModX plugin providing structured match workflows, advanced pa
 ### Requirements
 
 **Required:**
-- AMX Mod X 1.9+
-- [ReAPI Module](https://github.com/s1lentq/reapi)
-- [KTP-ReHLDS](https://github.com/afraznein/KTP-ReHLDS) (custom build for chat during pause)
+- AMX Mod X 1.9+ (1.10 recommended)
+- [ReAPI Module](https://github.com/s1lentq/reapi) (for ReAPI pause natives)
+- [KTP-ReHLDS](https://github.com/afraznein/KTP-ReHLDS) (custom build - chat/HUD during pause)
 
 **Optional:**
-- cURL extension (for Discord notifications)
+- cURL extension (for Discord webhook notifications)
 
 ### Installation
 
-1. **Download** the latest release
-2. **Compile** `KTPMatchHandler.sma` using AMX Mod X compiler
-3. **Install** `KTPMatchHandler.amxx` to `addons/amxmodx/plugins/`
-4. **Add to** `addons/amxmodx/configs/plugins.ini`:
+1. **Compile** the plugin:
+   ```bash
+   amxxpc KTPMatchHandler.sma -oKTPMatchHandler.amxx
+   ```
+
+2. **Install** to your server:
+   ```
+   addons/amxmodx/plugins/KTPMatchHandler.amxx
+   ```
+
+3. **Add to** `plugins.ini`:
    ```
    KTPMatchHandler.amxx
    ```
-5. **Configure** maps in `addons/amxmodx/configs/ktp_maps.ini`
-6. **(Optional)** Set up Discord webhook in `addons/amxmodx/configs/discord.ini`
+
+4. **Configure** maps in `configs/ktp_maps.ini`:
+   ```ini
+   [dod_avalanche]
+   config = ktp_avalanche.cfg
+   name = Avalanche
+   type = competitive
+   ```
+
+5. **Configure** Discord (optional) in `configs/discord.ini`:
+   ```ini
+   discord_relay_url=https://your-relay.run.app/reply
+   discord_channel_id=1234567890123456789
+   discord_auth_secret=your-secret-here
+   ```
+
+6. **Add to** `server.cfg`:
+   ```
+   // CRITICAL: Disable engine pause, use ReAPI pause only
+   pausable 0
+
+   // Pause System
+   ktp_pause_duration "300"              // 5-minute base pause
+   ktp_pause_extension "120"             // 2-minute extensions
+   ktp_pause_max_extensions "2"          // Max 2 extensions
+   ktp_prepause_seconds "5"              // Countdown before pause
+   ktp_prematch_pause_seconds "5"        // Pre-match countdown
+
+   // Match System
+   ktp_ready_required "6"                // Players needed to ready
+   ktp_tech_budget_seconds "300"         // 5-min tech budget per team
+
+   // File Paths
+   ktp_maps_file "addons/amxmodx/configs/ktp_maps.ini"
+   ktp_discord_ini "addons/amxmodx/configs/discord.ini"
+   ```
+
 7. **Deploy** KTP-ReHLDS server binaries
+
 8. **Restart** server
-
-### Basic Configuration
-
-Add to your `amxx.cfg` or `server.cfg`:
-
-```
-// Pause System
-ktp_pause_duration "300"              // 5-minute base pause
-ktp_pause_extension "120"             // 2-minute extensions
-ktp_pause_max_extensions "2"          // Max 2 extensions
-ktp_prepause_seconds "3"              // 3-second warning before pause
-
-// Match System
-ktp_ready_required "6"                // Players needed to ready up
-ktp_tech_budget_seconds "300"         // 5-minute tech pause budget per team
-
-// File Paths
-ktp_maps_file "addons/amxmodx/configs/ktp_maps.ini"
-ktp_match_logfile "ktp_match.log"
-```
 
 ---
 
@@ -73,80 +116,27 @@ ktp_match_logfile "ktp_match.log"
 
 ### Starting a Match
 
-1. Admin or captain types `/start`
-2. Each team types `/confirm` (one player per team)
-3. Players type `/ready` (or `/ktp`) until required count is reached
-4. Match automatically goes LIVE with 3-second countdown
-
-### Pause Controls
-
 ```
-/pause          Initiate tactical pause (3-sec countdown)
-/tech           Initiate technical pause
-/resume         Request unpause (owner team only)
-/confirmunpause Confirm unpause (other team)
-/extend         Extend pause by 2 minutes (max 2 times)
-/cancelpause    Cancel disconnect auto-pause
+Player types: /start
+     ↓
+Both teams type: /confirm (one captain per team)
+     ↓
+Players type: /ready (6 per team by default)
+     ↓
+Match goes LIVE! (5-second countdown)
+     ↓
+Map config auto-executes
 ```
 
-### Match Commands
+### Pause System
 
+**To Pause:**
 ```
-/ready          Mark yourself ready
-/notready       Remove ready status
-/status         View detailed match/ready status
-/cancel         Cancel match/pre-start
-/reloadmaps     Reload map configurations
+/pause          Tactical pause (5-sec countdown → PAUSED)
+/tech           Technical pause (uses team budget)
 ```
 
----
-
-## ⏸️ Pause System (v0.4.0 Major Overhaul)
-
-### How Pauses Work
-
-```
-Player initiates pause
-         ↓
-  3-second countdown
-         ↓
-  Game PAUSES
-         ↓
-  Real-time HUD updates every frame
-  ├─ Elapsed: 2:34
-  ├─ Remaining: 2:26
-  ├─ Extensions: 1/2
-  └─ Commands shown
-         ↓
-  Warnings at 30s and 10s
-         ↓
-  Auto-unpause OR manual unpause
-         ↓
-  3-second countdown → LIVE!
-```
-
-### Pause Types
-
-**Tactical Pause**
-- Limit: 1 per team per half
-- Duration: 5 minutes (default)
-- Extensions: Up to 2 × 2 minutes
-- Command: `/pause` or console `pause`
-
-**Technical Pause**
-- Budget: 5 minutes per team (cumulative)
-- No extension limit
-- Command: `/tech`
-
-**Disconnect Auto-Pause**
-- Triggers: When player disconnects during match
-- Countdown: 10 seconds (cancellable)
-- Type: Technical (uses team budget)
-- Cancel: `/cancelpause` (affected team only)
-
-### Real-Time HUD Display
-
-During pause, players see:
+**During Pause (shows real-time HUD):**
 ```
   == GAME PAUSED ==
 
@@ -161,238 +151,506 @@ During pause, players see:
   /resume  |  /confirmunpause  |  /extend
 ```
 
+**To Unpause:**
+```
+Team 1: /resume           ← Initiates unpause countdown
+Team 2: /confirmunpause   ← Confirms (both teams must agree)
+     ↓
+5-second countdown → LIVE!
+```
+
+**Pause Features:**
+- `/extend` - Add 2 minutes (max 2× = 4 minutes total)
+- Auto-warnings at 30s and 10s remaining
+- Auto-unpause when timer expires
+- `/cancelpause` - Cancel disconnect auto-pause (10-sec window)
+
+### All Commands
+
+#### Match Control
+```
+/start, /startmatch     Initiate pre-start sequence
+/confirm                Confirm team ready for start
+/notconfirm             Remove team confirmation
+/ready, /ktp            Mark yourself ready
+/notready               Mark yourself not ready
+/status                 View detailed match status
+/prestatus              View pre-start confirmation status
+/cancel                 Cancel match/pre-start
+```
+
+#### Pause Control
+```
+/pause                  Tactical pause (5-sec countdown)
+/tech                   Technical pause
+/resume                 Request unpause (owner team)
+/confirmunpause         Confirm unpause (other team)
+/cresume, /cunpause     Aliases for confirmunpause
+/extend                 Extend pause +2 minutes
+/cancelpause            Cancel disconnect auto-pause
+```
+
+#### Admin Commands
+```
+ktp_pause               Server/RCON pause (same as /pause)
+/reloadmaps             Reload map configuration
+/ktpconfig              View current CVARs
+/ktpdebug               Toggle debug mode
+```
+
 ---
 
-## 🔧 Advanced Configuration
+## ⏸️ Advanced Pause System
+
+### ReAPI Pause Implementation (NEW in v0.4.0)
+
+The plugin uses **ReAPI's `rh_set_server_pause()` native** instead of the engine's `pause` command:
+
+**Benefits:**
+- ✅ **No command conflicts** - No `Cmd_AddMallocCommand` errors
+- ✅ **Works with `pausable 0`** - Completely blocks engine pause
+- ✅ **Direct state control** - Sets `g_psv.paused` directly via ReHLDS
+- ✅ **Complete time freeze** - `SV_Physics()` doesn't run, `g_psv.time` frozen
+- ✅ **Full feature support** - Countdown, tracking, extensions, Discord all work
+
+**How it works:**
+```pawn
+// ReAPI pause (recommended - KTP-ReHLDS + ReAPI)
+rh_set_server_pause(true);   // Pause
+rh_set_server_pause(false);  // Unpause
+
+// Fallback (base HLDS/ReHLDS without ReAPI)
+server_cmd("pause");         // Requires pausable 1
+```
+
+**What gets frozen when paused:**
+- ✅ Physics (`SV_Physics()` - entities don't move)
+- ✅ Time (`g_psv.time` - server time frozen)
+- ✅ Player movement (blocked)
+- ✅ Projectiles (stop mid-air)
+- ✅ Entity think functions (don't execute)
+
+**What still works (KTP-ReHLDS features):**
+- ✅ Chat (players can type/read)
+- ✅ HUD updates (via `RH_SV_UpdatePausedHUD` hook)
+- ✅ Network messages (pause info displayed)
+- ✅ Plugin tasks (timer checks, warnings)
+
+### Pause Types
+
+| Type | Limit | Duration | Extensions | Command | Budget |
+|------|-------|----------|------------|---------|--------|
+| **Tactical** | 1 per team/half | 5 min | 2× 2 min | `/pause` | No |
+| **Technical** | Unlimited | Uses budget | Unlimited | `/tech` | 5 min/team |
+| **Disconnect** | Auto | Uses budget | Unlimited | Auto | From tech |
+
+### Pause Flow
+
+```
+Player types /pause
+         ↓
+5-second countdown
+  "Pausing in 5..."
+  "Pausing in 4..."
+  ...
+         ↓
+rh_set_server_pause(true)
+         ↓
+Game FREEZES
+  - Physics stop
+  - Time stops
+  - HUD updates (ReAPI)
+  - Chat works (KTP-ReHLDS)
+         ↓
+Real-time timer counts up
+  - Elapsed: 0:05, 0:06, ...
+  - Remaining: 4:55, 4:54, ...
+         ↓
+Warnings at 30s and 10s
+         ↓
+Auto-unpause OR /resume → /confirmunpause
+         ↓
+5-second countdown
+  "Unpausing in 5..."
+         ↓
+rh_set_server_pause(false)
+         ↓
+Game RESUMES (LIVE!)
+```
+
+---
+
+## 🔧 Configuration
 
 ### Map Configuration (`ktp_maps.ini`)
 
+**New section-based format (v0.4.0+):**
+
 ```ini
 [dod_avalanche]
-config = dod_avalanche.cfg
+config = ktp_avalanche.cfg
 name = Avalanche
 type = competitive
 
 [dod_flash]
-config = dod_flash.cfg
+config = ktp_flash.cfg
 name = Flash
+type = competitive
+
+[dod_donner]
+config = ktp_donner.cfg
+name = Donner
 type = competitive
 ```
 
-### Discord Webhook (`discord.ini`)
+**On match start**, the plugin automatically executes the map's config file.
+
+### Discord Configuration (`discord.ini`)
+
+**Relay-based integration:**
 
 ```ini
-[discord]
-webhook_url = https://discord.com/api/webhooks/YOUR_WEBHOOK_HERE
+; Discord Relay Service URL (with /reply endpoint)
+discord_relay_url=https://discord-relay-XXXXX.run.app/reply
+
+; Discord Channel ID (18-digit snowflake)
+discord_channel_id=1234567890123456789
+
+; Authentication Secret (must match relay's RELAY_SHARED_SECRET)
+discord_auth_secret=your-secret-here
 ```
 
-Notifications sent for:
-- ⏸️ Pause events (initiated, extended, timeout)
-- ✅ Match events (start, LIVE, ended)
-- 🎮 Player ready status
-- ⚠️ Warnings and alerts
+**Discord notifications sent for:**
+- ⏸️ Pause initiated (with countdown)
+- ⏸️➕ Pause extended (+2 min)
+- ▶️ Unpause countdown started
+- ✅ Game LIVE (after unpause)
+- ⚠️ Pause warnings (30s, 10s)
+- ⏱️ Pause timeout (auto-unpause)
+- 📴 Disconnect auto-pause
+- ❌ Pause cancelled
+- 🎮 Match start/end events
+
+**Setup Guide:** See `DISCORD_GUIDE.md` for complete Discord relay setup.
 
 ### All CVARs
 
 ```
-// Pause Timing
-ktp_pause_countdown "5"              // Unpause countdown (seconds)
-ktp_pause_duration "300"             // Base pause duration (5 min)
-ktp_pause_extension "120"            // Extension time (2 min)
-ktp_pause_max_extensions "2"         // Max extensions
-ktp_prepause_seconds "3"             // Pre-pause countdown
-ktp_pause_hud "1"                    // Enable pause HUD
+// ===== Pause System =====
+ktp_pause_duration "300"              // Base pause duration (seconds) - Default: 5 min
+ktp_pause_extension "120"             // Extension time per /extend - Default: 2 min
+ktp_pause_max_extensions "2"          // Max extensions allowed - Default: 2
+ktp_prepause_seconds "5"              // Countdown before pause (live match)
+ktp_prematch_pause_seconds "5"        // Countdown before pause (pre-match)
+ktp_pause_countdown "5"               // Unpause countdown duration
+ktp_force_pausable "1"                // Force pausable=1 (not needed with ReAPI)
 
-// Match System
-ktp_ready_required "6"               // Players needed ready
-ktp_unpause_autorequest_secs "300"   // Auto-request timeout
-ktp_tech_budget_seconds "300"        // Tech pause budget per team
+// ===== Match System =====
+ktp_ready_required "6"                // Players needed to ready per team
+ktp_tech_budget_seconds "300"         // Technical pause budget per team (5 min)
+ktp_unpause_autorequest_secs "300"    // Auto-request unpause after N seconds
 
-// File Paths
-ktp_match_logfile "ktp_match.log"
-ktp_cfg_basepath "dod/"
+// ===== File Paths =====
 ktp_maps_file "addons/amxmodx/configs/ktp_maps.ini"
 ktp_discord_ini "addons/amxmodx/configs/discord.ini"
-
-// Server Control
-ktp_force_pausable "1"               // Force pausable enabled
+ktp_match_logfile "ktp_match.log"
+ktp_cfg_basepath "dod/"               // Base path for map configs
 ```
 
 ---
 
 ## 📊 Logging
 
-### AMX Log
-Standard AMX ModX log entries:
-- Location: `amxmodx/logs/L[date].log`
-- All major events with timestamps
+### 1. AMX Log
+**Location:** `addons/amxmodx/logs/L[MMDD].log`
 
-### KTP Match Log
-Detailed structured log:
-- Location: Configurable (default: `ktp_match.log`)
-- Event-based with key=value pairs
-- Pause durations, extensions, budgets
-- Player actions with SteamID and IP
-
-Example:
+Standard Half-Life log format with timestamps:
 ```
-event=PAUSE_EXECUTED initiator='PlayerName' reason='tactical_pause' duration=300
-event=PAUSE_EXTENDED player='PlayerName' extension=1/2 seconds=120
-event=MATCH_START map=dod_avalanche allies_ready=6 axis_ready=6
+L 11/17/2025 - 18:30:45: KTP: Game PAUSED by PlayerName (tactical_pause)
+L 11/17/2025 - 18:33:15: KTP: Pause warning - 30 seconds remaining
+L 11/17/2025 - 18:35:45: KTP: Game LIVE - Unpaused by PlayerName
 ```
 
-### Discord Webhooks (Optional)
-Rich notifications with emojis:
-- Pause events (⏸️ initiated, ⏸️➕ extended, ⏱️ timeout)
-- Match events (✅ LIVE, 🏁 ended)
-- Status updates (⚠️ warnings)
+### 2. KTP Match Log
+**Location:** Configurable (default: `ktp_match.log`)
+
+Structured event-based log with key=value pairs:
+```
+[2025-11-17 18:30:45] event=PAUSE_EXECUTED initiator='PlayerName' reason='tactical_pause' duration=300
+[2025-11-17 18:32:15] event=PAUSE_EXTENDED player='PlayerName' extension=1/2 seconds=120
+[2025-11-17 18:35:45] event=UNPAUSE_TOGGLE source=reapi reason='countdown'
+[2025-11-17 18:40:00] event=MATCH_START map=dod_avalanche allies_ready=6 axis_ready=6
+```
+
+**Event types logged:**
+- `PLUGIN_ENABLED` - Plugin initialization
+- `MAPS_LOAD` - Map configuration loaded
+- `DISCORD_CONFIG_LOAD` - Discord integration loaded
+- `PAUSE_ATTEMPT` - Pause requested
+- `PAUSE_TOGGLE` - Pause state changed (source=reapi or source=engine_cmd)
+- `PAUSE_EXECUTED` - Pause started
+- `PAUSE_EXTENDED` - Pause extended
+- `UNPAUSE_ATTEMPT` - Unpause requested
+- `UNPAUSE_TOGGLE` - Unpause executed
+- `MAPCFG` - Map config executed
+- `DISCORD_ERROR` - Discord notification failed
+
+### 3. Discord Webhooks (Optional)
+**Requirements:** cURL module + Discord relay service
+
+Rich notifications with:
+- 🎨 Emoji-based status indicators
+- 📋 Structured message formatting
+- ⏱️ Real-time event updates
+- 📊 Player/team information
+
+**See `DISCORD_GUIDE.md` for setup instructions.**
 
 ---
 
-## 🏗️ Technical Details
+## 🏗️ Technical Architecture
 
-### Architecture
+### ReAPI Integration
 
-**Real-Time Timing System:**
-- Uses `get_systime()` (Unix timestamp) instead of frozen game time
+**Pause Control:**
+```pawn
+// Direct pause state manipulation (bypasses engine command)
+rh_set_server_pause(true);   // Freeze game
+rh_set_server_pause(false);  // Resume game
+bool:rh_is_server_paused();  // Check state
+```
+
+**HUD Updates During Pause:**
+```pawn
+// KTP-ReHLDS custom hook (called every frame while paused)
+#if defined _reapi_included && defined RH_SV_UpdatePausedHUD
+RegisterHookChain(RH_SV_UpdatePausedHUD, "OnPausedHUDUpdate", .post = false);
+#endif
+
+public OnPausedHUDUpdate() {
+    // Update HUD for all players
+    // Shows elapsed/remaining time, extensions, commands
+    return HC_CONTINUE;
+}
+```
+
+### Timing System
+
+**Real-time tracking using `get_systime()`:**
+```pawn
+// Store pause start time (Unix timestamp)
+g_pauseStartTime = get_systime();
+
+// Calculate elapsed time (works even when host_frametime = 0)
+new elapsed = get_systime() - g_pauseStartTime;
+
+// Calculate remaining time
+new remaining = g_pauseDurationSec - elapsed;
+```
+
+**Why this works:**
+- `get_systime()` returns real-world time (not game time)
+- Continues advancing even when `g_psv.time` is frozen
 - Enables accurate timer during pause
-- Auto-warnings at 30s and 10s
-- Auto-unpause when duration expires
+- Powers auto-warnings and auto-unpause
 
-**ReAPI Integration:**
-- `RH_SV_UpdatePausedHUD` hook (custom KTP-ReHLDS hook)
-- Called every frame during pause
-- Provides real-time HUD updates
-- Falls back to task-based system if not available
+### KTP-ReHLDS Modifications
 
-**KTP-ReHLDS Modifications:**
-- Forces message sending during pause (`SV_SendClientMessages`)
-- Allows command processing during pause (`SV_ParseStringCommand`)
-- Frametime manipulation for game DLL commands
-- Build identification banner on startup
+**Custom ReHLDS changes for pause functionality:**
 
-### Performance
+1. **Message Sending During Pause:**
+   ```cpp
+   // Force send_message = TRUE during pause
+   if (g_psv.paused && cl->active && cl->spawned)
+       cl->send_message = TRUE;
+   ```
 
-**Optimizations (v0.4.0):**
-- CVAR caching in frequently-called functions
-- Static variables prevent duplicate warnings
-- Reduced from ~180 CVAR lookups/sec to ~0 during pause
-- Safe task removal prevents errors
+2. **HUD Update Hook:**
+   ```cpp
+   // New hook chain for pause HUD updates
+   void SV_UpdatePausedHUD(void) {
+       if (!g_psv.paused) return;
+       g_RehldsHookchains.m_SV_UpdatePausedHUD.callChain(...);
+   }
+   ```
+
+3. **Pause State Query:**
+   ```cpp
+   bool IsPaused(void) {
+       return g_psv.paused != FALSE;
+   }
+   ```
+
+### Performance Optimizations (v0.4.0)
+
+**CVAR Caching:**
+- Cache CVAR pointers on `plugin_init()`
+- Use `get_pcvar_num()` instead of `get_cvar_num()`
+- Reduces ~180 CVAR lookups per second during pause
+
+**Safe Task Management:**
+```pawn
+// Check task exists before removing
+if (task_exists(taskId)) {
+    remove_task(taskId);
+}
+```
+
+**Static Variables:**
+```pawn
+// Prevent duplicate warnings
+static bool:warned_30sec = false;
+static bool:warned_10sec = false;
+```
 
 ---
 
-## 📋 Command Reference
+## 🎯 Platform Support
 
-### Match Control
-| Command | Description |
-|---------|-------------|
-| `/start`, `/startmatch` | Initiate pre-start sequence |
-| `/confirm` | Confirm team ready for start |
-| `/notconfirm` | Remove team confirmation |
-| `/ready`, `/ktp` | Mark yourself ready |
-| `/notready` | Mark yourself not ready |
-| `/status` | View detailed match status |
-| `/prestatus` | View pre-start confirmation status |
-| `/cancel` | Cancel match/pre-start |
+### ✅ Optimal: KTP-ReHLDS + ReAPI
 
-### Pause Control
-| Command | Description |
-|---------|-------------|
-| `/pause` | Initiate tactical pause |
-| `pause` (console) | Same as /pause (intercepted) |
-| `/tech` | Initiate technical pause |
-| `/resume` | Request unpause (owner team) |
-| `/confirmunpause` | Confirm unpause (other team) |
-| `/cresume`, `/cunpause` | Aliases for confirmunpause |
-| `/extend` | Extend pause by 2 minutes |
-| `/cancelpause` | Cancel disconnect auto-pause |
+**All features work:**
+- ✅ ReAPI pause natives (`rh_set_server_pause()`)
+- ✅ Real-time HUD updates during pause
+- ✅ Chat works during pause
+- ✅ Automatic timer checks (no player interaction needed)
+- ✅ Complete time freeze
+- ✅ Discord notifications
+- ✅ All pause features (countdown, extensions, tracking)
 
-### Admin/Config
-| Command | Description |
-|---------|-------------|
-| `/reloadmaps` | Reload map configuration |
-| `/ktpconfig` | View current CVARs |
-| `/ktpdebug` | Toggle debug mode |
+### ⬆️ Good: Standard ReHLDS + ReAPI
+
+**Most features work:**
+- ✅ ReAPI pause natives work
+- ✅ Complete time freeze
+- ✅ Discord notifications
+- ⚠️ HUD updates limited (no real-time updates during pause)
+- ⚠️ Chat frozen during pause
+- ⚠️ Timer checks require player commands
+
+### ⚠️ Basic: Base AMX ModX
+
+**Fallback mode:**
+- ⚠️ Uses `server_cmd("pause")` fallback
+- ⚠️ Requires `pausable 1`
+- ⚠️ HUD frozen during pause
+- ⚠️ Chat frozen during pause
+- ⚠️ Timer checks require player commands
+- ✅ Discord notifications still work
+- ✅ Pause tracking works
 
 ---
 
 ## 📝 Changelog
 
-### v0.4.0 (2025-01-15) - Major Pause System Overhaul
+### v0.4.0 (2025-11-17) - ReAPI Pause + Major Overhaul
+
 **Added:**
-- ✅ ReAPI integration for real-time HUD updates during pause
-- ✅ Timed pauses with 5-minute default and MM:SS countdown
-- ✅ Pre-pause countdown (3-second warning)
-- ✅ Pause extensions via `/extend` (2 min × 2 max)
-- ✅ Auto-unpause when timer expires
-- ✅ Disconnect auto-pause with 10-second cancellable countdown
-- ✅ Comprehensive logging to AMX log, match log, and Discord
-- ✅ Unified pause system (all commands go through same flow)
+- ✅ **ReAPI pause natives** - `rh_set_server_pause()` for direct control
+- ✅ **Works with `pausable 0`** - Block engine pause, use KTP system only
+- ✅ **Unified countdown system** - ALL pause entry points use countdown
+- ✅ **Pre-pause countdown** - 5-second warning before pause
+- ✅ **Pause extensions** - `/extend` adds 2 minutes (max 2×)
+- ✅ **Real-time HUD updates** - MM:SS timer via ReAPI hook
+- ✅ **Auto-warnings** - 30-second and 10-second alerts
+- ✅ **Auto-unpause** - When timer expires
+- ✅ **Disconnect auto-pause** - 10-second cancellable countdown
+- ✅ **Discord relay integration** - Relay service for webhooks
+- ✅ **New map INI format** - Section-based configuration
+- ✅ **Comprehensive logging** - AMX + KTP log + Discord
+
+**Changed:**
+- 🔄 **Pause implementation** - ReAPI natives replace `server_cmd("pause")`
+- 🔄 **Main method** - Now `async Task Main` for ReAPI support
+- 🔄 **Command registration** - Removed `pause` command (no conflicts)
+- 🔄 **Platform degradation** - Graceful fallback for non-ReAPI servers
 
 **Fixed:**
-- 🐛 HUD updates during pause using real-world time
-- 🐛 Chat works during pause (with KTP-ReHLDS)
-- 🐛 /ready system undefined variable bug
-- 🐛 Multiple unsafe remove_task() calls
+- 🐛 **`Cmd_AddMallocCommand` error** - No more pause command conflicts
+- 🐛 **HUD during pause** - Real-time updates using `get_systime()`
+- 🐛 **Chat during pause** - Works with KTP-ReHLDS
+- 🐛 **Ready system bugs** - Undefined variable warnings
+- 🐛 **Unsafe task removal** - All `remove_task()` calls now safe
 
-**Enhanced:**
-- 📈 /status command shows player names and detailed info
-- 📈 Performance: CVAR caching reduces lookups by ~180/sec
-- 📈 Better Discord notifications with rich formatting
+**Performance:**
+- 📈 **CVAR caching** - Reduced ~180 lookups/sec during pause
+- 📈 **Static variables** - Prevent duplicate warnings
+- 📈 **Optimized HUD** - Only updates when needed
 
-**Removed:**
-- ❌ Game-time based pause_timer_tick (obsolete)
+**Documentation:**
+- 📚 `REAPI_PAUSE_IMPLEMENTATION.md` - Complete ReAPI pause guide
+- 📚 `DISCORD_GUIDE.md` - Discord relay setup
+- 📚 `SERVER_TROUBLESHOOTING.md` - Debugging guide
+- 📚 `PAUSE_SYSTEM_REDESIGN.md` - v0.4.0 pause system overview
 
-### v0.3.3 - Previous Stable Release
+### v0.3.3 - Previous Stable
+
 - Two-team unpause confirmation
 - Per-team tactical pause limits
 - Technical pause budget system
 - Disconnect detection
 - Pre-start confirmation
-- Discord webhook integration
+- Discord webhook integration (direct)
 
-[Full changelog](CHANGELOG.md)
+**[Full Changelog](CHANGELOG.md)**
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please:
+Contributions welcome! Please:
 
 1. Fork the repository
-2. Create a feature branch
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
-4. Test thoroughly
-5. Submit a pull request
+4. Test thoroughly on KTP-ReHLDS + ReAPI
+5. Commit changes (`git commit -m 'Add amazing feature'`)
+6. Push to branch (`git push origin feature/amazing-feature`)
+7. Open a pull request
 
 **Areas for contribution:**
-- Additional pause features
-- Enhanced statistics tracking
-- Improved Discord embed formatting
-- Bug fixes and optimizations
-- Documentation improvements
+- 🎯 Additional pause features (e.g., coach system)
+- 📊 Enhanced statistics tracking
+- 🎨 Improved Discord embed formatting
+- 🐛 Bug fixes and optimizations
+- 📖 Documentation improvements
+- 🧪 Unit tests and benchmarks
 
 ---
 
 ## 📄 License
 
-[Add your license here]
+MIT License - See [LICENSE](LICENSE) file for details
 
 ---
 
 ## 🔗 Links
 
-- **GitHub Issues**: [Report bugs](https://github.com/afraznein/KTPMatchHandler/issues)
-- **KTP-ReHLDS**: [Custom ReHLDS fork](https://github.com/afraznein/KTP-ReHLDS)
+- **GitHub Repository**: [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler)
+- **GitHub Issues**: [Report Bugs](https://github.com/afraznein/KTPMatchHandler/issues)
+- **KTP-ReHLDS**: [Custom ReHLDS Fork](https://github.com/afraznein/KTP-ReHLDS)
 - **ReAPI**: [ReGameDLL API](https://github.com/s1lentq/reapi)
 - **ReHLDS**: [Original ReHLDS](https://github.com/dreamstalker/rehlds)
-- **AMX Mod X**: [Official website](https://www.amxmodx.org/)
+- **AMX Mod X**: [Official Website](https://www.amxmodx.org/)
+
+---
+
+## 📚 Documentation
+
+- **[REAPI_PAUSE_IMPLEMENTATION.md](REAPI_PAUSE_IMPLEMENTATION.md)** - Complete guide to ReAPI pause system
+- **[DISCORD_GUIDE.md](DISCORD_GUIDE.md)** - Discord relay setup and configuration
+- **[SERVER_TROUBLESHOOTING.md](SERVER_TROUBLESHOOTING.md)** - Server setup and debugging
+- **[PAUSE_SYSTEM_REDESIGN.md](PAUSE_SYSTEM_REDESIGN.md)** - v0.4.0 pause system architecture
+- **[FEATURE_SUMMARY.md](FEATURE_SUMMARY.md)** - Complete feature list
+- **[CHANGELOG.md](CHANGELOG.md)** - Full version history
 
 ---
 
 ## 👤 Author
 
 **Nein_**
+- GitHub: [@afraznein](https://github.com/afraznein)
+- Project: KTP Competitive Infrastructure
 
 For support and questions, please open an issue on GitHub.
 
@@ -400,10 +658,63 @@ For support and questions, please open an issue on GitHub.
 
 ## 🙏 Acknowledgments
 
-- ReAPI developers for the hook chain system
-- s1lentq for ReHLDS
-- AMX Mod X team for the scripting platform
-- KTP community for testing and feedback
+- **s1lentq** - ReAPI and ReHLDS development
+- **ReHLDS Team** - Original ReHLDS project
+- **AMX Mod X Team** - Scripting platform
+- **KTP Community** - Testing and feedback
+- **Discord Relay Project** - Webhook relay service
+
+---
+
+## 🔒 Security Notes
+
+**Important:**
+- Never commit `discord.ini` to git (contains auth secrets)
+- Keep `RELAY_SHARED_SECRET` private
+- Use `.gitignore` to protect sensitive configs
+- Restrict server file permissions appropriately
+
+---
+
+## 🚦 Status
+
+- **Current Version**: v0.4.0
+- **Status**: Stable
+- **Tested On**: KTP-ReHLDS + ReAPI + AMX ModX 1.10
+- **Last Updated**: November 17, 2025
+- **Platforms**: Day of Defeat 1.3
+
+---
+
+## ⚡ Quick Reference Card
+
+```
+╔════════════════════════════════════════════════════════════╗
+║             KTP MATCH HANDLER v0.4.0                       ║
+║              Quick Command Reference                       ║
+╠════════════════════════════════════════════════════════════╣
+║  MATCH CONTROL                                             ║
+║  /start         Start match workflow                       ║
+║  /confirm       Confirm team ready                         ║
+║  /ready         Mark yourself ready                        ║
+║  /status        View match status                          ║
+║                                                            ║
+║  PAUSE CONTROL                                             ║
+║  /pause         Tactical pause (5-sec countdown)           ║
+║  /tech          Technical pause                            ║
+║  /resume        Request unpause (your team)                ║
+║  /confirmunpause Confirm unpause (other team)              ║
+║  /extend        Add 2 minutes (max 2×)                     ║
+║                                                            ║
+║  PAUSE FEATURES                                            ║
+║  ⏱️  Real-time MM:SS countdown                             ║
+║  📊 HUD updates every frame (ReAPI)                        ║
+║  💬 Chat works during pause (KTP-ReHLDS)                   ║
+║  ⏸️  Complete time freeze (physics stop)                   ║
+║  🔔 Auto-warnings at 30s and 10s                           ║
+║  ⏲️  Auto-unpause when timer expires                       ║
+╚════════════════════════════════════════════════════════════╝
+```
 
 ---
 

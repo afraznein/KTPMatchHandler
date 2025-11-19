@@ -1,48 +1,60 @@
-/* KTP Match Handler v0.4.0
- * Comprehensive pause system with graceful feature degradation across platforms
+/* KTP Match Handler v0.4.1
+ * Comprehensive match management system with ReAPI pause integration
  *
- * MAJOR FEATURES (v0.4.0):
- * - Unified pause countdown system (works on all platforms)
- * - Timed pauses: 5-minute default with visible countdown
- * - Pause extensions: /extend adds 2 minutes (max 2 extensions)
- * - Pre-pause countdown: configurable warning before pause activates
- * - Auto-unpause when timer expires (automatic with KTP-ReHLDS, on-command otherwise)
- * - Disconnect auto-pause: 10-second countdown (cancellable via /cancelpause)
- * - Comprehensive logging to AMX log, KTP match log, and Discord
+ * AUTHOR: Nein_
+ * VERSION: 0.4.1
+ * DATE: 2025-11-17
  *
- * MATCH SYSTEM:
+ * ========== MAJOR FEATURES ==========
+ * - ReAPI Pause Integration: Direct pause control via rh_set_server_pause()
+ * - Timed Pauses: 5-minute default with MM:SS countdown display
+ * - Pause Extensions: /extend adds 2 minutes (max 2 extensions)
+ * - Pre-Pause Countdown: Configurable warning before pause activates
+ * - Auto-Unpause: Automatic when timer expires (KTP-ReHLDS) or on-command fallback
+ * - Disconnect Auto-Pause: 10-second countdown (cancellable via /cancelpause)
+ * - Technical Pauses: Budget-based system with time tracking per team
+ * - Discord Integration: Real-time match notifications via webhook relay
+ * - Comprehensive Logging: AMX log, KTP match log, and Discord
+ *
+ * ========== MATCH SYSTEM ==========
  * - Pre-Start: /start or /startmatch -> requires one /confirm from each team
  * - Pending: /ready (alias /ktp) + /notready until both teams reach ktp_ready_required
- * - After LIVE: each team gets ONE tactical pause per half
- * - Technical pauses: Budget-based system with time tracking
+ * - Live: Each team gets ONE tactical pause per half
+ * - Tech Pauses: Budget-based (default 300s per team per half)
  *
- * PAUSE CONTROLS:
- * - /pause - Initiate pause (countdown before activation)
- * - /resume - Request unpause (owner team)
- * - /confirmunpause - Confirm unpause (other team)
- * - /extend - Extend pause by 2 minutes (max 2 times)
- * - /tech - Technical pause (uses team budget)
+ * ========== PAUSE CONTROLS ==========
+ * - /pause       - Initiate tactical pause (countdown before activation)
+ * - /tech        - Technical pause (uses team budget)
+ * - /resume      - Request unpause (owner team)
+ * - /confirmunpause - Confirm unpause (other team, if required)
+ * - /extend      - Extend pause by 2 minutes (max 2 times)
  * - /cancelpause - Cancel disconnect auto-pause
  *
- * REQUIREMENTS:
+ * ========== REQUIREMENTS ==========
  * - AMX ModX 1.9+ (minimum)
+ * - ReAPI module (recommended for full features)
+ * - KTP-ReHLDS (recommended for pause HUD updates and chat)
+ * - cURL extension (optional, for Discord notifications)
  *
- * OPTIONAL ENHANCEMENTS:
- * - ReAPI module: Enables real-time HUD updates during pause
- * - KTP-ReHLDS: Enables chat during pause + automatic timer checks
- * - cURL extension: Enables Discord webhook notifications
+ * ========== PLATFORM COMPATIBILITY ==========
+ * - Base HLDS + AMX: Core features work (requires pausable 1)
+ * - ReHLDS + AMX: Same as base + better pause support (requires pausable 1)
+ * - KTP-ReHLDS + ReAPI: Full feature set with pausable 0 support
  *
- * FEATURE COMPATIBILITY:
- * - Base AMX (HLDS): Core features work, timer checks on player commands
- * - Standard ReHLDS: Same as base AMX + rcon_say announcements during pause
- * - KTP-ReHLDS + ReAPI: Full feature set with real-time updates during pause
+ * ========== SERVER CONFIGURATION ==========
+ * Recommended (KTP-ReHLDS + ReAPI):
+ *   pausable 0  // Block engine pause, use ReAPI pause only
  *
- * CVARs:
+ * Fallback (base servers without ReAPI):
+ *   pausable 1  // Required for engine pause command
+ *
+ * ========== CVARS ==========
  *   ktp_pause_countdown "5"              - Unpause countdown seconds
  *   ktp_pause_duration "300"             - Pause duration (5 minutes)
  *   ktp_pause_extension "120"            - Extension time (2 minutes)
  *   ktp_pause_max_extensions "2"         - Max extensions allowed
- *   ktp_prepause_seconds "3"             - Pre-pause countdown
+ *   ktp_prepause_seconds "3"             - Pre-pause countdown (live match)
+ *   ktp_prematch_pause_seconds "3"       - Pre-pause countdown (pre-match)
  *   ktp_pause_hud "1"                    - Enable pause HUD
  *   ktp_match_logfile "ktp_match.log"    - Log file path
  *   ktp_ready_required "6"               - Players needed to ready up
@@ -50,29 +62,47 @@
  *   ktp_maps_file "addons/amxmodx/configs/ktp_maps.ini"
  *   ktp_unpause_autorequest_secs "300"   - Auto-request timeout
  *   ktp_tech_budget_seconds "300"        - Tech pause budget per team
- *   ktp_force_pausable "1"               - Force pausable enabled
  *   ktp_discord_ini "addons/amxmodx/configs/discord.ini"
  *
  * ========== CHANGELOG ==========
- * v0.4.0 (2025-01-15) - Major Pause System Overhaul
- *   + Unified pause countdown system - ALL pause entry points now use countdown
- *   + Graceful degradation: Works on base AMX, better with ReHLDS, best with KTP-ReHLDS
- *   + Timed pauses: 5-minute default with MM:SS countdown display (all platforms)
- *   + Pre-pause countdown: configurable (live match vs pre-match)
- *   + Pause extensions: /extend command adds 2 minutes (max 2 extensions, all platforms)
- *   + Auto-unpause when timer expires (automatic with KTP-ReHLDS, on-command fallback)
- *   + Disconnect auto-pause: 10-second countdown, cancellable via /cancelpause
- *   + Real-time pause tracking using get_systime() (works on all platforms)
- *   + ReAPI integration: Automatic HUD updates during pause (KTP-ReHLDS only)
- *   + Manual timer checks: Fallback system for base AMX/standard ReHLDS
- *   + Comprehensive logging to AMX log, match log, and Discord (all platforms)
- *   + All pause commands (console, RCON, chat) intercepted and use unified system
- *   + New CVAR: ktp_prematch_pause_seconds - separate countdown for pre-match pauses
- *   * Fixed: HUD updates during pause using real-world time (KTP-ReHLDS)
- *   * Fixed: Chat announcements during pause (rcon_say fallback for base AMX/ReHLDS)
+ * v0.4.1 (2025-11-17) - Pausable Cvar Removal
+ *   - REMOVED: All pausable cvar manipulation code
+ *   - REMOVED: ktp_force_pausable cvar (no longer needed)
+ *   - REMOVED: g_pcvarPausable and g_cvarForcePausable variables
+ *   - REMOVED: ktp_force_pausable_if_needed() function
+ *   - REMOVED: pausable value from debug logs and client messages
+ *   * CHANGED: Simplified logging (removed pausable from PAUSE_ATTEMPT/UNPAUSE_ATTEMPT)
+ *   * CHANGED: Cleaner client messages ("Game paused" vs "Pause enforced")
+ *   * CHANGED: cmd_ktpdebug no longer shows pausable value
+ *   + IMPROVED: Cleaner code (~33 lines removed, ~10 lines simplified)
+ *   + IMPROVED: Comments explain ReAPI bypass of pausable cvar
+ *   ! REQUIRES: pausable 0 for KTP-ReHLDS + ReAPI (recommended)
+ *   ! REQUIRES: pausable 1 for base servers without ReAPI (fallback)
+ *
+ * v0.4.0 (2025-11-17) - ReAPI Pause Integration
+ *   + ReAPI Pause: Direct control via rh_set_server_pause() bypasses pausable cvar
+ *   + Works with pausable 0: Only KTP system can pause, engine pause blocked
+ *   + Complete time freeze: host_frame stops, g_psv.time frozen, SV_Physics halted
+ *   + Unified pause countdown system for ALL pause entry points
+ *   + Graceful degradation: Base AMX -> ReHLDS -> KTP-ReHLDS + ReAPI
+ *   + Timed pauses: 5-minute default with MM:SS countdown (all platforms)
+ *   + Pre-pause countdown: Configurable (live match vs pre-match)
+ *   + Pause extensions: /extend command (max 2 extensions, all platforms)
+ *   + Auto-unpause on timer expiration (automatic with KTP-ReHLDS)
+ *   + Disconnect auto-pause: 10-second countdown, cancellable
+ *   + Real-time pause tracking using get_systime() instead of host_frametime
+ *   + ReAPI integration: RH_SV_UpdatePausedHUD hook for automatic HUD updates
+ *   + Manual timer checks: Fallback for base AMX/standard ReHLDS
+ *   + Discord integration: Webhook relay for match notifications
+ *   + Map config system: Section-based ktp_maps.ini format
+ *   + Comprehensive logging: AMX log, KTP match log, Discord
+ *   * Fixed: Command registration conflict ("Cmd_AddMallocCommand: pause already defined")
+ *   * Fixed: HUD updates during pause using real-world time
+ *   * Fixed: Chat announcements during pause (rcon_say fallback)
  *   * Fixed: /ready system undefined variable bug
  *   * Enhanced: /status command shows detailed player ready status
- *   - Removed: Game-time based pause_timer_tick (replaced with real-time system)
+ *   - Removed: Duplicate pause command registrations
+ *   - Removed: Game-time based pause_timer_tick (replaced with real-time)
  *
  * v0.3.3 - Previous Stable Release
  *   - Two-team confirm unpause system
@@ -80,7 +110,7 @@
  *   - Technical pause with budget tracking
  *   - Disconnect detection with auto tech-pause
  *   - Pre-start confirmation system
- *   - Discord webhook integration
+ *   - Discord webhook integration (basic)
  */
 
 #include <amxmodx>
@@ -98,11 +128,10 @@
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.4.0"
+#define PLUGIN_VERSION "0.4.1"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
-new g_cvarHud;
 new g_cvarLogFile;
 new g_cvarReadyReq;
 new g_cvarCfgBase;
@@ -112,9 +141,8 @@ new g_cvarCountdown;          // unpause countdown seconds (ktp_pause_countdown)
 new g_cvarPrePauseSec;        // pre-pause chat countdown for live matches (ktp_prepause_seconds)
 new g_cvarPreMatchPauseSec;   // pre-pause countdown for pre-match pauses (ktp_prematch_pause_seconds)
 new g_cvarTechBudgetSec;      // technical pause budget per team per half (ktp_tech_budget_seconds)
-new g_cvarForcePausable;      // ktp_force_pausable
 new g_cvarDiscordIniPath;     // path to discord.ini (ktp_discord_ini)
-new g_pcvarPausable;          // pointer to engine "pausable" cvar
+// NOTE: pausable cvar variables removed - ReAPI pause bypasses pausable entirely
 new g_cvarPauseDuration;      // pause duration seconds (ktp_pause_duration)
 new g_cvarPauseExtension;     // pause extension seconds (ktp_pause_extension)
 new g_cvarMaxExtensions;      // max pause extensions (ktp_pause_max_extensions)
@@ -152,7 +180,7 @@ new g_taskAutoReqCountdownId = 55606;
 // ---------- Tunables (defaults; CVARs can override at runtime) ----------
 new g_countdownSeconds = 5;    // unpause countdown
 new g_prePauseSeconds = 5;     // pre-pause countdown for live pauses
-new g_preMatchPauseSeconds = 5; // pre-pause countdown for pre-match pauses
+// NOTE: Removed g_preMatchPauseSeconds - value read directly from cvar in trigger_pause_countdown()
 new g_techBudgetSecs = 300;    // 5 minutes tech budget per team per half
 new g_readyRequired   = 1;     // players needed per team to go live
 new g_countdownLeft = 0;
@@ -253,27 +281,18 @@ stock announce_all(const fmt[], any:...) {
         server_exec();
     } else {
         client_print(0, print_chat, "[KTP] %s", msg);
-        client_print(0, print_console, "[KTP] %s", msg);
     }
     #else
     // KTP-ReHLDS: client_print works during pause
     client_print(0, print_chat, "[KTP] %s", msg);
-    client_print(0, print_console, "[KTP] %s", msg);
     #endif
-
-    // HUD messages won't display during pause on base AMX/standard ReHLDS, but safe to call
-    if (get_pcvar_num(g_cvarHud)) {
-        set_hudmessage(HUD_R, HUD_G, HUD_B, HUD_X, HUD_Y, 0, 0.0, 2.0, 0.0, 0.0, -1);
-        ClearSyncHud(0, g_hudSync);
-        ShowSyncHudMsg(0, g_hudSync, "%s", msg);
-    }
 }
 
 stock ktp_sync_config_from_cvars() {
     if (g_cvarReadyReq)          { new v = get_pcvar_num(g_cvarReadyReq);           if (v > 0) g_readyRequired = v; }
     if (g_cvarCountdown)         { new v2 = get_pcvar_num(g_cvarCountdown);         if (v2 > 0) g_countdownSeconds = v2; }
     if (g_cvarPrePauseSec)       { new v3 = get_pcvar_num(g_cvarPrePauseSec);       if (v3 > 0) g_prePauseSeconds   = v3; }
-    if (g_cvarPreMatchPauseSec)  { new v4 = get_pcvar_num(g_cvarPreMatchPauseSec);  if (v4 > 0) g_preMatchPauseSeconds = v4; }
+    // g_cvarPreMatchPauseSec read directly in trigger_pause_countdown(), no need to cache
     if (g_cvarTechBudgetSec)     { new v5 = get_pcvar_num(g_cvarTechBudgetSec);     if (v5 > 0) g_techBudgetSecs    = v5; }
 }
 
@@ -509,30 +528,12 @@ public discord_callback(CURL:curl, CURLcode:code) {
     curl_easy_cleanup(curl);
 }
 
-// Discord message helpers
-stock send_discord_pause_event(const emoji[], const eventType[], const playerName[], const teamName[]) {
-    new msg[256];
-    formatex(msg, charsmax(msg),
-        "%s %s by %s (%s) | Pauses left: Allies %d, Axis %d",
-        emoji, eventType, playerName, teamName, pauses_left(1), pauses_left(2));
-    send_discord_message(msg);
-}
+// NOTE: Removed unused Discord wrapper functions:
+// - send_discord_pause_event() - never called
+// - send_discord_unpause_event() - never called
+// - send_discord_match_start() - never called
+// All Discord messages sent directly via send_discord_message() with inline formatting
 
-stock send_discord_unpause_event(const emoji[], const playerName[]) {
-    new msg[256];
-    formatex(msg, charsmax(msg),
-        "%s Match LIVE! Unpaused by %s | Tech budget: Allies %ds, Axis %ds",
-        emoji, playerName, g_techBudget[1], g_techBudget[2]);
-    send_discord_message(msg);
-}
-
-stock send_discord_match_start(const captain1[], const captain2[]) {
-    new msg[256];
-    formatex(msg, charsmax(msg),
-        "⚔️ Match starting! Captains: %s vs %s",
-        captain1, captain2);
-    send_discord_message(msg);
-}
 #else
 // Stub function when cURL not available
 stock send_discord_message(const message[]) {
@@ -709,64 +710,60 @@ stock exec_map_config() {
 
     server_cmd("exec %s", fullpath);
     server_exec();
+
+    // Execute mp_clan_restartround 1 after map config to start countdown
+    server_cmd("mp_clan_restartround 1");
+    server_exec();
+
     return 1;
 }
 
-stock ktp_force_pausable_if_needed() {
-    if (!get_pcvar_num(g_cvarForcePausable)) return;
-    if (g_pcvarPausable) {
-        if (get_pcvar_num(g_pcvarPausable) != 1) set_pcvar_num(g_pcvarPausable, 1);
-    } else {
-        if (get_cvar_num("pausable") != 1) set_cvar_num("pausable", 1);
-    }
-}
-
 stock ktp_pause_now(const reason[]) {
-    ktp_force_pausable_if_needed();
-
-    // DEBUG visibility
-    new pausable = g_pcvarPausable ? get_pcvar_num(g_pcvarPausable) : get_cvar_num("pausable");
-    log_ktp("event=PAUSE_ATTEMPT reason=%s paused=%d pausable=%d allow=%d",
-            reason, g_isPaused, pausable, g_allowInternalPause);
+    log_ktp("event=PAUSE_ATTEMPT reason=%s paused=%d", reason, g_isPaused);
 
     if (!g_isPaused) {
         // Set pause start time for timer calculations (even for pre-live pauses)
         g_pauseStartTime = get_systime();
 
-        g_allowInternalPause = true;          // allow our server_cmd through the block
+        #if defined _reapi_included
+        // Use ReAPI native to pause directly (bypasses pausable cvar)
+        rh_set_server_pause(true);
+        g_isPaused = true;
+        log_ktp("event=PAUSE_TOGGLE source=reapi reason='%s' method=rh_set_server_pause", reason);
+        #else
+        // Fallback to engine pause command for base HLDS/ReHLDS (requires pausable 1)
+        g_allowInternalPause = true;
         server_cmd("pause");
         server_exec();
         g_allowInternalPause = false;
-
-        // we don't assume success blindly—double-check:
-        pausable = g_pcvarPausable ? get_pcvar_num(g_pcvarPausable) : get_cvar_num("pausable");
-        // engine doesn't expose a "paused" cvar; we trust the toggle and set our flag:
         g_isPaused = true;
+        log_ktp("event=PAUSE_TOGGLE source=engine_cmd reason='%s'", reason);
+        #endif
 
-        log_ktp("event=PAUSE_TOGGLE source=plugin reason='%s' pausable=%d", reason, pausable);
-        client_print(0, print_chat, "[KTP] Pause enforced (reason: %s). pausable=%d", reason, pausable);
-        client_print(0, print_console, "[KTP] Pause enforced (reason: %s). pausable=%d", reason, pausable);
+        client_print(0, print_chat, "[KTP] Game paused (reason: %s)", reason);
     }
 }
 
 stock ktp_unpause_now(const reason[]) {
-    // DEBUG visibility
-    new pausable = g_pcvarPausable ? get_pcvar_num(g_pcvarPausable) : get_cvar_num("pausable");
-    log_ktp("event=UNPAUSE_ATTEMPT reason=%s paused=%d pausable=%d allow=%d",
-            reason, g_isPaused, pausable, g_allowInternalPause);
+    log_ktp("event=UNPAUSE_ATTEMPT reason=%s paused=%d", reason, g_isPaused);
 
     if (g_isPaused) {
-        g_allowInternalPause = true;          // allow our server_cmd through the block
+        #if defined _reapi_included
+        // Use ReAPI native to unpause directly (bypasses pausable cvar)
+        rh_set_server_pause(false);
+        g_isPaused = false;
+        log_ktp("event=UNPAUSE_TOGGLE source=reapi reason='%s' method=rh_set_server_pause", reason);
+        #else
+        // Fallback to engine unpause command for base HLDS/ReHLDS (requires pausable 1)
+        g_allowInternalPause = true;
         server_cmd("unpause");
         server_exec();
         g_allowInternalPause = false;
-
-        // engine doesn't expose a "paused" cvar; we trust the toggle and set our flag:
         g_isPaused = false;
+        log_ktp("event=UNPAUSE_TOGGLE source=engine_cmd reason='%s'", reason);
+        #endif
 
-        log_ktp("event=UNPAUSE_TOGGLE source=plugin reason='%s' pausable=%d", reason, pausable);
-        client_print(0, print_chat, "[KTP] Unpause executed (reason: %s). pausable=%d", reason, pausable);
-        client_print(0, print_console, "[KTP] Unpause executed (reason: %s). pausable=%d", reason, pausable);
+        client_print(0, print_chat, "[KTP] Game unpaused (reason: %s)", reason);
     }
 }
 
@@ -833,8 +830,6 @@ public prepause_countdown_tick() {
 }
 
 stock execute_pause(const who[], const reason[]) {
-    ktp_force_pausable_if_needed();
-
     if (g_isPaused) return;
 
     // Store pause info
@@ -842,13 +837,17 @@ stock execute_pause(const who[], const reason[]) {
     g_pauseStartTime = get_systime();
     g_pauseExtensions = 0;
 
-    // Actually pause
+    // Actually pause using ReAPI native (or fallback for non-ReAPI)
+    #if defined _reapi_included
+    rh_set_server_pause(true);
+    g_isPaused = true;
+    #else
     g_allowInternalPause = true;
     server_cmd("pause");
     server_exec();
     g_allowInternalPause = false;
-
     g_isPaused = true;
+    #endif
 
     // Set pause duration
     g_pauseDurationSec = get_pcvar_num(g_cvarPauseDuration);
@@ -1165,11 +1164,24 @@ stock check_pause_timer_realtime() {
 #if defined _reapi_included
 public OnPausedHUDUpdate() {
     // Called every frame while paused (via KTP-ReHLDS modification)
-    // Updates HUD with real-time elapsed/remaining time using get_systime()
+    // Throttle to 1 update per second to avoid network overflow
+    static lastUpdate = 0;
+    new currentTime = get_systime();
+
+    if (currentTime == lastUpdate) return HC_CONTINUE;  // Already updated this second
+    lastUpdate = currentTime;
 
     if (!g_isPaused) return HC_CONTINUE;
 
-    // Display pause HUD based on type
+    // If in pending phase, show pending HUD instead of pause HUD
+    if (g_matchPending) {
+        show_pending_hud_during_pause();
+        // Still check pause timer for warnings/timeout
+        check_pause_timer_realtime();
+        return HC_CONTINUE;
+    }
+
+    // Display pause HUD based on type (for tactical/tech pauses during live match)
     show_pause_hud_message(g_isTechPause ? "TECHNICAL" : "TACTICAL");
 
     // Check pause timer for warnings/timeout using real-world time
@@ -1190,14 +1202,52 @@ public pending_hud_tick() {
     new techA = g_techBudget[1];
     new techX = g_techBudget[2];
 
+    // Calculate pause status message
+    new pauseInfo[64] = "";
+    if (g_prePauseCountdown) {
+        // Show pre-pause countdown
+        formatex(pauseInfo, charsmax(pauseInfo), "^nPausing in %d seconds...", g_prePauseLeft);
+    } else if (g_isPaused && g_pauseStartTime > 0) {
+        // Show actual pause time remaining
+        new elapsed = get_systime() - g_pauseStartTime;
+        new duration = g_pauseDurationSec + (g_pauseExtensions * get_pcvar_num(g_cvarPauseExtension));
+        new remaining = duration - elapsed;
+        if (remaining < 0) remaining = 0;
+        formatex(pauseInfo, charsmax(pauseInfo), "^nPause Time: %s remaining", fmt_seconds(remaining));
+    }
+
     set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 1.2, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "KTP Match Pending^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team^nType /ready when ready.",
-        alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need);
+        "KTP Match Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type /ready when ready.",
+        pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need);
 }
 
+// Show pending HUD during pause (called from OnPausedHUDUpdate hook)
+// This runs every frame, so pause timer updates in real-time
+stock show_pending_hud_during_pause() {
+    new alliesPlayers, axisPlayers, alliesReady, axisReady;
+    get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
+    new need = g_readyRequired;
+    new techA = g_techBudget[1];
+    new techX = g_techBudget[2];
 
+    // Calculate pause time remaining using real-time clock
+    new pauseInfo[64] = "";
+    if (g_pauseStartTime > 0) {
+        new elapsed = get_systime() - g_pauseStartTime;
+        new duration = g_pauseDurationSec + (g_pauseExtensions * get_pcvar_num(g_cvarPauseExtension));
+        new remaining = duration - elapsed;
+        if (remaining < 0) remaining = 0;
+        formatex(pauseInfo, charsmax(pauseInfo), "^nPause Time: %s remaining", fmt_seconds(remaining));
+    }
+
+    set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 0.1, 0.0, 0.0, -1);
+    ClearSyncHud(0, g_hudSync);
+    ShowSyncHudMsg(0, g_hudSync,
+        "KTP Match Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type /ready when ready.",
+        pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need);
+}
 
 public prestart_hud_tick() {
     if (!g_preStartPending) { remove_task(g_taskPrestartHudId); return; }
@@ -1252,8 +1302,8 @@ public plugin_init() {
     g_cvarPreMatchPauseSec = register_cvar("ktp_prematch_pause_seconds", tmpPre); // same default as prepause
     g_cvarTechBudgetSec   = register_cvar("ktp_tech_budget_seconds", tmpTech);
     g_cvarLogFile        = register_cvar("ktp_match_logfile", DEFAULT_LOGFILE);
-    g_cvarForcePausable  = register_cvar("ktp_force_pausable", "1");
-    g_cvarHud            = register_cvar("ktp_pause_hud", "1");
+    // ktp_force_pausable removed - ReAPI pause bypasses pausable cvar
+    // ktp_pause_hud removed - HUD output removed from announce_all for proper message ordering
     g_cvarCfgBase        = register_cvar("ktp_cfg_basepath", "dod/");
     g_cvarMapsFile       = register_cvar("ktp_maps_file", "addons/amxmodx/configs/ktp_maps.ini");
     g_cvarAutoReqSec     = register_cvar("ktp_unpause_autorequest_secs", "300");
@@ -1348,23 +1398,29 @@ public plugin_init() {
     register_clcmd("say /ktpdebug", "cmd_ktpdebug");
     register_clcmd("say_team /ktpdebug", "cmd_ktpdebug");
 
-    // Block client console "pause" and attribute it
-    register_clcmd("pause", "cmd_client_pause");
+    // NOTE: We do NOT register the console "pause" command because KTP-ReHLDS has it built-in
+    // Attempting to override it causes: "Cmd_AddMallocCommand: pause already defined"
+    // Instead, we rely on:
+    //   - Chat commands: "say /pause" (registered above at line 1266)
+    //   - Server can use: ktp_pause command (registered below)
+    // The engine's built-in pause still works, but without our custom countdown/tracking
 
-    // Intercept server/RCON pause commands
-    register_srvcmd("pause", "cmd_server_pause");
-    register_concmd("pause", "cmd_rcon_pause");
+    // Custom pause command for server/admin use (avoids conflict with built-in "pause")
+    register_concmd("ktp_pause", "cmd_rcon_pause", ADMIN_RCON, "- Trigger KTP tactical pause");
 
     g_hudSync = CreateHudSyncObj();
 
     // Register ReAPI hook for automatic pause HUD updates (KTP-ReHLDS + ReAPI only)
     // This enables real-time HUD updates during pause without player interaction
-    #if defined _reapi_included && defined RH_SV_UpdatePausedHUD
+    // Note: Can't use #if defined for enum constants, so we register unconditionally if ReAPI is available
+    #if defined _reapi_included
     RegisterHookChain(RH_SV_UpdatePausedHUD, "OnPausedHUDUpdate", .post = false);
+    log_amx("[KTP] Registered RH_SV_UpdatePausedHUD hook");
+    #else
+    log_amx("[KTP] WARNING: ReAPI not available - pause HUD updates disabled");
     #endif
 
-    // engine pointer for "pausable"
-    g_pcvarPausable = get_cvar_pointer("pausable");
+    // NOTE: pausable cvar no longer used - ReAPI pause bypasses it
     g_lastUnpauseBy[0] = EOS;
     g_lastPauseBy[0] = EOS;
 
@@ -1836,9 +1892,8 @@ public cmd_tech_pause(id) {
 }
 
 public cmd_ktpdebug(id) {
-    new pausable = g_pcvarPausable ? get_pcvar_num(g_pcvarPausable) : get_cvar_num("pausable");
-    client_print(id, print_chat, "[KTP] paused=%d pending=%d live=%d pausable=%d need=%d",
-        g_isPaused, g_matchPending, g_matchLive, pausable, g_readyRequired);
+    client_print(id, print_chat, "[KTP] paused=%d pending=%d live=%d need=%d",
+        g_isPaused, g_matchPending, g_matchLive, g_readyRequired);
     return PLUGIN_HANDLED;
 }
 
@@ -1871,33 +1926,24 @@ public cmd_match_start(id) {
     // Reset captains for new match
     reset_captains();
 
-    // set Captain 1 (first start initiator)
-    if (!g_captain1_team) {
-        new name[64], sid[44], ip[32];
-        get_user_name(id, name, charsmax(name));
-        get_user_authid(id, sid, charsmax(sid));
-        get_user_ip(id, ip, charsmax(ip), 1);
+    // Gather identity first
+    new name[32], sid[44], ip[32], team[16], map[32];
+    get_full_identity(id, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team), map, charsmax(map));
 
+    // Set Captain 1 (first start initiator)
+    if (!g_captain1_team) {
         g_captain1_team = get_user_team(id);
         copy(g_captain1_name, charsmax(g_captain1_name), name);
         copy(g_captain1_sid,  charsmax(g_captain1_sid),  sid);
         copy(g_captain1_ip,   charsmax(g_captain1_ip),   ip);
-
-        new map[32]; get_mapname(map, charsmax(map));
-        log_ktp("event=PRESTART_BEGIN by='%s' steamid=%s ip=%s team=%d map=%s",
-                name, safe_sid(sid), ip[0]?ip:"NA", g_captain1_team, map);
-        announce_all("[KTP] Match start initiated by %s. Opposite team must /confirm.", name);
     }
 
-
-    g_preStartPending = true; g_preConfirmAllies = false; g_preConfirmAxis = false;
-    g_confirmAlliesBy[0] = EOS; g_confirmAxisBy[0] = EOS;
-
-    // Pre-start pause (does NOT count)
-    if (!g_isPaused) {
-        trigger_pause_countdown("System", "prestart_autopause", true); // true = pre-match countdown
-        log_ktp("event=PRESTART_AUTOPAUSE");
-    }
+    // Set flags
+    g_preStartPending = true;
+    g_preConfirmAllies = false;
+    g_preConfirmAxis = false;
+    g_confirmAlliesBy[0] = EOS;
+    g_confirmAxisBy[0] = EOS;
 
     // Reset pause limits for the new half
     g_pauseCountTeam[1] = 0;
@@ -1908,12 +1954,24 @@ public cmd_match_start(id) {
     g_matchLive = false;
     safe_remove_task(g_taskPauseHudId);
 
-    new name[32], sid[44], ip[32], team[16], map[32];
-    get_full_identity(id, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team), map, charsmax(map));
-
+    // Log event
     log_ktp("event=PRESTART_BEGIN by=\'%s\' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
+
+    // Announce in order with explicit flushing to prevent buffering issues
     announce_all("Pre-Start initiated by %s on %s.", name, map);
-    announce_all("Procedure: captains from each team type /confirm when your SS procedure is complete.");
+    announce_all("Opposite team captain must /confirm to proceed.");
+    server_exec(); // Force flush before warning block
+    announce_all(" ");
+    announce_all("===========================================");
+    announce_all("IMPORTANT: Before /confirm, ensure ALL players have:");
+    announce_all("  1. Started demo recording");
+    announce_all("  2. Started MOSS (if required)");
+    announce_all("  3. Taken required screenshots");
+    announce_all("===========================================");
+    server_exec(); // Force flush before final instructions
+    announce_all(" ");
+    announce_all("Upon confirmation, the server will PAUSE for the ready phase.");
+    announce_all("Captains: type /confirm when your team is ready.");
 
     if (!task_exists(g_taskPrestartHudId)) set_task(1.0, "prestart_hud_tick", g_taskPrestartHudId, _, _, "b");
     return PLUGIN_HANDLED;
@@ -1983,12 +2041,12 @@ public cmd_pre_confirm(id) {
         return PLUGIN_HANDLED;
     }
 
-    // both sides confirmed → proceed to Pending
+    // both sides confirmed → pause, then proceed to Pending
     if (g_preConfirmAllies && g_preConfirmAxis) {
-        announce_all("Pre-Start complete. Proceeding to Ready phase.");
+        announce_all("Pre-Start complete. Both teams confirmed.");
         log_ktp("event=PRESTART_COMPLETE");
 
-        // reset pre-start state, then enter Pending (which enforces pause & starts HUD)
+        // reset pre-start state
         prestart_reset();
 
         get_mapname(map, charsmax(map));
@@ -2004,11 +2062,18 @@ public cmd_pre_confirm(id) {
         team_name_from_id(g_captain1_team, c1team, charsmax(c1team));
         team_name_from_id(g_captain2_team, c2team, charsmax(c2team));
         formatex(discordMsg, charsmax(discordMsg),
-            "✅ Pre-Start confirmed | Captains: %s (%s) vs %s (%s) | Waiting for players to /ready",
+            "✅ Pre-Start confirmed | Captains: %s (%s) vs %s (%s) | Server pausing for ready phase",
             g_captain1_name, c1team, g_captain2_name, c2team);
         send_discord_message(discordMsg);
 
-        // Single entry point: sets g_matchPending, clears ready[], pauses, starts HUD, logs state
+        // Pause BEFORE entering pending phase
+        announce_all("Server pausing for ready phase...");
+        if (!g_isPaused) {
+            trigger_pause_countdown("System", "prestart_confirmed", true); // true = pre-match countdown
+            log_ktp("event=PRESTART_PAUSE");
+        }
+
+        // Single entry point: sets g_matchPending, clears ready[], starts HUD, logs state
         enter_pending_phase(g_captain2_name[0] ? g_captain2_name : g_captain1_name);
 
         // RCON visibility
@@ -2074,6 +2139,12 @@ public cmd_cancel(id) {
     get_mapname(map2, charsmax(map2));
     log_ktp("event=PENDING_CANCEL by=\'%s\' steamid=%s ip=%s team=%s map=%s", name2, safe_sid(sid2), ip2[0]?ip2:"NA", team2, map2);
     announce_all("Match pending cancelled by %s.", name2);
+
+    // Unpause if server is paused (from pre-start confirmation)
+    if (g_isPaused) {
+        announce_all("Unpausing server...");
+        ktp_unpause_now("pending_cancel");
+    }
 
     new discordMsg[128];
     formatex(discordMsg, charsmax(discordMsg), "❌ Match pending cancelled by %s", name2);
@@ -2236,11 +2307,8 @@ stock enter_pending_phase(const initiator[]) {
     // clear any previous ready states
     for (new i = 1; i <= MAX_PLAYERS; i++) g_ready[i] = false;
 
-    // enforce server pause (guarantee pausable=1 then toggle pause)
-    // Use countdown for pending phase pause
-    if (!g_isPaused && !g_prePauseCountdown) {
-        trigger_pause_countdown("System", "pending_enforce", true); // true = pre-match countdown
-    }
+    // NOTE: Server pause is now triggered BEFORE calling this function (in cmd_pre_confirm)
+    // This ensures captains confirm demos/moss/screenshots before the pause happens
 
     // start/refresh the pending HUD
     safe_remove_task(g_taskPendingHudId);
@@ -2248,44 +2316,43 @@ stock enter_pending_phase(const initiator[]) {
 
     // snapshot some diagnostics for log
     new map[32]; get_mapname(map, charsmax(map));
-    new pausable = g_pcvarPausable ? get_pcvar_num(g_pcvarPausable) : get_cvar_num("pausable");
 
     // strong log so we see exact state
-    log_ktp("event=PENDING_ENFORCE initiator='%s' map=%s paused=%d pausable=%d pending=%d live=%d",
-            initiator, map, g_isPaused, pausable, g_matchPending, g_matchLive);
+    log_ktp("event=PENDING_ENFORCE initiator='%s' map=%s paused=%d pending=%d live=%d",
+            initiator, map, g_isPaused, g_matchPending, g_matchLive);
 
-    announce_all("KTP: Pending phase. Server paused. Type /ready when your team is ready (need %d each).",
+    announce_all("KTP: Pending phase. Type /ready when your team is ready (need %d each).",
                  g_readyRequired);
 }
 
 // ================= Server/RCON pause handlers =================
-public cmd_server_pause() {
-    // If it's our internal pause, allow it
-    if (g_allowInternalPause) return PLUGIN_CONTINUE;
-
-    log_ktp("event=PAUSE_SERVER_CMD");
-
-    // Trigger countdown (auto-detect if pre-match or live)
-    new bool:isPreMatch = !g_matchLive;
-    trigger_pause_countdown("Server", "server_command", isPreMatch);
-
-    return PLUGIN_HANDLED;
-}
-
 public cmd_rcon_pause(id) {
     // If it's our internal pause, allow it
     if (g_allowInternalPause) return PLUGIN_CONTINUE;
 
-    new name[32] = "RCON";
-    if (id > 0 && is_user_connected(id)) {
+    // Determine source and name
+    new name[32];
+    new source[32];
+
+    if (id == 0) {
+        // Server console (id=0)
+        copy(name, charsmax(name), "Server");
+        copy(source, charsmax(source), "server_console");
+    } else if (is_user_connected(id)) {
+        // RCON from connected admin
         get_user_name(id, name, charsmax(name));
+        copy(source, charsmax(source), "rcon");
+    } else {
+        // RCON from remote
+        copy(name, charsmax(name), "RCON");
+        copy(source, charsmax(source), "rcon_remote");
     }
 
-    log_ktp("event=PAUSE_RCON_CMD admin='%s'", name);
+    log_ktp("event=PAUSE_CMD source='%s' admin='%s'", source, name);
 
     // Trigger countdown (auto-detect if pre-match or live)
     new bool:isPreMatch = !g_matchLive;
-    trigger_pause_countdown(name, "rcon_command", isPreMatch);
+    trigger_pause_countdown(name, source, isPreMatch);
 
     return PLUGIN_HANDLED;
 }
