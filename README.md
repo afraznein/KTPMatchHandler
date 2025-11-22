@@ -20,8 +20,9 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **Complete Time Freeze**: `host_frame` stops, `g_psv.time` frozen, physics halted
 - **Works with `pausable 0`**: Block engine pause, only KTP system works
 - **Unified Countdown**: ALL pause entry points use 5-second countdown
-- **Real-Time HUD Updates**: MM:SS timer during pause (KTP-ReHLDS + ReAPI)
-- **Chat During Pause**: Players can communicate while paused (KTP-ReHLDS feature)
+- **Real-Time HUD Updates**: MM:SS timer during pause (KTP-ReHLDS + KTP-ReAPI)
+- **Server Messages Work**: rcon say, join/leave events display during pause
+- **Player Chat**: Server processes, client rendering WIP (KTP-ReHLDS feature)
 - **Two Pause Types**: Tactical (1 per team) and Technical (5-min budget)
 - **Pause Extensions**: Up to 2× 2-minute extensions (9 minutes max)
 - **Auto-Warnings**: 30-second and 10-second countdown alerts
@@ -35,8 +36,8 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **Player Tracking**: SteamID, IP, team recorded for all events
 
 ### Platform Compatibility
-- **Optimal**: KTP-ReHLDS + ReAPI (full feature set)
-- **Good**: Standard ReHLDS + ReAPI (ReAPI pause works, limited HUD)
+- **Optimal**: KTP-ReHLDS + KTP-ReAPI (full feature set)
+- **Good**: Standard ReHLDS + Standard ReAPI (ReAPI pause works, limited HUD)
 - **Basic**: Base AMX ModX (fallback mode, basic features)
 
 ---
@@ -47,8 +48,8 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 
 **Required:**
 - AMX Mod X 1.9+ (1.10 recommended)
-- [ReAPI Module](https://github.com/s1lentq/reapi) (for ReAPI pause natives)
-- [KTP-ReHLDS](https://github.com/afraznein/KTP-ReHLDS) (custom build - chat/HUD during pause)
+- [KTP-ReAPI](https://github.com/afraznein/KTP-ReAPI) (custom ReAPI fork with `RH_SV_UpdatePausedHUD` hook)
+- [KTP-ReHLDS](https://github.com/afraznein/KTP-ReHLDS) (custom ReHLDS fork - HUD updates during pause)
 
 **Optional:**
 - cURL extension (for Discord webhook notifications)
@@ -230,11 +231,12 @@ server_cmd("pause");         // Requires pausable 1
 - ✅ Projectiles (stop mid-air)
 - ✅ Entity think functions (don't execute)
 
-**What still works (KTP-ReHLDS features):**
-- ✅ Chat (players can type/read)
-- ✅ HUD updates (via `RH_SV_UpdatePausedHUD` hook)
+**What still works (KTP-ReHLDS + KTP-ReAPI features):**
+- ✅ HUD updates (via `RH_SV_UpdatePausedHUD` hook in KTP-ReAPI)
+- ✅ Server messages (rcon say, join/leave events, plugin announcements)
 - ✅ Network messages (pause info displayed)
 - ✅ Plugin tasks (timer checks, warnings)
+- ⚠️ Player chat (server processes, client rendering WIP)
 
 ### Pause Types
 
@@ -422,12 +424,13 @@ bool:rh_is_server_paused();  // Check state
 
 **HUD Updates During Pause:**
 ```pawn
-// KTP-ReHLDS custom hook (called every frame while paused)
+// KTP-ReAPI custom hook (exposes KTP-ReHLDS pause HUD updates)
 #if defined _reapi_included && defined RH_SV_UpdatePausedHUD
 RegisterHookChain(RH_SV_UpdatePausedHUD, "OnPausedHUDUpdate", .post = false);
 #endif
 
 public OnPausedHUDUpdate() {
+    // Called every frame while paused by KTP-ReHLDS
     // Update HUD for all players
     // Shows elapsed/remaining time, extensions, commands
     return HC_CONTINUE;
@@ -507,25 +510,26 @@ static bool:warned_10sec = false;
 
 ## 🎯 Platform Support
 
-### ✅ Optimal: KTP-ReHLDS + ReAPI
+### ✅ Optimal: KTP-ReHLDS + KTP-ReAPI
 
 **All features work:**
 - ✅ ReAPI pause natives (`rh_set_server_pause()`)
-- ✅ Real-time HUD updates during pause
-- ✅ Chat works during pause
+- ✅ Real-time HUD updates during pause (via `RH_SV_UpdatePausedHUD` hook)
+- ✅ Server messages work (rcon say, join/leave events)
+- ⚠️ Player chat (server processes, client rendering WIP)
 - ✅ Automatic timer checks (no player interaction needed)
 - ✅ Complete time freeze
 - ✅ Discord notifications
 - ✅ All pause features (countdown, extensions, tracking)
 
-### ⬆️ Good: Standard ReHLDS + ReAPI
+### ⬆️ Good: Standard ReHLDS + Standard ReAPI
 
 **Most features work:**
 - ✅ ReAPI pause natives work
 - ✅ Complete time freeze
 - ✅ Discord notifications
-- ⚠️ HUD updates limited (no real-time updates during pause)
-- ⚠️ Chat frozen during pause
+- ❌ HUD updates limited (no `RH_SV_UpdatePausedHUD` hook)
+- ❌ Chat frozen during pause (server messages and player chat)
 - ⚠️ Timer checks require player commands
 
 ### ⚠️ Basic: Base AMX ModX
@@ -568,7 +572,7 @@ static bool:warned_10sec = false;
 **Fixed:**
 - 🐛 **`Cmd_AddMallocCommand` error** - No more pause command conflicts
 - 🐛 **HUD during pause** - Real-time updates using `get_systime()`
-- 🐛 **Chat during pause** - Works with KTP-ReHLDS
+- 🐛 **Server messages during pause** - rcon say and events work with KTP-ReHLDS
 - 🐛 **Ready system bugs** - Undefined variable warnings
 - 🐛 **Unsafe task removal** - All `remove_task()` calls now safe
 
@@ -578,8 +582,8 @@ static bool:warned_10sec = false;
 - 📈 **Optimized HUD** - Only updates when needed
 
 **Documentation:**
-- 📚 `REAPI_PAUSE_IMPLEMENTATION.md` - Complete ReAPI pause guide
-- 📚 `DISCORD_GUIDE.md` - Discord relay setup
+- 📚 `DISCORD_GUIDE.md` - Complete KTP stack guide (ReHLDS + ReAPI + plugins)
+- 📚 `REAPI_PAUSE_IMPLEMENTATION.md` - ReAPI pause technical guide
 - 📚 `SERVER_TROUBLESHOOTING.md` - Debugging guide
 - 📚 `PAUSE_SYSTEM_REDESIGN.md` - v0.4.0 pause system overview
 
@@ -626,10 +630,14 @@ MIT License - See [LICENSE](LICENSE) file for details
 
 ## 🔗 Links
 
+**KTP Projects:**
 - **GitHub Repository**: [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler)
 - **GitHub Issues**: [Report Bugs](https://github.com/afraznein/KTPMatchHandler/issues)
 - **KTP-ReHLDS**: [Custom ReHLDS Fork](https://github.com/afraznein/KTP-ReHLDS)
-- **ReAPI**: [ReGameDLL API](https://github.com/s1lentq/reapi)
+- **KTP-ReAPI**: [Custom ReAPI Fork](https://github.com/afraznein/KTP-ReAPI)
+
+**Upstream Projects:**
+- **ReAPI**: [Original ReAPI](https://github.com/s1lentq/reapi)
 - **ReHLDS**: [Original ReHLDS](https://github.com/dreamstalker/rehlds)
 - **AMX Mod X**: [Official Website](https://www.amxmodx.org/)
 
@@ -658,10 +666,12 @@ For support and questions, please open an issue on GitHub.
 
 ## 🙏 Acknowledgments
 
-- **s1lentq** - ReAPI and ReHLDS development
-- **ReHLDS Team** - Original ReHLDS project
+- **s1lentq** - Original ReAPI and ReGameDLL development
+- **dreamstalker** - Original ReHLDS project
+- **ReHLDS Team** - Engine enhancements and architecture
+- **ReAPI Team** - Module framework and hooks system
 - **AMX Mod X Team** - Scripting platform
-- **KTP Community** - Testing and feedback
+- **KTP Community** - Testing, feedback, and competitive insights
 - **Discord Relay Project** - Webhook relay service
 
 ---
@@ -678,9 +688,9 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.4.0
+- **Current Version**: v0.4.3
 - **Status**: Stable
-- **Tested On**: KTP-ReHLDS + ReAPI + AMX ModX 1.10
+- **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10
 - **Last Updated**: November 17, 2025
 - **Platforms**: Day of Defeat 1.3
 
@@ -709,7 +719,7 @@ For support and questions, please open an issue on GitHub.
 ║  PAUSE FEATURES                                            ║
 ║  ⏱️  Real-time MM:SS countdown                             ║
 ║  📊 HUD updates every frame (ReAPI)                        ║
-║  💬 Chat works during pause (KTP-ReHLDS)                   ║
+║  💬 Server messages work (rcon say, events)                ║
 ║  ⏸️  Complete time freeze (physics stop)                   ║
 ║  🔔 Auto-warnings at 30s and 10s                           ║
 ║  ⏲️  Auto-unpause when timer expires                       ║
