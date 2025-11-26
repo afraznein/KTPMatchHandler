@@ -1,8 +1,8 @@
 # KTP Match Handler
 
-**Version 0.4.0** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.5.0** - Advanced competitive match management system for Day of Defeat servers
 
-A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, and comprehensive logging capabilities.
+A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, match type differentiation, half tracking, and comprehensive logging capabilities.
 
 ---
 
@@ -10,9 +10,12 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 
 ### Match Management
 - **Structured Match Workflow**: Pre-start → Pending → Ready-up → LIVE
+- **Match Type System**: Competitive, Scrim, and 12-man modes with distinct configs
+- **Half Tracking**: Automatic 1st/2nd half detection with map rotation adjustment
 - **Captain System**: Team confirmation before ready-up phase
 - **Ready-Up System**: Configurable player count per team (default: 6)
-- **Auto-Config Execution**: Map-specific server settings on match start
+- **Auto-Config Execution**: Map-specific AND match-type-specific server settings
+- **Player Roster Logging**: Full team rosters with SteamIDs and IPs logged to Discord
 - **Match State Tracking**: Full visibility into match progress
 
 ### Advanced Pause System (ReAPI Native)
@@ -32,6 +35,8 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 ### Logging & Notifications
 - **Triple Logging**: AMX log + KTP match log + Discord webhooks
 - **Discord Integration**: Real-time notifications with emoji-rich formatting
+- **Per-Match-Type Channels**: Route competitive, scrim, and 12-man matches to different Discord channels
+- **Player Roster Logging**: Complete team lineups logged at match start (competitive only)
 - **Structured Event Logs**: Key=value format for easy parsing
 - **Player Tracking**: SteamID, IP, team recorded for all events
 
@@ -547,6 +552,30 @@ static bool:warned_10sec = false;
 
 ## 📝 Changelog
 
+### v0.5.0 (2025-11-24) - Major Feature Update
+
+**Added:**
+- ✅ **Match type system** - COMPETITIVE, SCRIM, 12MAN modes with distinct behaviors
+- ✅ **Per-match-type configs** - Auto-load `mapname_12man.cfg` or `mapname_scrim.cfg` with fallback
+- ✅ **Per-match-type Discord channels** - Route to different channels based on match type
+- ✅ **Half tracking system** - Automatic 1st/2nd half detection and logging
+- ✅ **Automatic map rotation** - Sets next map to current map for 2nd half
+- ✅ **Half number in messages** - Discord shows "(1st half)" or "(2nd half)"
+- ✅ **Player roster logging** - Full team lineups logged to Discord at match start (competitive only)
+- ✅ **Dot command aliases** - All commands now work with `.` prefix (`.pause`, `.ready`, etc.)
+- ✅ **`/draft` command** - Alias for `/start` and `/ktp`
+
+**Changed:**
+- 🔄 **`/startmatch` → `/ktp`** - Main match start command renamed (kept `/start`)
+- 🔄 **`/start12man` → `/12man`** - Shorter command name with `.12man` alias
+- 🔄 **`/startscrim` → `/scrim`** - Shorter command name with `.scrim` alias
+- 🔄 **Removed `/ready` aliases** - Removed 'ready' and 'ktp' word aliases (conflict resolution)
+
+**Improved:**
+- 🎯 **Discord routing** - Match-type-specific channels with graceful fallback
+- 🎯 **Config selection** - Tries match-type-specific configs first, falls back to standard
+- 🎯 **Player accountability** - Full roster with SteamIDs and IPs logged for competitive matches
+
 ### v0.4.0 (2025-11-17) - ReAPI Pause + Major Overhaul
 
 **Added:**
@@ -688,10 +717,10 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.4.3
+- **Current Version**: v0.5.0
 - **Status**: Stable
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10
-- **Last Updated**: November 17, 2025
+- **Last Updated**: November 24, 2025
 - **Platforms**: Day of Defeat 1.3
 
 ---
@@ -728,4 +757,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.4.0** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️
+**KTP Match Handler v0.5.0** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️

@@ -1,9 +1,9 @@
-/* KTP Match Handler v0.4.4
+/* KTP Match Handler v0.5.0
  * Comprehensive match management system with ReAPI pause integration
  *
  * AUTHOR: Nein_
- * VERSION: 0.4.4
- * DATE: 2025-11-21
+ * VERSION: 0.5.0
+ * DATE: 2025-11-24
  *
  * ========== MAJOR FEATURES ==========
  * - ReAPI Pause Integration: Direct pause control via rh_set_server_pause()
@@ -65,6 +65,50 @@
  *   ktp_discord_ini "addons/amxmodx/configs/discord.ini"
  *
  * ========== CHANGELOG ==========
+ * v0.5.0 (2025-11-24) - Major Feature Update: Match Types, Half Tracking, Command Aliases
+ *   + ADDED: Match type system (COMPETITIVE, SCRIM, 12MAN) with per-type configs and Discord channels
+ *   + ADDED: Per-match-type map configs (e.g., dod_kalt_12man.cfg, dod_kalt_scrim.cfg) with fallback
+ *   + ADDED: Per-match-type Discord channels (discord_channel_id_12man, discord_channel_id_scrim)
+ *   + ADDED: Half tracking system (1st half / 2nd half) with automatic detection
+ *   + ADDED: Automatic map rotation adjustment for 2nd half (amx_nextmap to current map)
+ *   + ADDED: Half number display in match start messages ("1st half" or "2nd half")
+ *   + ADDED: Player roster logging to Discord at match start (all players, teams, SteamIDs, IPs)
+ *   + ADDED: Dot command aliases for all commands (.pause, .tech, .ready, .resume, .status, etc.)
+ *   + ADDED: /draft command (same as /start and /ktp)
+ *   + CHANGED: Renamed /startmatch to /ktp (kept /start as alias)
+ *   + CHANGED: Renamed /start12man to /12man (with .12man alias)
+ *   + CHANGED: Renamed /startscrim to /scrim (with .scrim alias)
+ *   - REMOVED: 'ready' and 'ktp' aliases from /ready command (conflict resolution)
+ *   * IMPROVED: Discord messages now routed to match-type-specific channels with fallback
+ *   * IMPROVED: Map config selection now tries match-type-specific configs first
+ *
+ * v0.4.6 (2025-11-22) - CRITICAL FIX: Match Start Flow
+ *   * FIXED: Match start entering uncontrollable tactical pause instead of LIVE countdown
+ *   * FIXED: Team confirmation triggering pre-pause countdown (wrong flow)
+ *   * FIXED: Countdown task not running during pause (tasks don't execute when paused)
+ *   * FIXED: Jarring unpause/re-pause transition from pending to match start
+ *   + ADDED: Countdown handling in OnPausedHUDUpdate() hook (runs during pause)
+ *   + CHANGED: Confirmation now directly executes pause (no countdown)
+ *   + CHANGED: Ready completion stays paused, just starts countdown (smooth transition)
+ *   + FLOW: Confirm → pause → Ready → countdown (same pause) → LIVE (smooth)
+ *   + BEFORE: Confirm → pre-pause countdown → pause → Ready → stuck (broken)
+ *
+ * v0.4.5 (2025-11-22) - Critical Bug Fixes and Scrim Mode
+ *   + ADDED: /startscrim and /start12man commands (skip Discord notifications)
+ *   + ADDED: g_disableDiscord flag to control Discord webhook calls
+ *   * FIXED: Missing task cleanup before pre-pause countdown (race condition)
+ *   * FIXED: Missing pre-pause task cleanup in plugin_end() (memory leak)
+ *   * FIXED: Tech budgets not reset on match cancel (state carry-over)
+ *   * FIXED: Pre-pause state not cleared on match cancel
+ *   * FIXED: Double timestamp assignment race condition in pause flow
+ *   * FIXED: Disconnect state not cleared after unpause
+ *   * FIXED: Missing countdown task cleanup before set_task() (duplicate tasks)
+ *   * FIXED: Multiple simultaneous disconnects overwriting first disconnect info
+ *   * OPTIMIZED: Removed duplicate config loading in plugin_init() (~25ms faster startup)
+ *   + STABILITY: Prevents race conditions from multiple concurrent countdowns
+ *   + STABILITY: Ensures clean state between matches
+ *   + STABILITY: Improved disconnect auto-pause handling
+ *
  * v0.4.4 (2025-11-21) - Phase 5 Performance Optimizations
  *   * OPTIMIZED: Eliminated 8 redundant get_mapname() calls (use cached g_currentMap)
  *   * OPTIMIZED: Cached g_pauseDurationSec and g_preMatchPauseSeconds CVARs
@@ -159,7 +203,7 @@
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.4.4"
+#define PLUGIN_VERSION "0.5.0"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -179,16 +223,32 @@ new g_cvarPauseExtension;     // pause extension seconds (ktp_pause_extension)
 new g_cvarMaxExtensions;      // max pause extensions (ktp_pause_max_extensions)
 
 // ---------- Discord Config (loaded from INI) ----------
-new g_discordRelayUrl[256];   // Discord relay endpoint URL
-new g_discordChannelId[64];   // Discord channel ID
-new g_discordAuthSecret[128]; // X-Relay-Auth header value
+new g_discordRelayUrl[256];          // Discord relay endpoint URL
+new g_discordChannelId[64];          // Discord channel ID (competitive)
+new g_discordChannelId12man[64];     // Discord channel ID for 12man matches (optional)
+new g_discordChannelIdScrim[64];     // Discord channel ID for scrim matches (optional)
+new g_discordAuthSecret[128];        // X-Relay-Auth header value
+
+// ---------- Match Types ----------
+enum MatchType {
+    MATCH_TYPE_COMPETITIVE = 0,  // Regular competitive match (Discord enabled, competitive config)
+    MATCH_TYPE_SCRIM = 1,        // Scrim match (Discord disabled, scrim config)
+    MATCH_TYPE_12MAN = 2         // 12-man match (Discord disabled, 12man config)
+};
 
 // ---------- State ----------
 new bool: g_isPaused = false;
 new bool: g_matchPending = false;
 new bool: g_countdownActive = false;
 new bool: g_matchLive = false;              // becomes true after first LIVE
+new bool: g_disableDiscord = false;         // when true, skip all Discord notifications (legacy - use g_matchType instead)
+new MatchType: g_matchType = MATCH_TYPE_COMPETITIVE; // Current match type
 new g_techBudget[3] = {0, 0, 0}; // [1]=Allies, [2]=Axis; set at half start to g_techBudgetSecs
+
+// ---------- Half Tracking ----------
+new g_currentHalf = 0;          // 0 = no match, 1 = first half, 2 = second half
+new g_matchMap[32];             // Map name for the current match (to detect if we're on same map for 2nd half)
+new bool: g_secondHalfPending = false; // True after 1st half completes, waiting for 2nd half to start
 
 // ---------- Captains ----------
 new g_captain1_name[64];
@@ -510,7 +570,36 @@ stock safe_sid(const sid[]) {
 
 // ================= Discord Notifications =================
 #if defined HAS_CURL
+stock get_discord_channel_id(channelId[], maxlen) {
+    // Get the appropriate Discord channel ID based on match type
+    // Falls back to default channel if match-type-specific channel not configured
+    channelId[0] = EOS;
+
+    switch (g_matchType) {
+        case MATCH_TYPE_12MAN: {
+            if (g_discordChannelId12man[0]) {
+                copy(channelId, maxlen, g_discordChannelId12man);
+            } else {
+                copy(channelId, maxlen, g_discordChannelId); // Fall back to default
+            }
+        }
+        case MATCH_TYPE_SCRIM: {
+            if (g_discordChannelIdScrim[0]) {
+                copy(channelId, maxlen, g_discordChannelIdScrim);
+            } else {
+                copy(channelId, maxlen, g_discordChannelId); // Fall back to default
+            }
+        }
+        default: {
+            copy(channelId, maxlen, g_discordChannelId);
+        }
+    }
+}
+
 stock send_discord_with_hostname(const message[]) {
+    // Skip Discord if disabled (scrim/12man mode)
+    if (g_disableDiscord) return;
+
     // Prefix message with hostname
     new fullMsg[512];
     formatex(fullMsg, charsmax(fullMsg), "[%s] %s", g_serverHostname, message);
@@ -519,8 +608,15 @@ stock send_discord_with_hostname(const message[]) {
 }
 
 stock send_discord_message(const message[]) {
+    // Skip Discord if disabled (scrim/12man mode)
+    if (g_disableDiscord) return;
+
+    // Get the appropriate channel ID for the current match type
+    new channelId[64];
+    get_discord_channel_id(channelId, charsmax(channelId));
+
     // Check if Discord is configured (from INI)
-    if (!g_discordRelayUrl[0] || !g_discordChannelId[0] || !g_discordAuthSecret[0]) {
+    if (!g_discordRelayUrl[0] || !channelId[0] || !g_discordAuthSecret[0]) {
         // Discord not configured, skip silently
         return;
     }
@@ -554,7 +650,7 @@ stock send_discord_message(const message[]) {
     new payload[768];
     formatex(payload, charsmax(payload),
         "{^"channelId^":^"%s^",^"content^":^"```[KTP] %s```^"}",
-        g_discordChannelId, escapedMsg);
+        channelId, escapedMsg);
 
     // Create cURL handle
     new CURL:curl = curl_easy_init();
@@ -596,6 +692,57 @@ public discord_callback(CURL:curl, CURLcode:code) {
     curl_easy_cleanup(curl);
 }
 
+stock send_player_roster_to_discord() {
+    // Build player roster with teams, names, SteamIDs, and IPs
+    new alliesRoster[1024], axisRoster[1024];
+    new alliesCount = 0, axisCount = 0;
+
+    // Collect all connected players
+    new players[MAX_PLAYERS], pnum;
+    get_players(players, pnum, "ch"); // connected, not HLTV
+
+    for (new i = 0; i < pnum; i++) {
+        new id = players[i];
+        if (!is_user_connected(id)) continue;
+
+        new name[32], authid[44], ip[32], teamId;
+        get_user_name(id, name, charsmax(name));
+        get_user_authid(id, authid, charsmax(authid));
+        get_user_ip(id, ip, charsmax(ip), 1);
+        teamId = get_user_team(id);
+
+        // Format player entry
+        new entry[128];
+        formatex(entry, charsmax(entry), "%s [%s | %s]", name, authid, ip);
+
+        // Add to appropriate team roster
+        if (teamId == 1) { // Allies
+            if (alliesCount > 0) {
+                add(alliesRoster, charsmax(alliesRoster), ", ");
+            }
+            add(alliesRoster, charsmax(alliesRoster), entry);
+            alliesCount++;
+        } else if (teamId == 2) { // Axis
+            if (axisCount > 0) {
+                add(axisRoster, charsmax(axisRoster), ", ");
+            }
+            add(axisRoster, charsmax(axisRoster), entry);
+            axisCount++;
+        }
+    }
+
+    // Build and send roster message
+    new rosterMsg[2048];
+    formatex(rosterMsg, charsmax(rosterMsg),
+        "👥 **Player Roster**\n**Allies (%d):** %s\n**Axis (%d):** %s",
+        alliesCount, alliesRoster[0] ? alliesRoster : "None",
+        axisCount, axisRoster[0] ? axisRoster : "None");
+
+    send_discord_message(rosterMsg);
+
+    log_ktp("event=ROSTER_LOGGED allies=%d axis=%d", alliesCount, axisCount);
+}
+
 // NOTE: Removed unused Discord wrapper functions:
 // - send_discord_pause_event() - never called
 // - send_discord_unpause_event() - never called
@@ -615,6 +762,8 @@ stock load_discord_config() {
     // Reset to defaults
     g_discordRelayUrl[0] = EOS;
     g_discordChannelId[0] = EOS;
+    g_discordChannelId12man[0] = EOS;
+    g_discordChannelIdScrim[0] = EOS;
     g_discordAuthSecret[0] = EOS;
 
     new path[192];
@@ -656,6 +805,12 @@ stock load_discord_config() {
         } else if (equal(key, "discord_channel_id")) {
             copy(g_discordChannelId, charsmax(g_discordChannelId), val);
             loaded++;
+        } else if (equal(key, "discord_channel_id_12man")) {
+            copy(g_discordChannelId12man, charsmax(g_discordChannelId12man), val);
+            loaded++;
+        } else if (equal(key, "discord_channel_id_scrim")) {
+            copy(g_discordChannelIdScrim, charsmax(g_discordChannelIdScrim), val);
+            loaded++;
         } else if (equal(key, "discord_auth_secret")) {
             copy(g_discordAuthSecret, charsmax(g_discordAuthSecret), val);
             loaded++;
@@ -671,6 +826,12 @@ stock load_discord_config() {
     }
     if (g_discordChannelId[0]) {
         log_ktp("discord_channel_id='%s'", g_discordChannelId);
+    }
+    if (g_discordChannelId12man[0]) {
+        log_ktp("discord_channel_id_12man='%s'", g_discordChannelId12man);
+    }
+    if (g_discordChannelIdScrim[0]) {
+        log_ktp("discord_channel_id_scrim='%s'", g_discordChannelIdScrim);
     }
     if (g_discordAuthSecret[0]) {
         log_ktp("discord_auth_secret='***REDACTED***'");
@@ -771,10 +932,55 @@ stock exec_map_config() {
         return 0;
     }
 
+    // Try to find match-type-specific config first (e.g., dod_kalt_12man.cfg or dod_kalt_scrim.cfg)
+    new cfg_specific[128];
+    new bool: use_specific = false;
+
+    if (g_matchType == MATCH_TYPE_12MAN) {
+        // Try 12man-specific config
+        new cfg_base[120];
+        copy(cfg_base, charsmax(cfg_base), cfg);
+        // Remove .cfg extension if present
+        if (contain(cfg_base, ".cfg") != -1) {
+            cfg_base[contain(cfg_base, ".cfg")] = 0;
+        }
+        formatex(cfg_specific, charsmax(cfg_specific), "%s_12man.cfg", cfg_base);
+        new fullpath_specific[192];
+        formatex(fullpath_specific, charsmax(fullpath_specific), "%s%s", base, cfg_specific);
+        if (file_exists(fullpath_specific)) {
+            use_specific = true;
+            copy(cfg, charsmax(cfg), cfg_specific);
+        }
+    }
+    else if (g_matchType == MATCH_TYPE_SCRIM) {
+        // Try scrim-specific config
+        new cfg_base[120];
+        copy(cfg_base, charsmax(cfg_base), cfg);
+        // Remove .cfg extension if present
+        if (contain(cfg_base, ".cfg") != -1) {
+            cfg_base[contain(cfg_base, ".cfg")] = 0;
+        }
+        formatex(cfg_specific, charsmax(cfg_specific), "%s_scrim.cfg", cfg_base);
+        new fullpath_specific[192];
+        formatex(fullpath_specific, charsmax(fullpath_specific), "%s%s", base, cfg_specific);
+        if (file_exists(fullpath_specific)) {
+            use_specific = true;
+            copy(cfg, charsmax(cfg), cfg_specific);
+        }
+    }
+
     new fullpath[192]; formatex(fullpath, charsmax(fullpath), "%s%s", base, cfg);
 
-    log_ktp("event=MAPCFG status=exec map=%s cfg=%s path=\'%s\'", g_currentMap, cfg, fullpath);
-    announce_all("Applying match config: %s", cfg);
+    new match_type_str[16];
+    switch (g_matchType) {
+        case MATCH_TYPE_12MAN: copy(match_type_str, charsmax(match_type_str), "12man");
+        case MATCH_TYPE_SCRIM: copy(match_type_str, charsmax(match_type_str), "scrim");
+        default: copy(match_type_str, charsmax(match_type_str), "competitive");
+    }
+
+    log_ktp("event=MAPCFG status=exec map=%s cfg=%s path=\'%s\' match_type=%s specific=%d",
+            g_currentMap, cfg, fullpath, match_type_str, use_specific);
+    announce_all("Applying %s config: %s", match_type_str, cfg);
 
     server_cmd("exec %s", fullpath);
     server_exec();
@@ -790,9 +996,6 @@ stock ktp_pause_now(const reason[]) {
     log_ktp("event=PAUSE_ATTEMPT reason=%s paused=%d", reason, g_isPaused);
 
     if (!g_isPaused) {
-        // Set pause start time for timer calculations (even for pre-live pauses)
-        g_pauseStartTime = get_systime();
-
         #if defined _reapi_included
         // Use ReAPI native to pause directly (bypasses pausable cvar)
         rh_set_server_pause(true);
@@ -863,6 +1066,8 @@ stock trigger_pause_countdown(const who[], const reason[], bool:isPreMatch = fal
 
     g_prePauseCountdown = true;
 
+    // Ensure no duplicate pre-pause countdown tasks
+    safe_remove_task(g_taskPrePauseId);
     set_task(1.0, "prepause_countdown_tick", g_taskPrePauseId, _, _, "b");
 
     announce_all("%s initiated pause. Pausing in %d seconds...", who, g_prePauseLeft);
@@ -953,6 +1158,8 @@ public start_unpause_countdown(const who[]) {
     log_amx("KTP: Unpause countdown started - %d seconds (by %s)", g_countdownLeft, who);
 
     announce_all("Unpausing in %d seconds...", g_countdownLeft);
+    // Ensure no duplicate countdown tasks
+    safe_remove_task(g_taskCountdownId);
     set_task(1.0, "countdown_tick", g_taskCountdownId, _, _, "b");
 }
 
@@ -1023,6 +1230,9 @@ public countdown_tick() {
     g_unpauseConfirmedOther = false;
     g_isTechPause = false;
     g_techPauseStartTime = 0;
+    g_disconnectedPlayerName[0] = EOS;
+    g_disconnectedPlayerTeam = 0;
+    g_disconnectCountdown = 0;
     safe_remove_task(g_taskAutoUnpauseReqId);
     safe_remove_task(g_taskAutoReqCountdownId);
     safe_remove_task(g_taskPauseHudId);
@@ -1196,6 +1406,28 @@ public OnPausedHUDUpdate() {
 
     if (!g_isPaused) return HC_CONTINUE;
 
+    // Handle unpause countdown during pause (tasks don't run during pause!)
+    if (g_countdownActive && g_countdownLeft > 0) {
+        g_countdownLeft--;
+        if (g_countdownLeft > 0) {
+            announce_all("Unpausing in %d...", g_countdownLeft);
+        } else {
+            // Countdown finished - trigger unpause
+            g_countdownActive = false;
+            announce_all("=== LIVE! ===");
+            log_ktp("event=LIVE map=%s requested_by='%s'", g_currentMap, g_lastUnpauseBy[0] ? g_lastUnpauseBy : "unknown");
+            ktp_unpause_now("countdown");
+            // Clear pause state
+            g_pauseOwnerTeam = 0;
+            g_unpauseRequested = false;
+            g_unpauseConfirmedOther = false;
+            g_isTechPause = false;
+            g_techPauseStartTime = 0;
+            safe_remove_task(g_taskCountdownId);
+            return HC_CONTINUE;
+        }
+    }
+
     // If in pending phase, show pending HUD instead of pause HUD
     if (g_matchPending) {
         show_pending_hud_during_pause();
@@ -1344,10 +1576,14 @@ public plugin_init() {
     register_clcmd("say_team /pause",   "cmd_chat_toggle");
     register_clcmd("say pause",         "cmd_chat_toggle");
     register_clcmd("say_team pause",    "cmd_chat_toggle");
+    register_clcmd("say .pause",        "cmd_chat_toggle");
+    register_clcmd("say_team .pause",   "cmd_chat_toggle");
     register_clcmd("say /resume",       "cmd_chat_resume");
     register_clcmd("say_team /resume",  "cmd_chat_resume");
     register_clcmd("say resume",        "cmd_chat_resume");
     register_clcmd("say_team resume",   "cmd_chat_resume");
+    register_clcmd("say .resume",       "cmd_chat_resume");
+    register_clcmd("say_team .resume",  "cmd_chat_resume");
     register_clcmd("say /confirmunpause",      "cmd_confirm_unpause");
     register_clcmd("say_team /confirmunpause", "cmd_confirm_unpause");
     register_clcmd("say /cresume",             "cmd_confirm_unpause");
@@ -1368,21 +1604,41 @@ public plugin_init() {
     register_clcmd("say_team /tech",   "cmd_tech_pause");
     register_clcmd("say tech",         "cmd_tech_pause");
     register_clcmd("say_team tech",    "cmd_tech_pause");
+    register_clcmd("say .tech",        "cmd_tech_pause");
+    register_clcmd("say_team .tech",   "cmd_tech_pause");
 
     // Start / Pre-Start
     register_clcmd("say /start",           "cmd_match_start");
     register_clcmd("say_team /start",      "cmd_match_start");
     register_clcmd("say start",            "cmd_match_start");
     register_clcmd("say_team start",       "cmd_match_start");
-    register_clcmd("say /startmatch",      "cmd_match_start");
-    register_clcmd("say_team /startmatch", "cmd_match_start");
-    register_clcmd("say startmatch",       "cmd_match_start");
-    register_clcmd("say_team startmatch",  "cmd_match_start");
+    register_clcmd("say .start",           "cmd_match_start");
+    register_clcmd("say_team .start",      "cmd_match_start");
+    register_clcmd("say /ktp",             "cmd_match_start");
+    register_clcmd("say_team /ktp",        "cmd_match_start");
+    register_clcmd("say .ktp",             "cmd_match_start");
+    register_clcmd("say_team .ktp",        "cmd_match_start");
+    register_clcmd("say /draft",           "cmd_match_start");
+    register_clcmd("say_team /draft",      "cmd_match_start");
+    register_clcmd("say .draft",           "cmd_match_start");
+    register_clcmd("say_team .draft",      "cmd_match_start");
+
+    // Scrim / 12-man (no Discord notifications)
+    register_clcmd("say /scrim",           "cmd_start_scrim");
+    register_clcmd("say_team /scrim",      "cmd_start_scrim");
+    register_clcmd("say .scrim",           "cmd_start_scrim");
+    register_clcmd("say_team .scrim",      "cmd_start_scrim");
+    register_clcmd("say /12man",           "cmd_start_12man");
+    register_clcmd("say_team /12man",      "cmd_start_12man");
+    register_clcmd("say .12man",           "cmd_start_12man");
+    register_clcmd("say_team .12man",      "cmd_start_12man");
 
     register_clcmd("say /confirm",        "cmd_pre_confirm");
     register_clcmd("say_team /confirm",   "cmd_pre_confirm");
     register_clcmd("say confirm",         "cmd_pre_confirm");
     register_clcmd("say_team confirm",    "cmd_pre_confirm");
+    register_clcmd("say .confirm",        "cmd_pre_confirm");
+    register_clcmd("say_team .confirm",   "cmd_pre_confirm");
     register_clcmd("say /notconfirm",     "cmd_pre_notconfirm");
     register_clcmd("say_team /notconfirm","cmd_pre_notconfirm");
     register_clcmd("say /prestatus",      "cmd_pre_status");
@@ -1390,28 +1646,30 @@ public plugin_init() {
     register_clcmd("say prestatus",       "cmd_pre_status");
     register_clcmd("say_team prestatus",  "cmd_pre_status");
 
-    // Ready (+ alias /ktp) + notready
+    // Ready + notready
     register_clcmd("say /ready",         "cmd_ready");
     register_clcmd("say_team /ready",    "cmd_ready");
-    register_clcmd("say ready",          "cmd_ready");
-    register_clcmd("say_team ready",     "cmd_ready");
-    register_clcmd("say /ktp",           "cmd_ready");
-    register_clcmd("say_team /ktp",      "cmd_ready");
-    register_clcmd("say ktp",            "cmd_ready");
-    register_clcmd("say_team ktp",       "cmd_ready");
+    register_clcmd("say .ready",         "cmd_ready");
+    register_clcmd("say_team .ready",    "cmd_ready");
     register_clcmd("say /notready",      "cmd_notready");
     register_clcmd("say_team /notready", "cmd_notready");
+    register_clcmd("say .notready",      "cmd_notready");
+    register_clcmd("say_team .notready", "cmd_notready");
 
     // Status + cancel
     register_clcmd("say /status",         "cmd_status");
     register_clcmd("say_team /status",    "cmd_status");
     register_clcmd("say status",          "cmd_status");
     register_clcmd("say_team status",     "cmd_status");
+    register_clcmd("say .status",         "cmd_status");
+    register_clcmd("say_team .status",    "cmd_status");
 
     register_clcmd("say /cancel",       "cmd_cancel");
     register_clcmd("say_team /cancel",  "cmd_cancel");
     register_clcmd("say cancel",        "cmd_cancel");
     register_clcmd("say_team cancel",   "cmd_cancel");
+    register_clcmd("say .cancel",       "cmd_cancel");
+    register_clcmd("say_team .cancel",  "cmd_cancel");
 
     // Mapping maintenance
     register_clcmd("say /reloadmaps",       "cmd_reload_maps");
@@ -1458,8 +1716,8 @@ public plugin_init() {
 
     // Announce on load
     ktp_banner_enabled();
-    load_map_mappings();
-    load_discord_config();
+    // NOTE: Config loading moved to plugin_cfg() to avoid duplicate loads
+    // plugin_cfg() runs after server.cfg, which is the correct time to load configs
 }
 
 public plugin_cfg() {
@@ -1477,6 +1735,35 @@ public plugin_end() {
     safe_remove_task(g_taskAutoReqCountdownId);
     safe_remove_task(g_taskDisconnectCountdownId);
     safe_remove_task(g_taskPauseHudId);
+    safe_remove_task(g_taskPrePauseId);
+
+    // Handle half tracking on map change
+    handle_map_change();
+}
+
+stock handle_map_change() {
+    // Called when map is changing (plugin_end)
+    // If we just finished the first half of a match, prepare for second half
+
+    if (g_currentHalf == 1 && g_matchLive) {
+        // First half just ended - prepare for second half
+        g_secondHalfPending = true;
+
+        // Set the next map in rotation to be the current map (for 2nd half)
+        server_cmd("amx_nextmap %s", g_matchMap);
+        server_exec();
+
+        log_ktp("event=HALF_END half=1st map=%s next_map=%s", g_matchMap, g_matchMap);
+    }
+    else if (g_currentHalf == 2 && g_matchLive) {
+        // Second half just ended - reset tracking
+        g_currentHalf = 0;
+        g_secondHalfPending = false;
+        g_matchMap[0] = 0;
+        g_matchLive = false;
+
+        log_ktp("event=HALF_END half=2nd map=%s", g_matchMap);
+    }
 }
 
 // Shared handler
@@ -1491,6 +1778,15 @@ stock on_client_left(id) {
             if (tid == 1 || tid == 2) {
                 // Check if team has tech budget
                 if (g_techBudget[tid] > 0) {
+                    // If already counting down for another disconnect, just announce
+                    if (g_disconnectCountdown > 0) {
+                        new name[32], teamName[16];
+                        get_user_name(id, name, charsmax(name));
+                        team_name_from_id(tid, teamName, charsmax(teamName));
+                        announce_all("Additional disconnect: %s (%s) - countdown already active", name, teamName);
+                        return;
+                    }
+
                     // Store disconnected player info
                     get_user_name(id, g_disconnectedPlayerName, charsmax(g_disconnectedPlayerName));
                     g_disconnectedPlayerTeam = tid;
@@ -1991,6 +2287,22 @@ public cmd_match_start(id) {
     return PLUGIN_HANDLED;
 }
 
+// Scrim mode - no Discord notifications, scrim-specific configs
+public cmd_start_scrim(id) {
+    g_matchType = MATCH_TYPE_SCRIM;
+    g_disableDiscord = true; // Legacy flag for compatibility
+    cmd_match_start(id);
+    return PLUGIN_HANDLED;
+}
+
+// 12-man mode - no Discord notifications, 12man-specific configs
+public cmd_start_12man(id) {
+    g_matchType = MATCH_TYPE_12MAN;
+    g_disableDiscord = true; // Legacy flag for compatibility
+    cmd_match_start(id);
+    return PLUGIN_HANDLED;
+}
+
 public cmd_pre_status(id) {
     if (!g_preStartPending) { client_print(id, print_chat, "[KTP] Not in pre-start."); return PLUGIN_HANDLED; }
     client_print(id, print_chat, "[KTP] Pre-Start — Allies: %s | Axis: %s",
@@ -2070,10 +2382,10 @@ public cmd_pre_confirm(id) {
 
         log_ktp("event=PENDING_BEGIN map=%s need=%d", g_currentMap, g_readyRequired);
 
-        // Pause BEFORE entering pending phase
+        // Pause BEFORE entering pending phase (no countdown, direct pause)
         announce_all("Server pausing for ready phase...");
         if (!g_isPaused) {
-            trigger_pause_countdown("System", "prestart_confirmed", true); // true = pre-match countdown
+            execute_pause("System", "prestart_confirmed");
             log_ktp("event=PRESTART_PAUSE");
         }
 
@@ -2117,14 +2429,25 @@ public cmd_cancel(id) {
         prestart_reset();
         log_ktp("event=PRESTART_CANCEL by=\'%s\' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
         announce_all("Pre-Start cancelled by %s.", name);
+        g_matchType = MATCH_TYPE_COMPETITIVE; // Reset to competitive for next match
+        g_disableDiscord = false; // Re-enable Discord for next match (legacy)
         return PLUGIN_HANDLED;
     }
 
     if (!g_matchPending) { client_print(id, print_chat, "[KTP] No pending match."); return PLUGIN_HANDLED; }
 
     g_matchPending = false;
+    g_matchType = MATCH_TYPE_COMPETITIVE; // Reset to competitive for next match
+    g_disableDiscord = false; // Re-enable Discord for next match (legacy)
     arrayset(g_ready, 0, sizeof g_ready);
     safe_remove_task(g_taskPendingHudId);
+
+    // Reset tech budgets and pre-pause state
+    g_techBudget[1] = 0;
+    g_techBudget[2] = 0;
+    safe_remove_task(g_taskPrePauseId);
+    g_prePauseCountdown = false;
+    g_prePauseLeft = 0;
 
     new name2[32], sid2[44], ip2[32], team2[16];
     get_identity(id, name2, charsmax(name2), sid2, charsmax(sid2), ip2, charsmax(ip2), team2, charsmax(team2));
@@ -2188,10 +2511,24 @@ public cmd_ready(id) {
         new c1team[16], c2team[16];
         team_name_from_id(c1t, c1team, charsmax(c1team));
         team_name_from_id(c2t, c2team, charsmax(c2team));
+
+        // Determine half text for the message (will be set in next section)
+        new halfText[16];
+        if (g_secondHalfPending && equal(g_matchMap, map)) {
+            copy(halfText, charsmax(halfText), "2nd half");
+        } else {
+            copy(halfText, charsmax(halfText), "1st half");
+        }
+
         formatex(discordMsg, charsmax(discordMsg),
-            "⚔️ Match starting on %s | %s (%s) vs %s (%s)",
-            map, c1n, c1team, c2n, c2team);
+            "⚔️ Match starting on %s (%s) | %s (%s) vs %s (%s)",
+            map, halfText, c1n, c1team, c2n, c2team);
         send_discord_with_hostname(discordMsg);
+
+        // Send player roster to Discord (only for competitive matches, not scrim/12man)
+        if (!g_disableDiscord) {
+            send_player_roster_to_discord();
+        }
         #endif
 
         // Leave pending; clear ready UI/tasks
@@ -2199,30 +2536,42 @@ public cmd_ready(id) {
         arrayset(g_ready, 0, sizeof g_ready);
         safe_remove_task(g_taskPendingHudId);
 
-        // Ensure we are paused before going live countdown
-        if (!g_isPaused) {
-            // If countdown not already in progress, trigger it
-            if (!g_prePauseCountdown) {
-                trigger_pause_countdown("System", "ready_complete_autopause", true); // true = pre-match countdown
-            }
-        }
-        if (!g_lastUnpauseBy[0]) copy(g_lastUnpauseBy, charsmax(g_lastUnpauseBy), "system");
-
-        // First LIVE of this half → mark match live and reset pause-session vars
-        g_countdownLeft   = max(1, g_countdownSeconds);
-        g_countdownActive = true;
+        // First LIVE of this half → mark match live and reset tech budgets
         g_matchLive       = true;
         g_techBudget[1]   = g_techBudgetSecs;
         g_techBudget[2]   = g_techBudgetSecs;
-        g_pauseOwnerTeam  = 0;
-        g_unpauseRequested = false;
-        g_unpauseConfirmedOther = false;
         safe_remove_task(g_taskAutoUnpauseReqId);
         safe_remove_task(g_taskPauseHudId);
 
-        log_ktp("event=COUNTDOWN begin=%d requested_by='%s'", g_countdownLeft, g_lastUnpauseBy);
-        announce_all("Live in %d... (requested by %s)", g_countdownLeft, g_lastUnpauseBy);
-        set_task(1.0, "countdown_tick", g_taskCountdownId, _, _, "b");
+        // Half tracking: Determine if this is 1st or 2nd half
+        if (g_secondHalfPending && equal(g_matchMap, map)) {
+            // Same map as previous half, and we're expecting 2nd half
+            g_currentHalf = 2;
+            g_secondHalfPending = false;
+            log_ktp("event=HALF_START half=2nd map=%s", map);
+        } else {
+            // New match, first half
+            g_currentHalf = 1;
+            g_secondHalfPending = false;
+            copy(g_matchMap, charsmax(g_matchMap), map);
+            log_ktp("event=HALF_START half=1st map=%s", map);
+        }
+
+        // Reset pause state for match start countdown
+        g_pauseOwnerTeam  = 0;
+        g_unpauseRequested = false;
+        g_unpauseConfirmedOther = false;
+
+        // We're already paused from confirmation phase - just start countdown
+        // No need to unpause/re-pause (smoother transition from pending HUD to countdown)
+        if (!g_isPaused) {
+            // Edge case: if somehow not paused, pause now
+            execute_pause("System", "match_start");
+        }
+
+        // Start unpause countdown to go LIVE (smooth transition)
+        start_unpause_countdown("System");
+
     }
     return PLUGIN_HANDLED;
 }
