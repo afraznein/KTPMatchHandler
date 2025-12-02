@@ -6,3 +6,29 @@ discord.ini
 servers.ini
 *.local.ini
 DISCORD_GUIDE.md
+
+# Compiled AMX Mod X plugins
+*.amxx
+
+# Compiled output directory
+compiled/
+
+# Compiler temporary files
+*.lst
+*.asm
+
+# OS specific files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor/IDE files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.sublime-*
+
+# Log files (if generated during development)
+*.log

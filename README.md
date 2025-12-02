@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.5.0** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.5.1** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, match type differentiation, half tracking, and comprehensive logging capabilities.
 
@@ -729,7 +729,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.4.0                       ║
+║             KTP MATCH HANDLER v0.5.0                       ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
