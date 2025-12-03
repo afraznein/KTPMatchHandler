@@ -1,9 +1,9 @@
-/* KTP Match Handler v0.5.1
+/* KTP Match Handler v0.5.2
  * Comprehensive match management system with ReAPI pause integration
  *
  * AUTHOR: Nein_
- * VERSION: 0.5.1
- * DATE: 2025-12-02
+ * VERSION: 0.5.2
+ * DATE: 2025-12-03
  *
  * ========== MAJOR FEATURES ==========
  * - ReAPI Pause Integration: Direct pause control via rh_set_server_pause()
@@ -59,12 +59,17 @@
  *   ktp_match_logfile "ktp_match.log"    - Log file path
  *   ktp_ready_required "6"               - Players needed to ready up
  *   ktp_cfg_basepath "dod/"              - Config file base path
- *   ktp_maps_file "addons/amxmodx/configs/ktp_maps.ini"
+ *   ktp_maps_file "<configsdir>/ktp_maps.ini"  - Maps file (auto-detected path)
  *   ktp_unpause_autorequest_secs "300"   - Auto-request timeout
  *   ktp_tech_budget_seconds "300"        - Tech pause budget per team
- *   ktp_discord_ini "addons/amxmodx/configs/discord.ini"
+ *   ktp_discord_ini "<configsdir>/discord.ini" - Discord config (auto-detected path)
  *
  * ========== CHANGELOG ==========
+ * v0.5.2 (2025-12-03) - KTP AMX Compatibility
+ *   * FIXED: Use get_configsdir() for dynamic config path resolution
+ *   * FIXED: Removed hardcoded "addons/amxmodx" paths for KTP AMX compatibility
+ *   * IMPROVED: ReAPI availability message changed from WARNING to informational note
+ *
  * v0.5.1 (2025-12-02) - Critical Bug Fixes and Security Improvements
  *   * FIXED: [CRITICAL] cURL header memory leak causing accumulation on every Discord message
  *   * FIXED: [CRITICAL] Tech pause budget integer underflow from system clock adjustments
@@ -223,7 +228,7 @@
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.5.1"
+#define PLUGIN_VERSION "0.5.2"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -815,7 +820,10 @@ stock load_discord_config() {
     new path[192];
     get_pcvar_string(g_cvarDiscordIniPath, path, charsmax(path));
     if (!path[0]) {
-        copy(path, charsmax(path), "addons/amxmodx/configs/discord.ini");
+        // Use get_configsdir() for proper path resolution
+        new configsDir[128];
+        get_configsdir(configsDir, charsmax(configsDir));
+        formatex(path, charsmax(path), "%s/discord.ini", configsDir);
     }
 
     new fp = fopen(path, "rt");
@@ -1633,9 +1641,15 @@ public plugin_init() {
     // ktp_force_pausable removed - ReAPI pause bypasses pausable cvar
     // ktp_pause_hud removed - HUD output removed from announce_all for proper message ordering
     g_cvarCfgBase        = register_cvar("ktp_cfg_basepath", "dod/");
-    g_cvarMapsFile       = register_cvar("ktp_maps_file", "addons/amxmodx/configs/ktp_maps.ini");
+    // Use get_configsdir() for dynamic config path resolution
+    new configsDir[128];
+    get_configsdir(configsDir, charsmax(configsDir));
+    new mapsFilePath[192], discordIniPath[192];
+    formatex(mapsFilePath, charsmax(mapsFilePath), "%s/ktp_maps.ini", configsDir);
+    formatex(discordIniPath, charsmax(discordIniPath), "%s/discord.ini", configsDir);
+    g_cvarMapsFile       = register_cvar("ktp_maps_file", mapsFilePath);
     g_cvarAutoReqSec     = register_cvar("ktp_unpause_autorequest_secs", "300");
-    g_cvarDiscordIniPath = register_cvar("ktp_discord_ini", "addons/amxmodx/configs/discord.ini");
+    g_cvarDiscordIniPath = register_cvar("ktp_discord_ini", discordIniPath);
     g_cvarPauseDuration  = register_cvar("ktp_pause_duration", "300");       // 5 minutes
     g_cvarPauseExtension = register_cvar("ktp_pause_extension", "120");      // 2 minutes
     g_cvarMaxExtensions  = register_cvar("ktp_pause_max_extensions", "2");   // max 2 extensions
@@ -1771,7 +1785,9 @@ public plugin_init() {
     RegisterHookChain(RH_SV_UpdatePausedHUD, "OnPausedHUDUpdate", .post = false);
     log_amx("[KTP] Registered RH_SV_UpdatePausedHUD hook");
     #else
-    log_amx("[KTP] WARNING: ReAPI not available - pause HUD updates disabled");
+    // ReAPI is optional - pause HUD updates are a nice-to-have feature
+    // The plugin works fully without ReAPI, just without real-time HUD during pauses
+    log_amx("[KTP] Note: ReAPI not available - pause HUD updates will use standard method");
     #endif
 
     // NOTE: pausable cvar no longer used - ReAPI pause bypasses it

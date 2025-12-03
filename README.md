@@ -1,8 +1,10 @@
 # KTP Match Handler
 
-**Version 0.5.1** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.5.2** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, match type differentiation, half tracking, and comprehensive logging capabilities.
+
+> **Compatible with both AMX Mod X and KTP AMX** - The plugin automatically detects the correct configs directory.
 
 ---
 
@@ -52,12 +54,13 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 ### Requirements
 
 **Required:**
-- AMX Mod X 1.9+ (1.10 recommended)
-- [KTP-ReAPI](https://github.com/afraznein/KTP-ReAPI) (custom ReAPI fork with `RH_SV_UpdatePausedHUD` hook)
+- AMX Mod X 1.9+ / KTP AMX 2.0+ (1.10 / 2.0 recommended)
+- [KTP-ReAPI](https://github.com/afraznein/KTP-ReAPI) (custom ReAPI fork with `RH_SV_UpdatePausedHUD` hook) - *optional but recommended*
 - [KTP-ReHLDS](https://github.com/afraznein/KTP-ReHLDS) (custom ReHLDS fork - HUD updates during pause)
 
 **Optional:**
 - cURL extension (for Discord webhook notifications)
+- ReAPI module (for enhanced pause HUD updates - plugin works without it)
 
 ### Installation
 
@@ -67,16 +70,15 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
    ```
 
 2. **Install** to your server:
-   ```
-   addons/amxmodx/plugins/KTPMatchHandler.amxx
-   ```
+   - AMX Mod X: `addons/amxmodx/plugins/KTPMatchHandler.amxx`
+   - KTP AMX: `addons/ktpamx/plugins/KTPMatchHandler.amxx`
 
 3. **Add to** `plugins.ini`:
    ```
    KTPMatchHandler.amxx
    ```
 
-4. **Configure** maps in `configs/ktp_maps.ini`:
+4. **Configure** maps in `<configsdir>/ktp_maps.ini`:
    ```ini
    [dod_avalanche]
    config = ktp_avalanche.cfg
@@ -84,7 +86,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
    type = competitive
    ```
 
-5. **Configure** Discord (optional) in `configs/discord.ini`:
+5. **Configure** Discord (optional) in `<configsdir>/discord.ini`:
    ```ini
    discord_relay_url=https://your-relay.run.app/reply
    discord_channel_id=1234567890123456789
@@ -107,10 +109,12 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
    ktp_ready_required "6"                // Players needed to ready
    ktp_tech_budget_seconds "300"         // 5-min tech budget per team
 
-   // File Paths
-   ktp_maps_file "addons/amxmodx/configs/ktp_maps.ini"
-   ktp_discord_ini "addons/amxmodx/configs/discord.ini"
+   // File Paths (auto-detected, only set if using custom paths)
+   // ktp_maps_file "<configsdir>/ktp_maps.ini"
+   // ktp_discord_ini "<configsdir>/discord.ini"
    ```
+
+> **Note:** The `ktp_maps_file` and `ktp_discord_ini` CVARs are automatically set to use `get_configsdir()` at runtime. You only need to override them if using non-standard paths.
 
 7. **Deploy** KTP-ReHLDS server binaries
 
@@ -357,9 +361,9 @@ ktp_ready_required "6"                // Players needed to ready per team
 ktp_tech_budget_seconds "300"         // Technical pause budget per team (5 min)
 ktp_unpause_autorequest_secs "300"    // Auto-request unpause after N seconds
 
-// ===== File Paths =====
-ktp_maps_file "addons/amxmodx/configs/ktp_maps.ini"
-ktp_discord_ini "addons/amxmodx/configs/discord.ini"
+// ===== File Paths (auto-detected, override only if needed) =====
+ktp_maps_file "<configsdir>/ktp_maps.ini"    // Auto-detected at runtime
+ktp_discord_ini "<configsdir>/discord.ini"   // Auto-detected at runtime
 ktp_match_logfile "ktp_match.log"
 ktp_cfg_basepath "dod/"               // Base path for map configs
 ```
@@ -369,7 +373,7 @@ ktp_cfg_basepath "dod/"               // Base path for map configs
 ## 📊 Logging
 
 ### 1. AMX Log
-**Location:** `addons/amxmodx/logs/L[MMDD].log`
+**Location:** `<logsdir>/L[MMDD].log` (e.g., `addons/ktpamx/logs/` or `addons/amxmodx/logs/`)
 
 Standard Half-Life log format with timestamps:
 ```
@@ -552,6 +556,26 @@ static bool:warned_10sec = false;
 
 ## 📝 Changelog
 
+### v0.5.2 (2025-12-03) - KTP AMX Compatibility
+
+**Fixed:**
+- 🔧 **Dynamic config paths** - Use `get_configsdir()` for automatic path resolution
+- 🔧 **Removed hardcoded paths** - No more `addons/amxmodx` assumptions
+- 🔧 **ReAPI message** - Changed from WARNING to informational note (ReAPI is optional)
+
+**Improved:**
+- 🎯 **Cross-platform support** - Works with both AMX Mod X and KTP AMX without modification
+- 🎯 **Better user feedback** - Clearer messaging when optional features are unavailable
+
+### v0.5.1 (2025-12-02) - Critical Bug Fixes
+
+**Fixed:**
+- 🔧 **[CRITICAL]** cURL header memory leak causing accumulation on every Discord message
+- 🔧 **[CRITICAL]** Tech pause budget integer underflow from system clock adjustments
+- 🔧 **[HIGH]** Buffer overflow in player roster concatenation with 12+ players per team
+- 🔧 **[HIGH]** Inconsistent team ID validation before g_techBudget array access
+- 🔧 **[MEDIUM]** Various state cleanup and validation improvements
+
 ### v0.5.0 (2025-11-24) - Major Feature Update
 
 **Added:**
@@ -575,6 +599,80 @@ static bool:warned_10sec = false;
 - 🎯 **Discord routing** - Match-type-specific channels with graceful fallback
 - 🎯 **Config selection** - Tries match-type-specific configs first, falls back to standard
 - 🎯 **Player accountability** - Full roster with SteamIDs and IPs logged for competitive matches
+
+### v0.4.6 (2025-11-22) - Match Start Flow Fix
+
+**Fixed:**
+- 🐛 Match start entering uncontrollable tactical pause instead of LIVE countdown
+- 🐛 Team confirmation triggering pre-pause countdown (wrong flow)
+- 🐛 Countdown task not running during pause (tasks don't execute when paused)
+
+**Changed:**
+- 🔄 Countdown handling moved to `OnPausedHUDUpdate()` hook (runs during pause)
+- 🔄 Confirmation now directly executes pause (no countdown)
+- 🔄 Ready completion stays paused, starts countdown for smooth transition
+
+### v0.4.5 (2025-11-22) - Critical Bug Fixes and Scrim Mode
+
+**Added:**
+- ✅ `/startscrim` and `/start12man` commands (skip Discord notifications)
+- ✅ `g_disableDiscord` flag to control Discord webhook calls
+
+**Fixed:**
+- 🐛 Missing task cleanup before pre-pause countdown (race condition)
+- 🐛 Missing pre-pause task cleanup in `plugin_end()` (memory leak)
+- 🐛 Tech budgets not reset on match cancel (state carry-over)
+- 🐛 Pre-pause state not cleared on match cancel
+- 🐛 Double timestamp assignment race condition in pause flow
+- 🐛 Disconnect state not cleared after unpause
+- 🐛 Missing countdown task cleanup before `set_task()` (duplicate tasks)
+- 🐛 Multiple simultaneous disconnects overwriting first disconnect info
+
+**Optimized:**
+- 📈 Removed duplicate config loading in `plugin_init()` (~25ms faster startup)
+
+### v0.4.4 (2025-11-21) - Performance Optimizations
+
+**Optimized:**
+- 📈 Eliminated 8 redundant `get_mapname()` calls (use cached `g_currentMap`)
+- 📈 Cached `g_pauseDurationSec` and `g_preMatchPauseSeconds` CVARs
+- 📈 Index-based `formatex` in `cmd_status()` (30-40% faster string building)
+- 📈 Switch statement in `get_ready_counts()` for cleaner team ID handling
+- 📈 15-20% reduction in string operations during logging
+- 📈 5-10% faster pause initialization with cached CVARs
+
+### v0.4.3 (2025-11-20) - Discord Notification Filtering
+
+**Added:**
+- ✅ `send_discord_with_hostname()` helper function
+- ✅ Hostname prefix to all Discord notifications
+
+**Changed:**
+- 🔄 Disabled non-essential Discord notifications
+- 🔄 Only 3 essential notifications kept: Match start, Player pause, Disconnect auto-pause
+
+### v0.4.2 (2025-11-20) - cURL Discord Integration Fix
+
+**Fixed:**
+- 🐛 Discord notifications not working (curl.inc was disabled)
+- 🐛 Compilation errors with backslash character constants
+- 🐛 JSON string escaping in formatex
+- 🐛 Invalid cURL header constant
+
+**Requires:**
+- `curl_amxx.dll` module enabled in `modules.ini`
+- `discord.ini` with relay URL, channel ID, and auth secret
+
+### v0.4.1 (2025-11-17) - Pausable Cvar Removal
+
+**Removed:**
+- ❌ All pausable cvar manipulation code (no longer needed with ReAPI)
+- ❌ `ktp_force_pausable` cvar
+- ❌ `g_pcvarPausable` and `g_cvarForcePausable` variables
+
+**Improved:**
+- 🎯 Cleaner code (~33 lines removed)
+- 🎯 Simpler client messages ("Game paused" vs "Pause enforced")
 
 ### v0.4.0 (2025-11-17) - ReAPI Pause + Major Overhaul
 
@@ -717,10 +815,10 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.5.0
+- **Current Version**: v0.5.2
 - **Status**: Stable
-- **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10
-- **Last Updated**: November 24, 2025
+- **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.0
+- **Last Updated**: December 3, 2025
 - **Platforms**: Day of Defeat 1.3
 
 ---
@@ -729,7 +827,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.5.0                       ║
+║             KTP MATCH HANDLER v0.5.2                       ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -757,4 +855,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.5.0** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️
+**KTP Match Handler v0.5.2** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️
