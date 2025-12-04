@@ -4,54 +4,72 @@
 
 **The Ultimate Day of Defeat Competitive Server Stack**
 
-[![License](https://img.shields.io/badge/license-GPL%20v3-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Mixed-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)]()
 [![Engine](https://img.shields.io/badge/engine-GoldSrc%20%7C%20Half--Life-orange.svg)]()
 [![Game](https://img.shields.io/badge/game-Day%20of%20Defeat-green.svg)]()
 
-*A comprehensive ecosystem of custom engine modifications, ReAPI extensions, and match management plugins designed for competitive 6v6 Day of Defeat gameplay*
+*A comprehensive ecosystem of custom engine modifications, extension modules, and match management plugins designed for competitive 6v6 Day of Defeat gameplay*
 
-[Features](#-the-complete-stack) • [Installation](#-complete-installation-guide) • [Documentation](#-component-documentation) • [Repositories](#-github-repositories)
+**No Metamod Required** - Runs on Linux and Windows via ReHLDS Extension Mode
+
+[Architecture](#-five-layer-architecture) • [Components](#-component-documentation) • [Installation](#-complete-installation-guide) • [Repositories](#-github-repositories)
 
 </div>
 
 ---
 
-## 📦 The Complete Stack
+## 📦 Five-Layer Architecture
 
-<details open>
-<summary><b>Four-Layer Architecture</b></summary>
+The KTP stack eliminates Metamod dependency through a custom extension loading architecture. KTPAMXX loads directly as a ReHLDS extension, and modules like KTP-ReAPI interface through KTPAMXX's module API instead of Metamod hooks.
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Layer 4: KTPMatchHandler (AMX Plugin)          │
-│  Match workflow, pause system, Discord          │
-└─────────────────────────────────────────────────┘
-                     ↓ Uses
-┌─────────────────────────────────────────────────┐
-│  Layer 3: Anti-Cheat Plugins (AMX Plugins)      │
-│  • KTPCvarChecker v5.4 - Instant cvar checks    │
-│  • KTPFileChecker - File consistency checking   │
-└─────────────────────────────────────────────────┘
-                     ↓ Uses
-┌─────────────────────────────────────────────────┐
-│  Layer 2: KTP-ReAPI (AMX Module)                │
-│  Custom hooks, ReHLDS bridge                    │
-└─────────────────────────────────────────────────┘
-                     ↓ Uses
-┌─────────────────────────────────────────────────┐
-│  Layer 1: KTP-ReHLDS (Custom Engine)            │
-│  Pause HUD updates, chat during pause           │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 5: Application Plugins (AMX Plugins)                         │
+│  KTPMatchHandler, KTPCvarChecker, KTPFileChecker, KTPAdminAudit     │
+│  Match workflow, anti-cheat, file validation, admin logging         │
+└─────────────────────────────────────────────────────────────────────┘
+                              ↓ Uses AMXX Forwards & Natives
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 4: HTTP/Networking Modules (AMXX Modules)                    │
+│  KTP AMXX Curl - Non-blocking HTTP/FTP via libcurl                  │
+│  Uses MF_RegModuleFrameFunc() for async processing                  │
+└─────────────────────────────────────────────────────────────────────┘
+                              ↓ Uses AMXX Module API
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 3: Engine Bridge Modules (AMXX Modules)                      │
+│  KTP-ReAPI - Exposes ReHLDS/ReGameDLL hooks to plugins              │
+│  Extension Mode: No Metamod, uses KTPAMXX GetEngineFuncs()          │
+└─────────────────────────────────────────────────────────────────────┘
+                              ↓ Uses ReHLDS Hookchains
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 2: Scripting Platform (ReHLDS Extension)                     │
+│  KTPAMXX v2.0 - AMX Mod X fork with extension mode                  │
+│  Loads as ReHLDS extension, no Metamod required                     │
+│  Provides: client_cvar_changed forward, MF_RegModuleFrameFunc()     │
+└─────────────────────────────────────────────────────────────────────┘
+                              ↓ ReHLDS Extension API
+┌─────────────────────────────────────────────────────────────────────┐
+│  Layer 1: Game Engine (KTP-ReHLDS)                                  │
+│  Custom ReHLDS fork with extension loader + KTP features            │
+│  Provides: SV_UpdatePausedHUD hook, pfnClientCvarChanged callback   │
+└─────────────────────────────────────────────────────────────────────┘
 
-                Supporting Infrastructure:
-┌─────────────────────────────────────────────────┐
-│  Discord Relay (Cloud Run Service)              │
-│  Real-time match notifications via webhook      │
-└─────────────────────────────────────────────────┘
+                         Supporting Infrastructure:
+┌─────────────────────────────────────────────────────────────────────┐
+│  Cloud Services: Discord Relay (Google Cloud Run)                   │
+│  SDK Layer: KTP HLSDK (pfnClientCvarChanged callback headers)       │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-</details>
+### Key Innovation: No Metamod Required
+
+| Traditional Stack                                | KTP Stack                                        |
+|--------------------------------------------------|--------------------------------------------------|
+| ReHLDS → Metamod → AMX Mod X → ReAPI → Plugins   | KTP-ReHLDS → KTPAMXX → KTP-ReAPI → Plugins       |
+| Metamod loads AMX Mod X as plugin                | KTPAMXX loads as ReHLDS extension directly       |
+| ReAPI uses Metamod hooks                         | KTP-ReAPI uses ReHLDS hookchains via KTPAMXX     |
+| Linux requires Metamod                           | **Linux works natively**                         |
 
 ---
 
@@ -59,69 +77,86 @@
 
 ### Layer 1: KTP-ReHLDS (Engine)
 
+**Repository:** [github.com/afraznein/KTPReHLDS](https://github.com/afraznein/KTPReHLDS)
+**Version:** 3.15.0.891-dev+m
+**License:** MIT
+
 <details>
-<summary><b>🎯 Real-Time HUD Updates During Pause</b></summary>
+<summary><b>🎯 Core Engine Features</b></summary>
 
-**What it is:** Custom fork of ReHLDS (Half-Life Dedicated Server) with advanced pause functionality
+#### Extension Loading System
 
-**GitHub:** [afraznein/KTP-ReHLDS](https://github.com/afraznein/KTP-ReHLDS)
+KTP-ReHLDS provides the foundation for loading KTPAMXX without Metamod:
 
-#### The Problem
-- **Standard HLDS/ReHLDS:** HUD freezes when paused (nothing updates)
-- **KTP-ReHLDS:** Updates HUD every frame during pause
-
-#### The Solution
 ```cpp
-// New hook chain: RH_SV_UpdatePausedHUD
-// Called every frame when g_psv.paused == true
-void SV_UpdatePausedHUD(void) {
-    if (!g_psv.paused) return;
+// ReHLDS extension entry point (used by KTPAMXX)
+extern "C" DLLEXPORT void AMXX_RehldsExtensionInit();
+extern "C" DLLEXPORT void AMXX_RehldsExtensionShutdown();
+```
 
-    // Call plugin hooks to update HUD
-    g_RehldsHookchains.m_SV_UpdatePausedHUD.callChain(...);
+**What This Enables:**
+- KTPAMXX loads directly into ReHLDS process
+- Full access to ReHLDS hookchains and APIs
+- Cross-platform operation (Windows + Linux)
+- No Metamod DLL required
+
+#### Selective Pause System
+
+Standard GoldSrc pause freezes everything. KTP-ReHLDS provides selective freeze:
+
+| What Gets Frozen                     | What Keeps Working                 |
+|--------------------------------------|------------------------------------|
+| Physics (`SV_Physics()` skipped)     | Network I/O                        |
+| Game time (`g_psv.time` frozen)      | HUD messages                       |
+| Player movement                      | Server messages (`rcon say`)       |
+| Entity thinking                      | Commands (`/pause`, `/resume`)     |
+| Projectiles                          | Client message buffers             |
+
+#### Custom Hook: `SV_UpdatePausedHUD`
+
+Called every frame (~60-100 Hz) during pause:
+
+```cpp
+// In KTP-ReHLDS sv_main.cpp
+void SV_Frame() {
+    if (g_psv.paused) {
+        // Call pause HUD hook for plugins to update displays
+        g_RehldsHookchains.m_SV_UpdatePausedHUD->callChain();
+    }
 }
 ```
 
-#### Features Enabled
-| Feature | Standard ReHLDS | KTP-ReHLDS |
-|---------|----------------|------------|
-| Live countdown timer | ❌ Frozen 00:00 | ✅ MM:SS format |
-| Server messages | ❌ Frozen | ✅ Works |
-| Plugin announcements | ❌ Frozen | ✅ Works |
-| Join/leave events | ❌ Frozen | ✅ Works |
-| Commands | ❌ Blocked | ✅ Full support |
-| Auto-warnings | ❌ Manual | ✅ Automatic |
+**Enables:**
+- Real-time MM:SS countdown during pause
+- Warning messages (30s, 10s remaining)
+- Unpause countdown (5...4...3...2...1)
+- Server announcements during pause
+
+#### Custom Callback: `pfnClientCvarChanged`
+
+Engine-level callback when clients respond to cvar queries:
+
+```cpp
+// NEW_DLL_FUNCTIONS addition
+void (*pfnClientCvarChanged)(const edict_t *pEdict, const char *cvar, const char *value);
+```
+
+**Detection Flow:**
+```
+Server queries cvar → Client responds → KTP-ReHLDS receives →
+pfnClientCvarChanged fires → KTPAMXX forwards to plugins →
+client_cvar_changed() forward executes
+```
 
 </details>
 
 <details>
-<summary><b>💬 Chat During Pause (Partial Functionality)</b></summary>
+<summary><b>⚙️ Technical Implementation</b></summary>
 
-#### What Works
-- ✅ **First chat message** per pause - Displays to all clients
-- ✅ **Server-side messages** (`rcon say`, admin commands) - Work normally
-- ✅ **Server events** (player join/leave notifications)
-- ✅ **Plugin messages** (using direct buffer writes)
-- ✅ **Commands** (`/cancel`, `/pause`, `/resume`, etc.)
-
-#### Known Limitation
-- ⚠️ **Subsequent chat messages** - Blocked by DoD game DLL flood protection
-- Only first player chat message per pause displays
-- 2nd, 3rd, 4th... messages are blocked
-- **Workaround:** Use `rcon say` for additional messages
-
-#### Why the Limitation Exists
-The DoD game DLL has built-in flood protection using frozen game time. After the first message, all subsequent messages appear "instant" (0 time elapsed), triggering the DLL's internal flood detection.
-
-**Fix requires:** DoD game DLL source code access
-
-#### Technical Implementation
-
-<details>
-<summary>Frame-wide Temporary Unpause System</summary>
+#### Frame-Wide Temporary Unpause (Chat During Pause)
 
 ```cpp
-// Frame-wide temporary unpause system
+// Enable communication while keeping game frozen
 int wasPaused = g_psv.paused;
 g_ktp_temporary_unpause = 0;
 
@@ -141,227 +176,485 @@ if (wasPaused && g_ktp_temporary_unpause) {
 }
 ```
 
+**Current Status:**
+- ✅ `rcon say` works
+- ✅ Server events (join/leave) work
+- ✅ Commands processed (`/cancel`, `/pause`)
+- ✅ First player chat message works
+- ⚠️ Subsequent chat blocked by DoD DLL flood protection
+
+#### Modified Files
+
+| File                                 | Purpose                               |
+|--------------------------------------|---------------------------------------|
+| `rehlds/public/rehlds/rehlds_api.h`  | Added `IRehldsHook_SV_UpdatePausedHUD`|
+| `rehlds/rehlds/engine/sv_main.cpp`   | Hook call in `SV_Frame()`             |
+| `rehlds/rehlds/engine/sv_user.cpp`   | Message flushing during pause         |
+| `rehlds/public/rehlds/hookchains.h`  | Hook registry                         |
+
 </details>
 
+---
+
+### Layer 2: KTPAMXX (Scripting Platform)
+
+**Repository:** [github.com/afraznein/KTPAMXX](https://github.com/afraznein/KTPAMXX)
+**Version:** 2.0.0
+**License:** GPL v3
+**Base:** AMX Mod X 1.10.0.5468-dev
+
 <details>
-<summary>Rate Limiter Bypass</summary>
+<summary><b>🎯 Extension Mode Architecture</b></summary>
+
+#### Dual-Mode Operation
+
+KTPAMXX automatically detects environment and adapts:
 
 ```cpp
-// Skip ReHLDS rate limiter during temporary unpause
-if (!g_ktp_temporary_unpause) {
-    g_StringCommandsRateLimiter.StringCommandIssued(pSenderClient - g_psvs.clients);
-}
-// Commands/chat now processed during pause
+// Global flags set during initialization
+bool g_bRunningWithMetamod;      // True if Metamod present
+bool g_bRehldsExtensionInit;     // True if loaded as extension
+
+// Entry points
+void Meta_Attach();              // Traditional Metamod mode
+void AMXX_RehldsExtensionInit(); // Extension mode (no Metamod)
 ```
 
-</details>
+#### Extension Mode Initialization
 
-**Current Status:** First message works, commands work, RCON works. Subsequent messages require DoD DLL investigation.
+```cpp
+// Called by ReHLDS when loading extension
+extern "C" DLLEXPORT void AMXX_RehldsExtensionInit() {
+    g_bRehldsExtensionInit = true;
+    g_bRunningWithMetamod = false;
+
+    // Get engine interfaces directly from ReHLDS
+    g_pGameEntityInterface = GetEntityInterface();
+
+    // Register ReHLDS hooks
+    RegisterHook(SV_DropClient, ...);
+    RegisterHook(SV_ActivateServer, ...);
+    RegisterHook(Cvar_DirectSet, ...);
+    // ... more hooks
+
+    // Initialize AMX subsystem
+    AMXX_Initialize();
+}
+```
+
+#### ReHLDS Hooks (Extension Mode)
+
+| Hook                                   | Purpose                      |
+|----------------------------------------|------------------------------|
+| `SV_DropClient`                        | Client disconnect handling   |
+| `SV_ActivateServer`                    | Map load / server activation |
+| `Cvar_DirectSet`                       | Cvar change monitoring       |
+| `SV_WriteFullClientUpdate`             | Client info updates          |
+| `ED_Alloc` / `ED_Free`                 | Entity allocation            |
+| `SV_StartSound`                        | Sound emission               |
+| `ClientConnected` / `SV_ConnectClient` | Connection handling          |
 
 </details>
 
 <details>
-<summary><b>❌ What's Frozen During Pause</b></summary>
+<summary><b>⚡ New Forward: client_cvar_changed</b></summary>
 
-- Physics (players/entities don't move)
-- Game time (`g_psv.time` doesn't advance)
-- Entity think functions
-- Projectiles (grenades stop mid-air)
+#### Real-Time Cvar Monitoring
 
-</details>
+```pawn
+/**
+ * Called when a client responds to ANY cvar query.
+ * Requires KTP-ReHLDS for full functionality.
+ *
+ * @param id        Client index (1-32)
+ * @param cvar      Name of the queried cvar
+ * @param value     Value returned by client (string)
+ */
+forward client_cvar_changed(id, const cvar[], const value[]);
+```
 
----
+#### Example: Anti-Cheat Plugin
 
-### Layer 2: KTP-ReAPI (Module)
+```pawn
+public client_cvar_changed(id, const cvar[], const value[]) {
+    if (!is_user_connected(id))
+        return PLUGIN_CONTINUE
 
-<details>
-<summary><b>🎯 Custom Hook: RH_SV_UpdatePausedHUD</b></summary>
-
-**What it is:** Custom fork of ReAPI with KTP-ReHLDS hook support
-
-**GitHub:** [afraznein/KTP-ReAPI](https://github.com/afraznein/KTP-ReAPI)
-
-#### The Bridge Between Engine and Plugins
-
-KTP-ReAPI adds the critical `RH_SV_UpdatePausedHUD` hook that connects KTP-ReHLDS's pause system to AMX plugins.
-
-```c
-// In your plugin (e.g., KTPMatchHandler)
-#if defined RH_SV_UpdatePausedHUD
-    RegisterHookChain(RH_SV_UpdatePausedHUD, "OnPausedHUDUpdate", .post = false);
-#endif
-
-public OnPausedHUDUpdate() {
-    // Called EVERY FRAME while paused by KTP-ReHLDS
-    // Update HUD for all players with live countdown
-
-    for (new id = 1; id <= MaxClients; id++) {
-        if (!is_user_connected(id)) continue;
-
-        // Calculate elapsed/remaining time
-        new elapsed = get_systime() - g_pauseStartTime;
-        new remaining = g_pauseDurationSec - elapsed;
-
-        // Display real-time HUD
-        set_hudmessage(255, 255, 255, -1.0, 0.3, 0, 0.0, 0.1, 0.0, 0.0);
-        show_hudmessage(id, "== GAME PAUSED ==^n^nElapsed: %d:%02d  |  Remaining: %d:%02d",
-            elapsed / 60, elapsed % 60, remaining / 60, remaining % 60);
+    // Enforce r_fullbright = 0
+    if (equal(cvar, "r_fullbright") && floatstr(value) != 0.0) {
+        client_cmd(id, "r_fullbright 0")
+        log_amx("Enforced r_fullbright on player %d", id)
     }
 
-    return HC_CONTINUE;
+    return PLUGIN_CONTINUE
 }
 ```
 
-#### Why This is Critical
-- ❌ **Standard ReHLDS:** No way for plugins to update HUD during pause
-- ✅ **KTP-ReAPI:** Exposes the `RH_SV_UpdatePausedHUD` hook that KTP-ReHLDS calls every frame
-- 🎯 **Result:** Real-time MM:SS countdown timer visible to players during pause
+#### Detection Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│  AMX Plugin                                     │
+│  - query_client_cvar(id, "r_fullbright", ...)   │
+└────────────────┬────────────────────────────────┘
+                 │ svc_sendcvarvalue2
+                 ↓
+┌─────────────────────────────────────────────────┐
+│  Game Client                                    │
+│  - Receives query, sends back value             │
+└────────────────┬────────────────────────────────┘
+                 │ clc_cvarvalue2
+                 ↓
+┌─────────────────────────────────────────────────┐
+│  KTP-ReHLDS                                     │
+│  - Calls pfnClientCvarChanged                   │
+└────────────────┬────────────────────────────────┘
+                 │ C++ callback
+                 ↓
+┌─────────────────────────────────────────────────┐
+│  KTPAMXX                                        │
+│  - Fires client_cvar_changed() forward          │
+└────────────────┬────────────────────────────────┘
+                 │ AMXX Forward
+                 ↓
+┌─────────────────────────────────────────────────┐
+│  KTPCvarChecker Plugin                          │
+│  - Validates and enforces correct value         │
+└─────────────────────────────────────────────────┘
+```
 
 </details>
 
 <details>
-<summary><b>🔗 Standard ReAPI Features (Inherited)</b></summary>
+<summary><b>🔌 Module Frame Callback API</b></summary>
 
-#### Pause Control Natives
-```c
-// Direct pause state manipulation (bypasses engine command)
+#### For Modules Requiring Per-Frame Processing
+
+Modules like KTP AMXX Curl need per-frame callbacks for async I/O. Traditionally this required Metamod's `pfnStartFrame`. KTPAMXX provides a replacement:
+
+```cpp
+// Module registration (in module code)
+MF_RegModuleFrameFunc(CurlFrameCallback);    // Register callback
+MF_UnregModuleFrameFunc(CurlFrameCallback);  // Unregister on detach
+```
+
+```cpp
+// KTPAMXX calls registered callbacks each frame
+void KTPAMXX_FrameUpdate() {
+    for (auto callback : g_ModuleFrameCallbacks) {
+        callback();
+    }
+}
+```
+
+**Used By:**
+- KTP AMXX Curl (async HTTP/FTP processing)
+- Any module needing per-frame updates without Metamod
+
+</details>
+
+<details>
+<summary><b>📂 Path and Naming Changes</b></summary>
+
+#### KTP Branding
+
+| Component         | Standard AMX Mod X         | KTPAMXX                           |
+|-------------------|----------------------------|-----------------------------------|
+| Main binary       | `amxmodx_mm.dll/.so`       | `ktpamx.dll` / `ktpamx_i386.so`   |
+| Module suffix     | `*_amxx.dll/.so`           | `*_ktp.dll` / `*_ktp_i386.so`     |
+| Configs directory | `addons/amxmodx/`          | `addons/ktpamx/`                  |
+| Plugins directory | `addons/amxmodx/plugins/`  | `addons/ktpamx/plugins/`          |
+
+#### Directory Structure
+
+```
+addons/ktpamx/
+├── dlls/
+│   └── ktpamx.dll (or ktpamx_i386.so)
+├── configs/
+│   ├── amxx.cfg
+│   ├── plugins.ini
+│   ├── modules.ini
+│   ├── users.ini
+│   ├── ktp_maps.ini
+│   └── discord.ini
+├── data/
+├── logs/
+├── modules/
+│   ├── reapi_amxx.dll (KTP-ReAPI)
+│   └── amxxcurl_amxx_i386.dll (KTP AMXX Curl)
+├── plugins/
+│   ├── KTPMatchHandler.amxx
+│   ├── ktp_cvar.amxx
+│   ├── ktp_file.amxx
+│   └── KTPAdminAudit.amxx
+└── scripting/
+```
+
+</details>
+
+---
+
+### Layer 3: KTP-ReAPI (Engine Bridge Module)
+
+**Repository:** [github.com/afraznein/KTPReAPI](https://github.com/afraznein/KTPReAPI)
+**Version:** 5.25.0.0-ktp
+**License:** GPL v3
+**Base:** ReAPI 5.26+
+
+<details>
+<summary><b>🎯 Extension Mode Operation</b></summary>
+
+#### No Metamod Required
+
+KTP-ReAPI operates in extension mode via `REAPI_NO_METAMOD` compile flag:
+
+```cpp
+// extension_mode.h
+#define REAPI_NO_METAMOD
+
+// Stubs for Metamod macros
+#define SET_META_RESULT(x)
+#define RETURN_META(x) return
+#define RETURN_META_VALUE(x, y) return y
+```
+
+#### Engine Access via KTPAMXX
+
+```cpp
+// KTP-ReAPI gets engine functions from KTPAMXX, not Metamod
+void OnAmxxAttach() {
+    // KTPAMXX provides these APIs
+    enginefuncs_t* pEngFuncs = g_amxxapi.GetEngineFuncs();
+    globalvars_t* pGlobals = g_amxxapi.GetGlobalVars();
+
+    // Initialize ReAPI with engine access
+    ReAPI_Initialize(pEngFuncs, pGlobals);
+}
+```
+
+#### Hook Registration Changes
+
+| Traditional (Metamod)    | Extension Mode                  |
+|--------------------------|---------------------------------|
+| `ServerActivate_Post`    | `SV_ActivateServer` hookchain   |
+| `OnFreeEntPrivateData`   | `ED_Free` hookchain             |
+| Uses Metamod DLL hooks   | Uses ReHLDS hookchains          |
+
+</details>
+
+<details>
+<summary><b>⚡ Custom KTP Hook: RH_SV_UpdatePausedHUD</b></summary>
+
+#### The Critical Hook for Real-Time Pause HUD
+
+```pawn
+// In reapi_engine_const.inc
+enum RehldsHook {
+    // ... standard hooks ...
+
+    /*
+    * Called during pause to allow HUD updates (KTP-ReHLDS custom hook)
+    * Params: ()
+    * @note This is a KTP-ReHLDS specific hook, not available in standard ReHLDS
+    */
+    RH_SV_UpdatePausedHUD,
+};
+```
+
+#### Plugin Usage
+
+```pawn
+#include <amxmodx>
+#include <reapi>
+
+public plugin_init() {
+    #if defined RH_SV_UpdatePausedHUD
+        RegisterHookChain(RH_SV_UpdatePausedHUD, "OnPausedHUDUpdate", .post = false);
+    #endif
+}
+
+#if defined RH_SV_UpdatePausedHUD
+public OnPausedHUDUpdate() {
+    if (!g_bIsPaused) return HC_CONTINUE;
+
+    // Calculate time remaining
+    new iElapsed = get_systime() - g_iPauseStartTime;
+    new iRemaining = g_iPauseDuration - iElapsed;
+    new iMinutes = iRemaining / 60;
+    new iSeconds = iRemaining % 60;
+
+    // Update HUD for all players
+    set_hudmessage(255, 255, 0, -1.0, 0.35, 0, 0.0, 0.1, 0.0, 0.0, -1);
+    show_hudmessage(0, "== PAUSED ==^n%02d:%02d remaining", iMinutes, iSeconds);
+
+    return HC_CONTINUE;
+}
+#endif
+```
+
+#### Standard ReAPI Features (Inherited)
+
+All standard ReAPI functionality works:
+
+```pawn
+// Pause control
 rh_set_server_pause(true);    // Freeze game
 rh_set_server_pause(false);   // Resume game
-bool:rh_is_server_paused();   // Check pause state
-```
+rh_is_server_paused();        // Check state
 
-#### Why This Matters
-- ❌ **Standard method:** `server_cmd("pause")` - conflicts with engine, requires `pausable 1`
-- ✅ **ReAPI method:** Direct manipulation - no conflicts, works with `pausable 0`
+// Cvar detection
+RegisterHookChain(RH_SV_CheckUserInfo, "OnUserInfoChange", false);
 
-#### Real-Time Cvar Detection Hook
-```c
-RegisterHookChain(RH_SV_CheckUserInfo, "OnUserInfoChange", false)
-
-public OnUserInfoChange(id) {
-    // Instantly detect when player changes client cvar
-    // No polling delay (15-90 seconds on base AMX)
-    return HC_CONTINUE;
-}
-```
-
-</details>
-
-<details>
-<summary><b>📊 Feature Comparison</b></summary>
-
-| Feature               | Standard ReAPI              | KTP-ReAPI                  |
-|-----------------------|-----------------------------|----------------------------|
-| Pause control natives | ✅ `rh_set_server_pause()`   | ✅ Same                     |
-| Cvar detection hook   | ✅ `RH_SV_CheckUserInfo`     | ✅ Same                     |
-| Pause HUD hook        | ❌ Not available             | ✅ `RH_SV_UpdatePausedHUD` |
-| ReGameDLL hooks       | ✅ All standard hooks        | ✅ Same                     |
-| Backward compatible   | N/A                         | ✅ Yes (works with std ReHLDS) |
-
-</details>
-
----
-
-### Layer 3: Anti-Cheat Plugins
-
-<details>
-<summary><b>⚡ KTPCvarChecker v5.4 - Client Cvar Enforcement</b></summary>
-
-**GitHub:** [afraznein/KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)
-
-**Version:** v5.4 (November 2025) - Major performance optimizations
-
-#### 📋 57 Monitored Cvars
-
-| Category | Examples | Purpose |
-|----------|----------|---------|
-| Graphics | `gl_*`, `r_*` | Prevent wallhacks, brightness exploits |
-| Audio | `s_*`, `ambient_*` | Prevent sound advantages |
-| Mouse | `m_pitch`, `m_side` | Prevent movement exploits |
-| Network | `cl_updaterate`, `rate` | Fair play enforcement |
-| Ranges | `lightgamma` (1.7-3.0), `ex_interp` (0-0.04), `fps_max` (60-500) | Validated ranges |
-
-#### ⚡ Real-Time Detection (KTP-ReHLDS + ReAPI)
-
-```c
-RegisterHookChain(RH_SV_CheckUserInfo, "OnUserInfoChange", false)
-
-public OnUserInfoChange(id) {
-    // Player changed a userinfo cvar (cl_, rate, etc.)
-    // Check value immediately, no waiting
-
-    query_client_cvar(id, "cl_updaterate", "CvarCallback")
-}
-```
-
-#### Performance Improvements (v5.4)
-- ⚡ **Pre-converted float arrays** - Eliminates 57+ `floatstr()` conversions per check
-- 🔧 **Optimized function calls** - ~60% fewer calls per check
-- 🚀 **Eliminated linear search** - Replaced O(n) with O(1) direct array access
-- 📊 **~1600 fewer string comparisons** per full check on non-ReAPI servers
-- 🛡️ **Pause-compatible rate limiting** using system time
-
-#### Platform Compatibility
-
-| Feature | Base AMX | ReHLDS | KTP-ReHLDS + ReAPI |
-|---------|----------|--------|---------------------|
-| Detection speed | ⏱️ 15-90s delay | ⏱️ Same as base | ⚡ Instant (< 0.1s) |
-| Initial check speed | ⏱️ 8.55 seconds | ⏱️ 8.55 seconds | ⚡ < 0.1 seconds (85x faster) |
-| Cvar enforcement | ✅ 57 cvars | ✅ 57 cvars | ✅ 57 cvars |
-| Auto-correction | ✅ | ✅ | ✅ |
-| Performance (v5.4) | ✅ Optimized | ✅ Optimized | ✅ Fully optimized |
-
-</details>
-
-<details>
-<summary><b>🛡️ KTPFileChecker - File Consistency</b></summary>
-
-**GitHub:** [afraznein/KTPFileChecker](https://github.com/afraznein/KTPFileChecker) (Private)
-
-#### 📁 File Consistency Checking
-- Forces clients to use exact server-side files
-- Prevents custom player models (wallhacks, visibility advantages)
-- Prevents custom sounds (footstep/reload audio cheats)
-- Validates weapon models, sprites, and HUD elements
-
-#### 🔍 Two Model Checking Modes
-
-| Mode | CVAR | Description |
-|------|------|-------------|
-| Exact Match | `fc_exactweapons 1` | File must be byte-for-byte identical |
-| Same Bounds | `fc_exactweapons 0` | Model dimensions match (allows reskins) |
-
-#### 🎯 Monitored Files
-- **Player Models** (8 files)
-- **Sounds** (56+ files - footsteps, headshots, weapons, ambient)
-- **Weapon Models** (36+ files - first/third person, world models)
-- **Sprites** (effects)
-
-#### Detection Flow
-```
-Player connects → Plugin validates files in filescheck.ini →
-Client file CRC compared to server → Mismatch detected →
-Player kicked immediately → Violation logged →
-Server announcement with player details
+// All ReGameDLL hooks
+RegisterHookChain(RG_CBasePlayer_Spawn, ...);
+RegisterHookChain(RG_CBasePlayer_TakeDamage, ...);
 ```
 
 </details>
 
 ---
 
-### Layer 4: KTPMatchHandler (Match Management)
+### Layer 4: KTP AMXX Curl (HTTP Module)
+
+**Repository:** [github.com/afraznein/KTPAMXXCurl](https://github.com/afraznein/KTPAMXXCurl)
+**Version:** 1.1.1-ktp
+**License:** MIT
+**Base:** AmxxCurl by Polarhigh
 
 <details>
-<summary><b>🏆 Match Workflow</b></summary>
+<summary><b>🎯 Non-Blocking HTTP Without Metamod</b></summary>
 
-**GitHub:** [afraznein/KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler)
+#### Uses KTPAMXX Frame Callback API
+
+Original AmxxCurl used Metamod's `pfnStartFrame` for async processing. KTP fork uses KTPAMXX's module frame callback:
+
+```cpp
+// In callbacks.cc
+void OnPluginsLoaded() {
+    // KTP: Register frame callback for async processing
+    if (MF_RegModuleFrameFunc)
+        MF_RegModuleFrameFunc(CurlFrameCallback);
+}
+
+void OnPluginsUnloaded() {
+    // KTP: Unregister frame callback
+    if (MF_UnregModuleFrameFunc)
+        MF_UnregModuleFrameFunc(CurlFrameCallback);
+}
+
+// Called every frame by KTPAMXX
+void CurlFrameCallback() {
+    // Process pending curl transfers
+    curl_multi_perform(g_curlMulti, &running);
+    // Handle completions, fire callbacks
+}
+```
+
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│  AMX Plugin                                     │
+│  - curl_easy_perform(curl, "on_complete")       │
+│  - Continues execution immediately              │
+└────────────────┬────────────────────────────────┘
+                 │ Native call
+                 ↓
+┌─────────────────────────────────────────────────┐
+│  KTP AMXX Curl Module                           │
+│  - Queues transfer with curl_multi              │
+│  - ASIO polls for socket activity               │
+│  - CurlFrameCallback() called each frame        │
+└────────────────┬────────────────────────────────┘
+                 │ MF_RegModuleFrameFunc (KTPAMXX)
+                 ↓
+┌─────────────────────────────────────────────────┐
+│  KTPAMXX                                        │
+│  - Calls registered frame callbacks each frame  │
+└────────────────┬────────────────────────────────┘
+                 │ On transfer complete
+                 ↓
+┌─────────────────────────────────────────────────┐
+│  AMX Plugin Callback                            │
+│  - on_complete(CURL:curl, CURLcode:code)        │
+└─────────────────────────────────────────────────┘
+```
+
+</details>
+
+<details>
+<summary><b>📡 API Reference</b></summary>
+
+#### Core Functions
+
+```pawn
+native CURL:curl_easy_init();
+native curl_easy_perform(const CURL:handle, const callback[], const data[] = {}, const len = 0);
+native CURLcode:curl_easy_setopt(const CURL:handle, const CURLoption:option, any:...);
+native CURLcode:curl_easy_getinfo(const CURL:handle, const CURLINFO:info, any:...);
+native curl_easy_cleanup(const CURL:handle);
+native curl_easy_reset(const CURL:handle);
+native curl_easy_escape(const CURL:handle, const url[], buffer[], const maxlen);
+native curl_easy_unescape(const CURL:handle, const url[], buffer[], const maxlen);
+native curl_slist:curl_slist_append(curl_slist:list, string[]);
+native curl_slist_free_all(curl_slist:list);
+native curl_easy_strerror(const CURLcode:code, buffer[], const maxlen);
+native curl_version(buffer[], const maxlen);
+```
+
+#### Example: Discord Webhook
+
+```pawn
+public send_discord_webhook(const message[]) {
+    new CURL:curl = curl_easy_init()
+    if (!curl) return
+
+    new curl_slist:headers = curl_slist_append(SList_Empty, "Content-Type: application/json")
+
+    new json[512]
+    formatex(json, charsmax(json), "{\"content\": \"%s\"}", message)
+
+    curl_easy_setopt(curl, CURLOPT_URL, "https://discord.com/api/webhooks/...")
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers)
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json)
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0)
+
+    curl_easy_perform(curl, "on_webhook_complete")
+    curl_slist_free_all(headers)
+}
+
+public on_webhook_complete(CURL:curl, CURLcode:code) {
+    if (code != CURLE_OK) {
+        new error[128]
+        curl_easy_strerror(code, error, charsmax(error))
+        log_amx("Discord webhook failed: %s", error)
+    }
+    curl_easy_cleanup(curl)
+}
+```
+
+</details>
+
+---
+
+### Layer 5: Application Plugins
+
+#### KTPMatchHandler
+
+**Repository:** [github.com/afraznein/KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler)
+**Version:** 0.5.2
+**License:** MIT
+
+<details>
+<summary><b>🏆 Match Workflow System</b></summary>
 
 ```
 1. PRE-START
-   /start → Both teams /confirm
+   /start → Both teams /confirm (one captain per team)
 
 2. PENDING (Ready-Up)
-   Players type /ready (6 per team)
+   Players type /ready (6 per team by default)
 
 3. LIVE COUNTDOWN
    "Match starting in 5..."
@@ -372,6 +665,14 @@ Server announcement with player details
    Full logging enabled
 ```
 
+#### Match Types
+
+| Type        | Command   | Discord            | Config               |
+|-------------|-----------|--------------------|----------------------|
+| Competitive | `/start`  | Full notifications | `mapname.cfg`        |
+| 12-Man      | `/12man`  | Reduced            | `mapname_12man.cfg`  |
+| Scrim       | `/scrim`  | Minimal            | `mapname_scrim.cfg`  |
+
 </details>
 
 <details>
@@ -379,34 +680,33 @@ Server announcement with player details
 
 #### Two Pause Types
 
-| Type | Limit | Duration | Extensions | Budget |
-|------|-------|----------|------------|--------|
-| Tactical `/pause` | 1 per team/half | 5 minutes | 2× 2 min (9 min max) | No |
-| Technical `/tech` | Unlimited | Varies | Unlimited | 5 min/team total |
+| Type          | Limit           | Duration    | Extensions             | Command   |
+|---------------|-----------------|-------------|------------------------|-----------|
+| **Tactical**  | 1 per team/half | 5 minutes   | 2× 2 min (9 min max)   | `/pause`  |
+| **Technical** | Unlimited       | Uses budget | Unlimited              | `/tech`   |
 
-#### Disconnect Auto-Pause
-- Triggers when player disconnects during live match
-- 10-second countdown (can be cancelled with `/cancelpause`)
-- Uses team's technical pause budget
-- Team-only cancel permission
+**Technical Pause Budget:** 5 minutes per team total
 
-#### Pause Flow Diagram
+#### Pause Flow
 
 ```
-Player types: /pause
+Player types /pause
         ↓
 5-second countdown ("Pausing in 5...")
         ↓
 rh_set_server_pause(true)  ← ReAPI native
         ↓
-GAME FREEZES (Physics stop, Time stops, Players can't move)
+GAME FREEZES
+  - Physics stop
+  - Time stops
+  - Players can't move
         ↓
-SERVER MESSAGES WORK (KTP-ReHLDS feature)
-  - rcon say displays normally
-  - Join/leave events show
-  - Plugin announcements work
+KTP-ReHLDS calls SV_UpdatePausedHUD every frame
         ↓
-HUD UPDATES (KTP-ReHLDS feature)
+KTP-ReAPI forwards to OnPausedHUDUpdate hook
+        ↓
+KTPMatchHandler updates HUD:
+
   == GAME PAUSED ==
 
   Type: TACTICAL
@@ -431,116 +731,208 @@ rh_set_server_pause(false)  ← ReAPI native
 GAME RESUMES (LIVE!)
 ```
 
-</details>
+#### Disconnect Auto-Pause
 
-<details>
-<summary><b>⏱️ Real-Time Timer System</b></summary>
-
-Uses `get_systime()` for accuracy:
-
-```c
-// Store pause start time (Unix timestamp)
-g_pauseStartTime = get_systime();
-
-// Calculate elapsed time (works even when host_frametime = 0)
-new elapsed = get_systime() - g_pauseStartTime;
-
-// Calculate remaining time
-new remaining = g_pauseDurationSec - elapsed;
-
-// Display: "Elapsed: 2:34  |  Remaining: 2:26"
-```
-
-#### Why This Works
-- `get_systime()` returns real-world time (not game time)
-- Continues advancing even when `g_psv.time` is frozen
-- Enables accurate countdown during pause
-- Powers auto-warnings and auto-unpause
-
-</details>
-
-<details>
-<summary><b>📝 Logging & Notifications</b></summary>
-
-#### 1. AMX Log (Standard Half-Life logs)
-```
-L 11/17/2025 - 18:30:45: KTP: Game PAUSED by PlayerName (tactical_pause)
-L 11/17/2025 - 18:33:15: KTP: Pause warning - 30 seconds remaining
-L 11/17/2025 - 18:35:45: KTP: Game LIVE - Unpaused by PlayerName
-```
-
-#### 2. KTP Match Log (Structured event logging)
-```
-[2025-11-17 18:30:45] event=PAUSE_EXECUTED initiator='PlayerName' reason='tactical_pause' duration=300
-[2025-11-17 18:32:15] event=PAUSE_EXTENDED player='PlayerName' extension=1/2 seconds=120
-[2025-11-17 18:35:45] event=UNPAUSE_TOGGLE source=reapi reason='countdown'
-```
-
-#### 3. Discord Integration
-See [Discord Relay](#supporting-infrastructure-discord-relay) section for complete details
+- Triggers when player disconnects during live match
+- 10-second countdown (cancellable with `/cancelpause`)
+- Uses team's technical pause budget
+- Team-only cancel permission
 
 </details>
 
 ---
 
-### Supporting Infrastructure: Discord Relay
+#### KTPCvarChecker
+
+**Repository:** [github.com/afraznein/KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)
+**Version:** 7.4
+**License:** GPL v2
 
 <details>
-<summary><b>🔔 Real-Time Match Notifications</b></summary>
+<summary><b>⚡ Priority-Based Cvar Monitoring</b></summary>
 
-**GitHub:** [afraznein/discord-relay](https://github.com/afraznein/discord-relay)
+#### 59 Monitored Cvars (9 Priority + 50 Standard)
 
-Google Cloud Run service that bridges AMX plugins to Discord via webhooks
-
-#### Architecture
+**Priority Cvars (checked every 2 seconds):**
 ```
-KTPMatchHandler (AMX Plugin)
-        ↓
-HTTP POST: match event JSON
-        ↓
-Discord Relay (Cloud Run)
-  - Validate auth secret
-  - Format Discord embed
-  - Rate limit protection
-        ↓
-Discord Webhook API
-        ↓
-Discord Channel (live notifications)
+m_pitch, cl_yawspeed, cl_pitchspeed, lightgamma, cl_bob,
+cl_updaterate, cl_cmdrate, rate, ex_interp
 ```
 
-#### Active Notifications (v0.4.3 - Filtered)
-- 🎮 **Match started** - Includes hostname, map, captains, teams
-- ⏸️ **Player-initiated tactical pause** - Includes hostname, player, team, pause counts
-- 📴 **Disconnect auto-pause** - Includes hostname, player, team, tech budget
+**Standard Cvars (rotated every 10 seconds):**
+```
+Graphics: gl_*, r_fullbright, r_lightmap, texgamma, etc. (33 cvars)
+Audio: s_show, ambient_* (2 cvars)
+Movement: m_side, cl_pitch*, lookspring, etc. (7 cvars)
+Gameplay: cl_lc, cl_lw, fps_max, etc. (8 cvars)
+```
 
-**Rationale:** Focus on critical match events while reducing Discord channel noise. All notifications include server hostname for multi-server identification.
+#### Detection Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│  KTPCvarChecker Plugin                          │
+│  - Priority queries every 2 seconds (9 cvars)   │
+│  - Standard rotation every 10s (5 cvars/check)  │
+│  - query_client_cvar() triggers detection       │
+└────────────────┬────────────────────────────────┘
+                 │ Query + Response
+                 ↓
+┌─────────────────────────────────────────────────┐
+│  KTPAMXX client_cvar_changed Forward            │
+│  - Rate limiting (1 check/sec per player)       │
+│  - Validation against whitelist                 │
+│  - Auto-correction via client_cmd              │
+│  - Logging + Discord webhook                    │
+└─────────────────────────────────────────────────┘
+```
+
+#### Performance
+
+- **~5 queries/second per player** (~160 q/s for 32 players)
+- **~0.4% CPU usage**
+- **~8 KB/s network overhead**
+- **Priority cvars detected in <2 seconds**
+- **Standard cvars full cycle ~100 seconds**
 
 </details>
 
+---
+
+#### KTPFileChecker
+
+**Repository:** [github.com/afraznein/KTPFileChecker](https://github.com/afraznein/KTPFileChecker) (Private)
+**Version:** 2.0
+**License:** Custom
+
 <details>
-<summary><b>🔐 Security & Authentication</b></summary>
+<summary><b>📁 File Consistency Checking</b></summary>
 
-```javascript
-// Relay validates secret before forwarding
-app.post('/relay', async (req, res) => {
-    const authHeader = req.headers['authorization'];
-    const expectedAuth = `Bearer ${process.env.DISCORD_AUTH_SECRET}`;
+#### Monitored File Types
 
-    if (authHeader !== expectedAuth) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
+| Type          | Examples                        | Purpose                            |
+|---------------|---------------------------------|------------------------------------|
+| Player Models | `axis-inf.mdl`, `us-para.mdl`   | Prevent bright/transparent textures|
+| Sounds        | `pl_step*.wav`, `headshot1.wav` | Prevent amplified audio            |
+| Weapon Models | `v_grenade.mdl`, `p_mills.mdl`  | Prevent model exploits             |
+| Sprites       | `crosshairs.spr`                | Optional, usually harmless         |
 
-    // Forward to Discord
-    await fetch(DISCORD_WEBHOOK_URL, {
-        method: 'POST',
-        body: JSON.stringify(req.body)
-    });
-});
+#### Two Validation Modes
+
+```cfg
+fc_exactweapons "1"  // Exact file hash match (competitive)
+fc_exactweapons "0"  // Same hitbox bounds allowed (public servers)
 ```
 
-#### Why This Matters
-- ❌ **Direct approach:** Game server → Discord API (exposes webhook URL, rate limit risk)
-- ✅ **Relay approach:** Game server → Cloud Run → Discord (auth required, rate limiting, URL hidden)
+#### Detection Flow
+
+```
+Player connects → Engine checks file hashes →
+Mismatch detected → inconsistent_file() callback →
+Plugin logs violation → Server announcement →
+Admin can take action
+```
+
+</details>
+
+---
+
+#### KTPAdminAudit
+
+**Repository:** [github.com/afraznein/KTPAdminAudit](https://github.com/afraznein/KTPAdminAudit)
+**Version:** 1.2.0
+**License:** MIT
+
+<details>
+<summary><b>🔐 Administrative Action Monitoring</b></summary>
+
+#### Features
+
+- RCON kick monitoring
+- Admin identity tracking (SteamID, name, IP)
+- Target player tracking
+- Multi-channel Discord notifications
+- Per-match-type audit channels
+
+#### Discord Configuration
+
+```ini
+# discord.ini
+discord_channel_id_audit_competitive=1111111111111111111
+discord_channel_id_audit_12man=2222222222222222222
+discord_channel_id_audit_scrim=3333333333333333333
+```
+
+**Sends to ALL configured audit channels** - useful for mirroring to multiple Discord servers.
+
+</details>
+
+---
+
+### Supporting Infrastructure
+
+#### Discord Relay
+
+**Repository:** [github.com/afraznein/discord-relay](https://github.com/afraznein/discord-relay)
+**Platform:** Google Cloud Run
+**License:** MIT
+
+<details>
+<summary><b>🔔 HTTP Relay Architecture</b></summary>
+
+```
+┌─────────────────────────┐
+│  KTP Match Handler      │
+│  (AMX Plugin via cURL)  │
+└────────┬────────────────┘
+         │ HTTPS + X-Relay-Auth
+         ↓
+┌─────────────────────────┐      ┌─────────────────────────┐
+│  Discord Relay          │ ←──→ │  Discord API V10        │
+│  (Cloud Run)            │      │                         │
+│  - Auth validation      │      │                         │
+│  - Retry logic          │      │                         │
+│  - Rate limiting        │      │                         │
+└─────────────────────────┘      └─────────────────────────┘
+```
+
+**Why Use a Relay:**
+- ✅ Hides Discord webhook URL from game server
+- ✅ Handles rate limiting with retry logic
+- ✅ Centralized auth secret management
+- ✅ Works around Cloudflare challenges
+- ✅ Scales to zero when not in use
+
+</details>
+
+---
+
+#### KTP HLSDK
+
+**Repository:** [github.com/afraznein/KTPhlsdk](https://github.com/afraznein/KTPhlsdk)
+**License:** Valve HL1 SDK License
+
+<details>
+<summary><b>📚 SDK Header Modifications</b></summary>
+
+#### Added Callback: `pfnClientCvarChanged`
+
+```cpp
+// engine/eiface.h - NEW_DLL_FUNCTIONS structure
+typedef struct {
+    // ... existing functions ...
+
+    // KTP Addition: Client cvar change callback
+    void (*pfnClientCvarChanged)(const edict_t *pEdict, const char *cvar, const char *value);
+
+} NEW_DLL_FUNCTIONS;
+```
+
+**Purpose:**
+- Required for KTP-ReHLDS to compile with callback support
+- Required for KTPAMXX to receive cvar change events
+- Header-only SDK (no compilation needed)
+- Fully backwards compatible
 
 </details>
 
@@ -548,82 +940,135 @@ app.post('/relay', async (req, res) => {
 
 ## 🚀 Complete Installation Guide
 
-<details>
-<summary><b>Step 1: Install AMX Mod X</b></summary>
+### Prerequisites
+
+- **KTP-ReHLDS** - Custom engine binary
+- **KTPAMXX** - Extension mode AMX Mod X
+- **KTP-ReAPI** - Extension mode ReAPI module
+- **KTP AMXX Curl** - HTTP module (for Discord integration)
+
+**NOT Required:**
+- ❌ Metamod
+- ❌ Standard AMX Mod X
+- ❌ Standard ReAPI
+
+---
+
+### Step 1: Install KTP-ReHLDS
 
 ```bash
-# Download AMX ModX 1.10
-# Install to server (addons/amxmodx/)
+# Backup existing engine
+# Linux:
+cp <hlds>/engine_i486.so <hlds>/engine_i486.so.backup
+# Windows:
+copy <hlds>\swds.dll <hlds>\swds.dll.backup
+
+# Download KTP-ReHLDS from releases
+# https://github.com/afraznein/KTPReHLDS/releases
+
+# Install
+# Linux:
+cp engine_i486.so <hlds>/
+# Windows:
+copy swds.dll <hlds>\
 ```
 
-</details>
+---
 
-<details>
-<summary><b>Step 2: Install KTP-ReAPI Module</b></summary>
+### Step 2: Install KTPAMXX
 
 ```bash
-# Download KTP-ReAPI module (custom fork with KTP hooks)
-# GitHub: https://github.com/afraznein/KTP-ReAPI
+# Download KTPAMXX from releases
+# https://github.com/afraznein/KTPAMXX/releases
 
-# Copy to modules directory:
-#   Windows: addons/amxmodx/modules/reapi_amxx.dll
-#   Linux:   addons/amxmodx/modules/reapi_amxx_i386.so
+# Extract to game directory
+# Creates: addons/ktpamx/
 
-# Enable in modules.ini:
-echo "reapi_amxx.dll" >> addons/amxmodx/configs/modules.ini    # Windows
-echo "reapi_amxx_i386.so" >> addons/amxmodx/configs/modules.ini # Linux
+# Structure should be:
+addons/ktpamx/
+├── dlls/
+│   └── ktpamx.dll (or ktpamx_i386.so)
+├── configs/
+│   ├── amxx.cfg
+│   ├── plugins.ini
+│   └── modules.ini
+├── modules/
+├── plugins/
+└── scripting/
 ```
 
-</details>
+---
 
-<details>
-<summary><b>Step 3: Deploy KTP-ReHLDS Binaries</b></summary>
+### Step 3: Install KTP-ReAPI Module
 
 ```bash
-# Download KTP-ReHLDS builds
-# Replace engine binaries:
-#   - swds.dll (Windows) or engine_i486.so (Linux)
-#   - hw.dll/hw.so
-#   - filesystem_stdio.dll/.so
+# Download KTP-ReAPI from releases
+# https://github.com/afraznein/KTPReAPI/releases
+
+# Install module
+# Windows:
+copy reapi_amxx.dll <game>\addons\ktpamx\modules\
+# Linux:
+cp reapi_amxx_i386.so <game>/addons/ktpamx/modules/
+
+# Enable in modules.ini
+# addons/ktpamx/configs/modules.ini:
+reapi_amxx.dll     ; Windows
+; OR
+reapi_amxx_i386.so ; Linux
 ```
 
-</details>
+---
 
-<details>
-<summary><b>Step 4: Install Plugins</b></summary>
+### Step 4: Install KTP AMXX Curl Module
 
-#### Compile
 ```bash
-# Navigate to scripting directory
-cd addons/amxmodx/scripting
+# Download KTP AMXX Curl from releases
+# https://github.com/afraznein/KTPAMXXCurl/releases
 
+# Install module
+# Windows:
+copy amxxcurl_amxx_i386.dll <game>\addons\ktpamx\modules\
+# Linux:
+cp amxxcurl_amxx_i386.so <game>/addons/ktpamx/modules/
+
+# Enable in modules.ini
+amxxcurl_amxx_i386.dll  ; Windows
+; OR
+amxxcurl_amxx_i386.so   ; Linux
+```
+
+---
+
+### Step 5: Install Plugins
+
+```bash
 # Compile plugins
+cd addons/ktpamx/scripting
 ./amxxpc KTPMatchHandler.sma -oKTPMatchHandler.amxx
 ./amxxpc ktp_cvar.sma -oktp_cvar.amxx
-./amxxpc ktp_cvarconfig.sma -oktp_cvarconfig.amxx
-./amxxpc filescheck.sma -ofilescheck.amxx
-```
+./amxxpc ktp_file.sma -oktp_file.amxx
+./amxxpc KTPAdminAudit.sma -oKTPAdminAudit.amxx
 
-#### Install
-```bash
-# Copy to plugins folder
+# Install plugins
 cp *.amxx ../plugins/
 
-# Add to plugins.ini (order matters - anti-cheat first)
-echo "ktp_cvar.amxx" >> ../configs/plugins.ini
-echo "ktp_cvarconfig.amxx" >> ../configs/plugins.ini
-echo "filescheck.amxx" >> ../configs/plugins.ini
-echo "KTPMatchHandler.amxx" >> ../configs/plugins.ini
+# Enable in plugins.ini (order matters)
+# addons/ktpamx/configs/plugins.ini:
+ktp_cvar.amxx
+ktp_file.amxx
+KTPAdminAudit.amxx
+KTPMatchHandler.amxx
 ```
 
-</details>
+---
 
-<details>
-<summary><b>Step 5: Configure Server</b></summary>
+### Step 6: Configure Server
 
 #### server.cfg
+
 ```cfg
-// ===== CRITICAL: Disable engine pause, use ReAPI only =====
+// ===== CRITICAL: Disable engine pause =====
 pausable 0
 
 // ===== KTPMatchHandler: Pause System =====
@@ -631,29 +1076,18 @@ ktp_pause_duration "300"              // 5-minute base pause
 ktp_pause_extension "120"             // 2-minute extensions
 ktp_pause_max_extensions "2"          // Max 2 extensions
 ktp_prepause_seconds "5"              // Countdown before pause
-ktp_prematch_pause_seconds "5"        // Pre-match countdown
+ktp_tech_budget_seconds "300"         // 5-min tech budget per team
 
 // ===== KTPMatchHandler: Match System =====
 ktp_ready_required "6"                // Players needed to ready
-ktp_tech_budget_seconds "300"         // 5-min tech budget per team
 
-// ===== KTPMatchHandler: File Paths =====
-ktp_maps_file "addons/amxmodx/configs/ktp_maps.ini"
-ktp_discord_ini "addons/amxmodx/configs/discord.ini"
-
-// ===== KTPCvarChecker: Enforcement =====
-fcos_warn "1"                         // Enable warnings
-fcos_attempt_num_warn "5"             // Warn after 5 violations
-fcos_kick_or_ban "2"                  // 0=off, 1=kick, 2=ban
-fcos_attempt_num_kickorban "15"       // Kick/ban after 15 violations
-fcos_ban_time "60"                    // Ban for 60 minutes
-
-// ===== KTPFileChecker: File Consistency =====
-fc_exactweapons "1"                   // 1=exact match, 0=same bounds
-fc_separatelog "2"                    // 0=engine, 1=AMX, 2=separate file
+// ===== KTPFileChecker =====
+fc_exactweapons "1"                   // Exact file matching
+fc_separatelog "2"                    // Separate log file
 ```
 
 #### ktp_maps.ini
+
 ```ini
 [dod_avalanche]
 config = ktp_avalanche.cfg
@@ -666,173 +1100,137 @@ name = Flash
 type = competitive
 ```
 
-#### filescheck.ini
+#### discord.ini
+
 ```ini
-//Player Models
-models/player/axis-inf/axis-inf.mdl
-models/player/axis-inf/axis-infT.mdl
-models/player/us-inf/us-inf.mdl
-models/player/us-inf/us-infT.mdl
-
-//Sounds
-player/headshot1.wav
-player/pl_step1.wav
-
-//Grenade Models
-models/p_grenade.mdl
-models/v_grenade.mdl
-models/w_grenade.mdl
-```
-
-#### discord.ini (optional)
-```ini
-discord_relay_url=https://your-relay.run.app/relay
+discord_relay_url=https://your-relay.run.app/reply
 discord_channel_id=1234567890123456789
 discord_auth_secret=your-secret-here
+
+; Optional: Match-type specific channels
+discord_channel_id_competitive=1111111111111111111
+discord_channel_id_12man=2222222222222222222
+discord_channel_id_audit_competitive=3333333333333333333
 ```
 
-</details>
+---
 
-<details>
-<summary><b>Step 6: Restart Server</b></summary>
+### Step 7: Verify Installation
 
 ```bash
+# Start server
 ./hlds_run -game dod +maxplayers 16 +map dod_avalanche
-```
 
-</details>
+# Check console output:
+# KTP AMX v2.0.0 loaded
+# Core mode: JIT+ASM32
+# Running as: ReHLDS Extension
+
+# Check modules loaded:
+amxx modules
+
+# Check plugins loaded:
+amxx list
+
+# Test pause system:
+# Join server, type /pause
+# Should see countdown and real-time HUD
+```
 
 ---
 
 ## 📊 Feature Comparison Matrix
 
-| Feature                  | Base AMX   | ReHLDS     | ReHLDS + ReAPI | **KTP Stack**      |
-|--------------------------|------------|------------|----------------|---------------------|
-| **Engine**               | HLDS       | ReHLDS     | ReHLDS         | **KTP-ReHLDS**      |
-| **Module**               | None       | None       | Standard ReAPI | **KTP-ReAPI**       |
-| Match Workflow           | ✅         | ✅         | ✅             | ✅                  |
-| Pause System             | ⚠️ Basic   | ⚠️ Basic   | ✅ Good        | **✅ OPTIMAL**      |
-| Pause Method             | server_cmd | server_cmd | ✅ ReAPI       | **✅ ReAPI**        |
-| Pause HUD Hook           | ❌ None    | ❌ None    | ❌ None        | **✅ Custom Hook**  |
-| HUD During Pause         | ❌ Frozen  | ❌ Frozen  | ❌ Frozen      | **✅ Real-time**    |
-| Server Messages          | ✅ rcon say | ✅ rcon say | ✅ rcon say   | ✅ rcon say         |
-| Player Chat              | ❌ Frozen  | ❌ Frozen  | ❌ Frozen      | **⚠️ Partial**      |
-| Commands During Pause    | ❌         | ❌         | ⚠️            | **✅ Full**         |
-| Auto-Warnings            | ❌ Manual  | ❌ Manual  | ⚠️ Limited    | **✅ Automatic**    |
-| Cvar Detection           | ⏱️ 15-90s  | ⏱️ 15-90s  | ✅ Instant    | **✅ Instant**      |
-| Cvar Check Performance   | ⏱️ 8.55s   | ⏱️ 8.55s   | ✅ Good       | **⚡ 85x faster**   |
-| Cvar Enforcement         | ✅         | ✅         | ✅             | **✅ 57 cvars**     |
-| File Consistency         | ✅ Basic   | ✅ Basic   | ✅ Basic       | **✅ Enhanced**     |
-| Discord Webhooks         | ✅         | ✅         | ✅             | **✅ Cloud Run**    |
-| `pausable 0` Compatible  | ❌         | ❌         | ✅             | **✅**              |
+| Feature              | Base AMX       | ReHLDS + ReAPI  | **KTP Stack**      |
+|----------------------|----------------|-----------------|---------------------|
+| **Engine**           | HLDS           | ReHLDS          | **KTP-ReHLDS**      |
+| **Plugin Platform**  | AMX Mod X      | AMX Mod X       | **KTPAMXX**         |
+| **API Module**       | None           | ReAPI + Metamod | **KTP-ReAPI**       |
+| **Metamod Required** | No             | Yes             | **No**              |
+| **Linux Support**    | Yes            | Via Metamod     | **Native**          |
+| Pause Method         | `server_cmd`   | ReAPI           | **ReAPI**           |
+| HUD During Pause     | ❌ Frozen      | ❌ Frozen       | **✅ Real-time**    |
+| Cvar Detection       | ⏱️ Polling     | ⏱️ Polling      | **⚡ Callback**     |
+| Cvar Detection Speed | 15-90s         | 15-90s          | **<2s priority**    |
+| HTTP Module          | External       | cURL + Metamod  | **KTP Curl**        |
+| File Checking        | Basic          | Basic           | **✅ Enhanced**     |
+| Discord Integration  | Manual         | Manual          | **✅ Cloud Relay**  |
 
 ---
 
 ## 🎮 Command Reference
 
-<details>
-<summary><b>Match Control Commands</b></summary>
+### Match Control
 
-| Command | Description |
-|---------|-------------|
-| `/start` | Initiate pre-start sequence |
-| `/confirm` | Confirm team ready for start |
-| `/ready`, `/ktp` | Mark yourself ready |
-| `/notready` | Mark yourself not ready |
-| `/status` | View match status |
-| `/cancel` | Cancel match/pre-start |
+| Command          | Description              |
+|------------------|--------------------------|
+| `/start`, `/ktp` | Initiate match workflow  |
+| `/12man`         | Start 12-man match       |
+| `/scrim`         | Start scrim match        |
+| `/confirm`       | Confirm team ready       |
+| `/ready`         | Mark yourself ready      |
+| `/notready`      | Mark yourself not ready  |
+| `/status`        | View match status        |
+| `/cancel`        | Cancel match/pre-start   |
 
-</details>
+### Pause Control
 
-<details>
-<summary><b>Pause Control Commands</b></summary>
+| Command           | Description               | Access        |
+|-------------------|---------------------------|---------------|
+| `/pause`          | Tactical pause            | Anyone        |
+| `/tech`           | Technical pause           | Anyone        |
+| `/resume`         | Request unpause           | Owner team    |
+| `/confirmunpause` | Confirm unpause           | Other team    |
+| `/extend`         | Extend pause +2 min       | Anyone        |
+| `/cancelpause`    | Cancel disconnect pause   | Affected team |
 
-| Command | Description | Access |
-|---------|-------------|--------|
-| `/pause` | Tactical pause (5-sec countdown) | Anyone |
-| `/tech` | Technical pause | Anyone |
-| `/resume` | Request unpause | Owner team |
-| `/confirmunpause` | Confirm unpause | Other team |
-| `/cresume`, `/cunpause` | Aliases for confirmunpause | Other team |
-| `/extend` | Extend pause +2 minutes | Anyone |
-| `/cancelpause` | Cancel disconnect pause | Affected team |
+### Admin Commands
 
-</details>
-
-<details>
-<summary><b>Admin Commands</b></summary>
-
-| Command | Description |
-|---------|-------------|
-| `/fcosconfig` | Configure cvar checker |
-| `/reloadmaps` | Reload map configuration |
-| `/ktpconfig` | View current CVARs |
-| `/ktpdebug` | Toggle debug mode |
-
-</details>
-
----
-
-## 📝 How They Work Together
-
-```
-KTP-ReHLDS (engine) calls SV_UpdatePausedHUD() every frame during pause
-           ↓
-KTP-ReAPI (module) exposes RH_SV_UpdatePausedHUD hook to plugins
-           ↓
-KTPMatchHandler (plugin) registers the hook and updates HUD with live timer
-           ↓
-Players see real-time MM:SS countdown while game is frozen
-```
-
-### The Innovation
-
-<table>
-<tr>
-<th>Standard Setup (pausable 1)</th>
-<th>KTP Stack (v0.4.3+)</th>
-</tr>
-<tr>
-<td>
-
-- ❌ Everything freezes (HUD, chat, time)
-- ❌ No way to display timers
-- ❌ Player chat completely frozen
-- ❌ Server events don't display
-
-</td>
-<td>
-
-- ✅ HUD updates every frame
-- ✅ Real-time countdown timer
-- ✅ Commands work during pause
-- ✅ First chat message displays
-- ✅ Automatic warnings (30s/10s)
-- ✅ Instant anti-cheat (85x faster)
-- ✅ Professional match workflow
-
-</td>
-</tr>
-</table>
+| Command        | Description              |
+|----------------|--------------------------|
+| `/reloadmaps`  | Reload map configuration |
+| `/ktpconfig`   | View current CVARs       |
+| `/ktpdebug`    | Toggle debug mode        |
+| `/cvar`        | Manual cvar check        |
 
 ---
 
 ## 🔗 GitHub Repositories
 
 ### KTP Core Stack
-- **[KTP-ReHLDS](https://github.com/afraznein/KTP-ReHLDS)** - Layer 1: Custom engine
-- **[KTP-ReAPI](https://github.com/afraznein/KTP-ReAPI)** - Layer 2: Custom module
-- **[KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)** - Layer 3: Anti-cheat
-- **[KTPFileChecker](https://github.com/afraznein/KTPFileChecker)** - Layer 3: File validation (Private)
-- **[KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler)** - Layer 4: Match management
+
+| Layer    | Repository                                              | Description                        |
+|----------|---------------------------------------------------------|------------------------------------|
+| Engine   | [KTP-ReHLDS](https://github.com/afraznein/KTPReHLDS)    | Custom ReHLDS with extension loader|
+| SDK      | [KTP HLSDK](https://github.com/afraznein/KTPhlsdk)      | SDK headers with callback support  |
+| Platform | [KTPAMXX](https://github.com/afraznein/KTPAMXX)         | AMX Mod X extension mode fork      |
+| Bridge   | [KTP-ReAPI](https://github.com/afraznein/KTPReAPI)      | ReAPI extension mode fork          |
+| HTTP     | [KTP AMXX Curl](https://github.com/afraznein/KTPAMXXCurl)| Non-blocking HTTP module          |
+
+### Application Plugins
+
+| Plugin        | Repository                                                      | Description                   |
+|---------------|-----------------------------------------------------------------|-------------------------------|
+| Match Handler | [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler) | Match workflow + pause system |
+| Cvar Checker  | [KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)   | Client cvar enforcement       |
+| File Checker  | [KTPFileChecker](https://github.com/afraznein/KTPFileChecker)   | File consistency (Private)    |
+| Admin Audit   | [KTPAdminAudit](https://github.com/afraznein/KTPAdminAudit)     | Admin action logging          |
 
 ### Supporting Infrastructure
-- **[Discord Relay](https://github.com/afraznein/discord-relay)** - Cloud Run webhook proxy
-- **[KTPHLTVKicker](https://github.com/afraznein/KTPHLTVKicker)** - HLTV spectator management
+
+| Service       | Repository                                                  | Description               |
+|---------------|-------------------------------------------------------------|---------------------------|
+| Discord Relay | [discord-relay](https://github.com/afraznein/discord-relay) | Cloud Run webhook proxy   |
+| HLTV Kicker   | [KTPHLTVKicker](https://github.com/afraznein/KTPHLTVKicker)  | HLTV spectator management |
 
 ### Upstream Projects
-- **[ReAPI](https://github.com/s1lentq/reapi)** - Original ReAPI module
-- **[ReHLDS](https://github.com/dreamstalker/rehlds)** - Original ReHLDS engine
+
+| Project   | Repository                                         | Description                 |
+|-----------|----------------------------------------------------|-----------------------------|
+| ReHLDS    | [rehlds](https://github.com/dreamstalker/rehlds)   | Original ReHLDS             |
+| ReAPI     | [reapi](https://github.com/s1lentq/reapi)          | Original ReAPI module       |
+| AMX Mod X | [amxmodx](https://github.com/alliedmodders/amxmodx)| Original scripting platform |
+| AmxxCurl  | [AmxxCurl](https://github.com/Polarhigh/AmxxCurl)  | Original cURL module        |
 
 ---
 
@@ -846,13 +1244,21 @@ Players see real-time MM:SS countdown while game is frozen
 
 ## 🙏 Acknowledgments
 
-- **s1lentq** - Original ReAPI and ReGameDLL development
+**KTP Stack Development:**
+- **Nein_** - Architecture design, all KTP forks and modifications
+
+**Upstream Projects:**
 - **dreamstalker** - Original ReHLDS project
-- **ReHLDS Team** - Engine enhancements and architecture
-- **ReAPI Team** - Module framework and hooks system
-- **AMX Mod X Team** - Scripting platform
-- **SubStream** - Original Force CAL Open Settings (FCOS)
+- **s1lentq** - Original ReAPI and ReGameDLL
+- **AlliedModders** - AMX Mod X platform
+- **Polarhigh** - Original AmxxCurl module
+- **SubStream** - Original FCOS cvar checker
+- **ConnorMcLeod** - Original file checker code
+- **Valve** - GoldSrc engine and Half-Life SDK
+
+**Community:**
 - **KTP Community** - Testing, feedback, and competitive insights
+- **Day of Defeat Community** - Continued support for competitive play
 
 ---
 
@@ -860,6 +1266,8 @@ Players see real-time MM:SS countdown while game is frozen
 
 **Professional-grade match management for Day of Defeat**
 
-*Real-time pause controls • Instant anti-cheat • Discord integration*
+*No Metamod Required • Real-time Pause Controls • Instant Anti-Cheat • Discord Integration*
+
+*Cross-platform: Windows + Linux*
 
 </div>
