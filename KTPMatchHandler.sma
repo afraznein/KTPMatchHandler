@@ -1798,14 +1798,11 @@ public plugin_init() {
     ktp_sync_config_from_cvars();
 
     reset_captains();
-
-    // Announce on load
-    ktp_banner_enabled();
-    // NOTE: Config loading moved to plugin_cfg() to avoid duplicate loads
-    // plugin_cfg() runs after server.cfg, which is the correct time to load configs
 }
 
 public plugin_cfg() {
+    // Announce on load
+    ktp_banner_enabled();
     get_mapname(g_currentMap, charsmax(g_currentMap));  // Cache map name
     ktp_sync_config_from_cvars();
     load_map_mappings();
