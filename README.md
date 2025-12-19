@@ -1,8 +1,8 @@
 # KTP Match Handler
 
-**Version 0.5.2** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.9.0** - Advanced competitive match management system for Day of Defeat servers
 
-A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, match type differentiation, half tracking, and comprehensive logging capabilities.
+A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
 > **Compatible with both AMX Mod X and KTP AMX** - The plugin automatically detects the correct configs directory.
 
@@ -12,13 +12,24 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 
 ### Match Management
 - **Structured Match Workflow**: Pre-start → Pending → Ready-up → LIVE
-- **Match Type System**: Competitive, Scrim, and 12-man modes with distinct configs
+- **Match Type System**: Competitive, Scrim, 12-man, and Draft modes with distinct configs
+- **Season Control**: Password-protected season toggle - disable competitive matches off-season
+- **Match Password Protection**: Competitive matches require password entry
 - **Half Tracking**: Automatic 1st/2nd half detection with map rotation adjustment
+- **Match Context Persistence**: Match ID, pause counts, and tech budget survive map changes via localinfo
+- **Unique Match IDs**: Format `KTP-{timestamp}-{mapname}` for stats correlation
 - **Captain System**: Team confirmation before ready-up phase
 - **Ready-Up System**: Configurable player count per team (default: 6)
 - **Auto-Config Execution**: Map-specific AND match-type-specific server settings
 - **Player Roster Logging**: Full team rosters with SteamIDs and IPs logged to Discord
 - **Match State Tracking**: Full visibility into match progress
+
+### HLStatsX Integration (v0.7.0+)
+- **Stats Separation**: Clean separation of warmup vs match stats
+- **Match Context**: All stats logged with `(matchid "xxx")` property
+- **Automatic Flushing**: Stats flushed at half/match end
+- **KTP_MATCH_START/END**: Log markers for HLStatsX daemon parsing
+- **Per-Match Tracking**: Same match ID persists across both halves
 
 ### Advanced Pause System (ReAPI Native)
 - **ReAPI Pause Integration**: Direct pause control via `rh_set_server_pause()` - bypasses engine
@@ -127,7 +138,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 ### Starting a Match
 
 ```
-Player types: /start
+Player types: /start <password>    (password required for competitive)
      ↓
 Both teams type: /confirm (one captain per team)
      ↓
@@ -137,6 +148,11 @@ Match goes LIVE! (5-second countdown)
      ↓
 Map config auto-executes
 ```
+
+**Alternative Match Types (no password required):**
+- `/draft` - Draft match (always available, competitive config)
+- `/12man` - 12-man match (casual play)
+- `/scrim` - Scrim match (practice)
 
 ### Pause System
 
@@ -179,11 +195,16 @@ Team 2: /confirmunpause   ← Confirms (both teams must agree)
 
 #### Match Control
 ```
-/start, /startmatch     Initiate pre-start sequence
+/start <pw>, /ktp <pw>  Initiate competitive match (password required)
+/draft                  Initiate draft match (no password, always available)
+/12man                  Initiate 12-man match (no password)
+/scrim                  Initiate scrim match (no password)
 /confirm                Confirm team ready for start
 /notconfirm             Remove team confirmation
-/ready, /ktp            Mark yourself ready
+/ready                  Mark yourself ready
 /notready               Mark yourself not ready
+/whoneedsready          Show unready players with Steam IDs
+/unready                Alias for /whoneedsready
 /status                 View detailed match status
 /prestatus              View pre-start confirmation status
 /cancel                 Cancel match/pre-start
@@ -200,12 +221,23 @@ Team 2: /confirmunpause   ← Confirms (both teams must agree)
 /cancelpause            Cancel disconnect auto-pause
 ```
 
+#### Team Names & Score
+```
+/setteamallies <name>   Set custom Allies team name
+/setteamaxis <name>     Set custom Axis team name
+/teamnames              Show current team names
+/resetteamnames         Reset to default (Allies/Axis)
+/score                  Show current match score
+```
+
 #### Admin Commands
 ```
 ktp_pause               Server/RCON pause (same as /pause)
 /reloadmaps             Reload map configuration
 /ktpconfig              View current CVARs
 /ktpdebug               Toggle debug mode
+/ktpseason              Check season status
+/ktpseason <pw>         Toggle season active/inactive (admin password)
 ```
 
 ---
@@ -251,9 +283,11 @@ server_cmd("pause");         // Requires pausable 1
 
 | Type | Limit | Duration | Extensions | Command | Budget |
 |------|-------|----------|------------|---------|--------|
-| **Tactical** | 1 per team/half | 5 min | 2× 2 min | `/pause` | No |
-| **Technical** | Unlimited | Uses budget | Unlimited | `/tech` | 5 min/team |
+| **Tactical** | 1 per team/match | 5 min | 2× 2 min | `/pause` | No |
+| **Technical** | Unlimited | Uses budget | Unlimited | `/tech` | 5 min/team/match |
 | **Disconnect** | Auto | Uses budget | Unlimited | Auto | From tech |
+
+> **Note (v0.7.1):** Tactical pause limits and tech budgets are now per-MATCH, not per-half. Teams cannot reset their pause allowance by going to 2nd half.
 
 ### Pause Flow
 
@@ -556,6 +590,58 @@ static bool:warned_10sec = false;
 
 ## 📝 Changelog
 
+### v0.7.1 (2025-12-18) - Match Context Persistence & Per-Match Pause Limits
+
+**Added:**
+- ✅ **Match context persistence** - Match ID, pause counts, and tech budget survive map changes via localinfo
+- ✅ **Per-match pause limits** - Tactical pauses and tech budget now persist across halves (teams can't reset by going to 2nd half)
+- ✅ **2nd half announcements** - Shows match ID and pause usage status when continuing a match
+
+**Fixed:**
+- 🔧 **Match ID restoration** - Match ID now properly restored when 2nd half starts
+- 🔧 **Pause count persistence** - Pause counts carry over from 1st to 2nd half
+- 🔧 **Tech budget persistence** - Remaining tech budget carries over to 2nd half
+
+**Technical:**
+- Uses localinfo keys: `_ktp_match_id`, `_ktp_half_pending`, `_ktp_pause_allies/axis`, `_ktp_tech_allies/axis`
+- Context saved in `handle_map_change()`, restored in `plugin_cfg()`
+
+### v0.7.0 (2025-12-17) - HLStatsX Stats Integration
+
+**Added:**
+- ✅ **HLStatsX integration** - Clean separation of warmup vs match stats
+- ✅ **DODX natives** - `dodx_flush_all_stats()`, `dodx_reset_all_stats()`, `dodx_set_match_id()`
+- ✅ **KTP_MATCH_START** - Log marker for HLStatsX daemon parsing
+- ✅ **KTP_MATCH_END** - Log marker for HLStatsX daemon parsing
+- ✅ **Match ID in stats** - `(matchid "xxx")` property in weaponstats log lines
+
+**Improved:**
+- 🎯 **Automatic stats flushing** - Stats flushed at half/match end with appropriate matchid
+- 🎯 **Warmup separation** - Warmup stats logged without matchid before match starts
+
+**Requires:**
+- DODX module with HLStatsX natives (KTPAMXX)
+- HLStatsX daemon with KTP event handlers (KTPHLStatsX)
+
+### v0.6.0 (2025-12-16) - Match ID System & Ready Enhancements
+
+**Added:**
+- ✅ **Unique match ID system** - Format: `KTP-{timestamp}-{mapname}`
+- ✅ **Match ID persistence** - Same ID for both halves (MySQL/stats correlation)
+- ✅ **Match ID in Discord** - Displayed in code block notifications
+- ✅ **`/whoneedsready` command** - Shows unready players with Steam IDs
+- ✅ **`/unready` alias** - Alias for `/whoneedsready`
+- ✅ **Steam IDs in announcements** - READY/NOTREADY messages include Steam IDs
+- ✅ **Periodic unready reminders** - Every 30 seconds during ready phase
+
+**Improved:**
+- 🎯 **Half tracking** - Logs match_id in HALF_START and HALF_END events
+- 🎯 **Streamlined flow** - Match goes LIVE immediately when all ready (no pause)
+
+**Removed:**
+- ❌ Automatic pause during ready phase
+- ❌ Unpause countdown at match start
+
 ### v0.5.2 (2025-12-03) - KTP AMX Compatibility
 
 **Fixed:**
@@ -815,10 +901,10 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.5.2
-- **Status**: Stable
+- **Current Version**: v0.9.0
+- **Status**: Stable (Awaiting VPS Testing for HLStatsX integration)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.0
-- **Last Updated**: December 3, 2025
+- **Last Updated**: December 18, 2025
 - **Platforms**: Day of Defeat 1.3
 
 ---
@@ -827,14 +913,18 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.5.2                       ║
+║             KTP MATCH HANDLER v0.9.0                       ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
-║  /start         Start match workflow                       ║
+║  /start <pw>    Start competitive match (password req)     ║
+║  /draft         Start draft match (no password)            ║
+║  /12man         Start 12-man match (no password)           ║
+║  /scrim         Start scrim match (no password)            ║
 ║  /confirm       Confirm team ready                         ║
 ║  /ready         Mark yourself ready                        ║
 ║  /status        View match status                          ║
+║  /score         View current match score                   ║
 ║                                                            ║
 ║  PAUSE CONTROL                                             ║
 ║  /pause         Tactical pause (5-sec countdown)           ║
@@ -843,16 +933,17 @@ For support and questions, please open an issue on GitHub.
 ║  /confirmunpause Confirm unpause (other team)              ║
 ║  /extend        Add 2 minutes (max 2×)                     ║
 ║                                                            ║
-║  PAUSE FEATURES                                            ║
-║  ⏱️  Real-time MM:SS countdown                             ║
-║  📊 HUD updates every frame (ReAPI)                        ║
-║  💬 Server messages work (rcon say, events)                ║
-║  ⏸️  Complete time freeze (physics stop)                   ║
-║  🔔 Auto-warnings at 30s and 10s                           ║
-║  ⏲️  Auto-unpause when timer expires                       ║
+║  ADMIN                                                     ║
+║  /ktpseason     Check/toggle season status (admin pw)      ║
+║                                                            ║
+║  MATCH TYPES                                               ║
+║  COMPETITIVE    /start, /ktp (password + season required)  ║
+║  DRAFT          /draft (always allowed, no Discord)        ║
+║  12MAN          /12man (always allowed, no Discord)        ║
+║  SCRIM          /scrim (always allowed, no Discord)        ║
 ╚════════════════════════════════════════════════════════════╝
 ```
 
 ---
 
-**KTP Match Handler v0.5.2** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️
+**KTP Match Handler v0.9.0** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️

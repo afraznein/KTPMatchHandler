@@ -40,6 +40,15 @@ if %ERRORLEVEL% EQU 0 (
     echo BUILD SUCCESSFUL!
     echo ========================================
     echo Output: %OUTPUT%\KTPMatchHandler.amxx
+    echo.
+    echo Copying to staging folder...
+    set "STAGING=N:\Nein_\KTP DoD Server\dod\addons\ktpamx\plugins"
+    copy /Y "%OUTPUT%\KTPMatchHandler.amxx" "%STAGING%\KTPMatchHandler.amxx"
+    if %ERRORLEVEL% EQU 0 (
+        echo Staged: %STAGING%\KTPMatchHandler.amxx
+    ) else (
+        echo WARNING: Failed to copy to staging folder
+    )
 ) else (
     echo.
     echo ========================================
