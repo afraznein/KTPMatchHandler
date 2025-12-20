@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.1] - 2025-12-20
+
+### Added
+- **Discord Embed Roster** - Player roster now displays as a rich embed
+  - Title shows date + team names: "12/20/2025 Team A vs Team B"
+  - Teams shown in side-by-side inline fields with player counts
+  - Players listed with bullet format: "- PlayerName (STEAM_0:1:xxx)"
+  - Footer shows Match ID and Server hostname
+- **Periodic Score Saving** - Scores saved to localinfo every 30 seconds during 1st half
+  - `task_periodic_score_save()` runs during live 1st half
+  - Ensures score persistence even if `plugin_end` doesn't run (ReHLDS extension mode)
+  - New log event: `event=PERIODIC_SCORE_SAVE allies=X axis=Y half=1`
+- **Score Sync to Game Ticks** - `msg_TeamScore` hook persists scores on every game scoring tick
+  - Synced to `mp_clan_scoring_delay` (default 30 seconds)
+  - Immediate persistence when game updates scores
+
+### Fixed
+- **Discord Message Formatting** - Removed code block wrapper so markdown renders properly
+  - Bold text (`**text**`) and newlines now display correctly
+- **Score Persistence in ReHLDS Extension Mode** - Scores now persist across map changes
+  - Root cause: `plugin_end()` doesn't reliably fire in extension mode
+  - Solution: Proactive score saving every game tick + periodic backup
+- **Newline Escaping** - Proper JSON escape sequences for embed field values
+
+### Verified
+- **Full Match Flow Tested on VPS** - 1st half → map change → 2nd half restoration
+  - Scores correctly restored (2-5 from 1st half)
+  - Team names preserved across map change
+  - Match ID persisted across halves
+  - Tech budget and pause counts preserved
+
+### Technical
+- New function: `escape_for_json()` - Handles quotes, backslashes, and newlines for JSON strings
+- New function: `send_discord_embed_raw()` - Sends raw JSON payload for embeds
+- New function: `start_periodic_score_save()` / `stop_periodic_score_save()` - Task management
+- New task ID: `g_taskScoreSaveId` (55612) for periodic score saves
+- Global buffers: `g_rosterAlliesEscaped`, `g_rosterAxisEscaped`, `g_rosterEmbedPayload`, `g_serverHostnameEscaped`
+
+---
+
 ## [0.9.0] - 2025-12-18
 
 ### Added
@@ -323,6 +363,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+[0.9.1]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/afraznein/KTPMatchHandler/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/afraznein/KTPMatchHandler/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/afraznein/KTPMatchHandler/compare/v0.7.0...v0.7.1

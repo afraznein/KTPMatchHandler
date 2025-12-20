@@ -1,9 +1,9 @@
-/* KTP Match Handler v0.9.0
+/* KTP Match Handler v0.9.1
  * Comprehensive match management system with ReAPI pause integration
  *
  * AUTHOR: Nein_
- * VERSION: 0.9.0
- * DATE: 2025-12-18
+ * VERSION: 0.9.1
+ * DATE: 2025-12-20
  *
  * ========== MAJOR FEATURES ==========
  * - ReAPI Pause Integration: Direct pause control via rh_set_server_pause()
@@ -65,6 +65,18 @@
  *   ktp_discord_ini "<configsdir>/discord.ini" - Discord config (auto-detected path)
  *
  * ========== CHANGELOG ==========
+ * v0.9.1 (2025-12-20) - Discord Embed Roster & Score Persistence Fix
+ *   + ADDED: Discord embed roster - Teams displayed in side-by-side inline fields
+ *   + ADDED: Match ID shown in roster embed footer
+ *   + ADDED: Periodic score saving (every 30s) during 1st half to localinfo
+ *   + ADDED: task_periodic_score_save() for robust score persistence
+ *   * FIXED: Discord message formatting - removed code block wrapper so markdown renders
+ *   * FIXED: Score persistence when plugin_end doesn't run (ReHLDS extension mode)
+ *   * FIXED: Newline escaping in Discord embed field values
+ *   + IMPROVED: Roster format now shows player name and SteamID on separate lines
+ *   + TECHNICAL: escape_for_json() function for proper JSON string escaping
+ *   + TECHNICAL: send_discord_embed_raw() for sending embed payloads
+ *
  * v0.7.1 (2025-12-18) - Match Context Persistence & Per-Match Pause Limits
  *   + ADDED: Match context persists across map change via localinfo
  *   + ADDED: Match ID, pause counts, and tech budget survive plugin reload for 2nd half
@@ -407,6 +419,21 @@ new bool: g_ready[33];
 // cURL headers (needs to be freed after use)
 new curl_slist:g_curlHeaders = SList_Empty;
 
+// ---------- Global buffers for stack-heavy functions ----------
+// These are declared globally instead of locally to avoid AMX stack overflow (16KB limit)
+// Discord message buffers
+new g_discordChannelIdBuf[64];
+new g_discordEscapedMsg[512];
+new g_discordPayload[768];
+new g_discordAuthHeader[192];
+// Roster buffers for Discord (embed format uses newlines between players)
+new g_rosterAllies[512];
+new g_rosterAxis[512];
+new g_rosterEmbedPayload[2048];  // Larger buffer for embed JSON
+// Unready player lists
+new g_unreadyAllies[512];
+new g_unreadyAxis[512];
+
 // HUD
 new g_hudSync;
 
@@ -448,6 +475,9 @@ new g_pauseCountTeam[3];                    // index by teamId (1..2). Tactical 
 new g_autoReqLeft = 0;                      // seconds left for auto-request countdown (HUD)
 new bool: g_isTechPause = false;            // true if current pause is technical, false if tactical
 new g_techPauseStartTime = 0;               // systime when tech pause started (for budget tracking)
+new g_techPauseFrozenTime = 0;              // systime when owner did /resume (freezes budget at this point)
+new g_taskAutoConfirmId = 55611;            // task ID for auto-confirmunpause after 60s
+new g_autoConfirmLeft = 0;                  // seconds left until auto-confirmunpause
 new g_taskDisconnectCountdownId = 55608;    // task ID for disconnect countdown
 new g_disconnectCountdown = 0;              // seconds left in disconnect countdown
 new g_disconnectedPlayerName[32];           // name of player who disconnected
@@ -464,6 +494,7 @@ new g_prePauseReason[64];                   // Reason for pause (for logging)
 new g_prePauseInitiator[32];                // Who initiated the pause
 // Note: Pause timer ID not needed when using ReAPI hook (only for fallback)
 new g_taskPrePauseId = 55610;               // Task ID for pre-pause countdown
+new g_taskScoreSaveId = 55612;              // Task ID for periodic score saves to localinfo
 
 // ================= Utilities =================
 stock log_ktp(const fmt[], any:...) {
@@ -482,22 +513,59 @@ stock log_ktp(const fmt[], any:...) {
 
 // ================= MATCH SCORE TRACKING =================
 
-// Hook TeamScore message (DoD sends: byte TeamID, short Score)
+// Hook TeamScore message
+// HL engine TeamScore format: STRING teamName, SHORT score
 public msg_TeamScore() {
+    // Read team name (arg 1 is string in HL-based games)
+    new teamName[16];
+    get_msg_arg_string(1, teamName, charsmax(teamName));
+    new score = get_msg_arg_int(2);
+
+    // Debug logging - always log to understand message format
+    log_ktp("event=TEAMSCORE_RAW team_str='%s' score=%d matchLive=%d", teamName, score, g_matchLive);
+
     // Only track scores during live match
     if (!g_matchLive) return PLUGIN_CONTINUE;
 
-    new teamId = get_msg_arg_int(1);  // 1=Allies, 2=Axis
-    new score = get_msg_arg_int(2);   // Team's current total score
+    // Convert team name to team ID
+    new teamId = 0;
+    if (equal(teamName, "Allies")) {
+        teamId = 1;
+    } else if (equal(teamName, "Axis")) {
+        teamId = 2;
+    }
+
+    // If still no match, might be custom team name - check for our stored names
+    if (teamId == 0) {
+        if (equal(teamName, g_teamName[1])) {
+            teamId = 1;
+        } else if (equal(teamName, g_teamName[2])) {
+            teamId = 2;
+        }
+    }
 
     // Validate team ID
-    if (teamId != 1 && teamId != 2) return PLUGIN_CONTINUE;
+    if (teamId != 1 && teamId != 2) {
+        log_ktp("event=TEAMSCORE_UNKNOWN_TEAM team_str='%s'", teamName);
+        return PLUGIN_CONTINUE;
+    }
 
     // Store the score (DoD sends cumulative score, not delta)
     g_matchScore[teamId] = score;
 
-    // Log score update for debugging (optional - commented out to reduce spam)
-    // log_ktp("event=SCORE_UPDATE team=%d score=%d match_id=%s", teamId, score, g_matchId);
+    // If 1st half is live, persist scores to localinfo for 2nd half restoration
+    // This ensures scores are saved even if plugin_end doesn't run properly
+    if (g_matchLive && g_currentHalf == 1) {
+        new buf[16];
+        num_to_str(g_matchScore[1], buf, charsmax(buf));
+        set_localinfo(LOCALINFO_SCORE_TEAM1, buf);
+        num_to_str(g_matchScore[2], buf, charsmax(buf));
+        set_localinfo(LOCALINFO_SCORE_TEAM2, buf);
+    }
+
+    // Log score update for debugging
+    log_ktp("event=SCORE_UPDATE team=%d team_name='%s' score=%d match_id=%s half=%d",
+            teamId, teamName, score, g_matchId, g_currentHalf);
 
     return PLUGIN_CONTINUE;
 }
@@ -513,11 +581,73 @@ stock reset_match_scores() {
     copy(g_team2Name, charsmax(g_team2Name), g_teamName[2]);  // Team on Axis = Team 2
 }
 
+// Update match scores from dodx module (reads actual game scores)
+// Call this before any score calculations to ensure we have current values
+stock update_match_scores_from_dodx() {
+#if defined HAS_DODX
+    new alliesScore = dod_get_team_score(1);
+    new axisScore = dod_get_team_score(2);
+
+    // Only update if scores changed (avoid spam)
+    if (alliesScore != g_matchScore[1] || axisScore != g_matchScore[2]) {
+        g_matchScore[1] = alliesScore;
+        g_matchScore[2] = axisScore;
+        log_ktp("event=SCORE_FROM_DODX allies=%d axis=%d half=%d", alliesScore, axisScore, g_currentHalf);
+    }
+#endif
+}
+
 // Save first half scores (called at half time)
 stock save_first_half_scores() {
+    // First, get current scores from dodx
+    update_match_scores_from_dodx();
+
     // Save scores by team identity (team1 started as Allies, team2 started as Axis)
     g_firstHalfScore[1] = g_matchScore[1];  // Team 1's 1st half score (as Allies)
     g_firstHalfScore[2] = g_matchScore[2];  // Team 2's 1st half score (as Axis)
+
+    // Persist to localinfo for 2nd half restoration after map change
+    new buf[16];
+    num_to_str(g_firstHalfScore[1], buf, charsmax(buf));
+    set_localinfo(LOCALINFO_SCORE_TEAM1, buf);
+    num_to_str(g_firstHalfScore[2], buf, charsmax(buf));
+    set_localinfo(LOCALINFO_SCORE_TEAM2, buf);
+
+    log_ktp("event=FIRST_HALF_SCORES_SAVED team1=%d team2=%d (persisted to localinfo)", g_firstHalfScore[1], g_firstHalfScore[2]);
+}
+
+// Periodic score save task - saves scores to localinfo every 30 seconds during 1st half
+// This ensures scores are persisted even if plugin_end doesn't run properly on map change
+public task_periodic_score_save() {
+    // Only save during 1st half of a live match
+    if (!g_matchLive || g_currentHalf != 1)
+        return;
+
+    // Update scores from dodx and save to localinfo
+    update_match_scores_from_dodx();
+
+    // Persist to localinfo for 2nd half restoration
+    new buf[16];
+    num_to_str(g_matchScore[1], buf, charsmax(buf));
+    set_localinfo(LOCALINFO_SCORE_TEAM1, buf);
+    num_to_str(g_matchScore[2], buf, charsmax(buf));
+    set_localinfo(LOCALINFO_SCORE_TEAM2, buf);
+
+    log_ktp("event=PERIODIC_SCORE_SAVE allies=%d axis=%d half=%d", g_matchScore[1], g_matchScore[2], g_currentHalf);
+}
+
+// Start periodic score saving when match goes live
+stock start_periodic_score_save() {
+    if (g_currentHalf == 1) {
+        // Save scores every 30 seconds during 1st half
+        set_task(30.0, "task_periodic_score_save", g_taskScoreSaveId, _, _, "b");
+        log_ktp("event=PERIODIC_SCORE_SAVE_STARTED interval=30s");
+    }
+}
+
+// Stop periodic score saving
+stock stop_periodic_score_save() {
+    safe_remove_task(g_taskScoreSaveId);
 }
 
 stock announce_all(const fmt[], any:...) {
@@ -599,6 +729,31 @@ stock reset_team_names() {
     copy(g_teamName[2], charsmax(g_teamName[]), "Axis");
     copy(g_team1Name, charsmax(g_team1Name), "Allies");
     copy(g_team2Name, charsmax(g_team2Name), "Axis");
+}
+
+// Prompt all players on a team to set their team name (if still default)
+stock prompt_team_to_set_name(teamId) {
+    new defaultName[8], cmd[12];
+    if (teamId == 1) {
+        copy(defaultName, charsmax(defaultName), "Allies");
+        copy(cmd, charsmax(cmd), "/setallies");
+    } else if (teamId == 2) {
+        copy(defaultName, charsmax(defaultName), "Axis");
+        copy(cmd, charsmax(cmd), "/setaxis");
+    } else {
+        return;
+    }
+
+    // Only prompt if team name is still default
+    if (!equal(g_teamName[teamId], defaultName))
+        return;
+
+    // Send prompt to all players on this team
+    for (new i = 1; i <= MaxClients; i++) {
+        if (is_user_connected(i) && !is_user_bot(i) && get_user_team(i) == teamId) {
+            client_print(i, print_chat, "[KTP] Set your team name: %s <name>", cmd);
+        }
+    }
 }
 
 stock get_identity(id, name[], nameLen, authid[], authLen, ip[], ipLen, team[], teamLen) {
@@ -695,7 +850,14 @@ stock show_pause_hud_message(const pauseType[]) {
     new pausesX = pauses_left(2);
 
     // Calculate elapsed and remaining time
-    new elapsed = get_systime() - g_pauseStartTime;
+    // If tech pause budget is frozen (owner did /resume), use frozen time
+    new elapsed;
+    if (g_isTechPause && g_techPauseFrozenTime > 0) {
+        // Budget frozen - show frozen elapsed time
+        elapsed = g_techPauseFrozenTime - g_techPauseStartTime;
+    } else {
+        elapsed = get_systime() - g_pauseStartTime;
+    }
 
     // Cache CVAR values (static so they persist across calls, only lookup once per pause)
     static cachedExtSec = 0, cachedMaxExt = 0, lastPauseStart = 0;
@@ -710,23 +872,47 @@ stock show_pause_hud_message(const pauseType[]) {
 
     new totalDuration = g_pauseDurationSec + (g_pauseExtensions * cachedExtSec);
     new remaining = totalDuration - elapsed;
+    if (remaining < 0) remaining = 0;
 
     new elapsedMin = elapsed / 60;
     new elapsedSec = elapsed % 60;
     new remainMin = remaining / 60;
     new remainSec = remaining % 60;
 
-    // Clean minimalist design - centered and well-spaced
-    set_hudmessage(255, 255, 255, 0.35, 0.25, 0, 0.0, 0.6, 0.0, 0.0, -1);
+    // Build status line based on current state
+    new statusLine[128];
+    if (g_autoConfirmLeft > 0) {
+        // Waiting for other team to confirmunpause
+        new otherTeam = (g_pauseOwnerTeam == 1) ? 2 : 1;
+        new otherTeamName[32];
+        team_name_from_id(otherTeam, otherTeamName, charsmax(otherTeamName));
+        formatex(statusLine, charsmax(statusLine), "  Waiting: %s (%ds to auto-confirm)", otherTeamName, g_autoConfirmLeft);
+    } else if (g_unpauseRequested && !g_unpauseConfirmedOther) {
+        formatex(statusLine, charsmax(statusLine), "  /confirmunpause to resume");
+    } else if (!g_unpauseRequested) {
+        formatex(statusLine, charsmax(statusLine), "  /resume  |  /confirmunpause  |  /extend");
+    } else {
+        formatex(statusLine, charsmax(statusLine), "  Resuming...");
+    }
+
+    // Show FROZEN indicator if budget is locked
+    new frozenIndicator[16] = "";
+    if (g_isTechPause && g_techPauseFrozenTime > 0) {
+        copy(frozenIndicator, charsmax(frozenIndicator), " [LOCKED]");
+    }
+
+    // Clean minimalist design - LEFT side to avoid DoD's centered "Paused" text
+    set_hudmessage(255, 255, 255, 0.01, 0.25, 0, 0.0, 0.6, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "^n  == GAME PAUSED ==^n^n  Type: %s^n  By: %s^n^n  Elapsed: %d:%02d  |  Remaining: %d:%02d^n  Extensions: %d/%d^n^n  Pauses Left: A:%d X:%d^n^n  /resume  |  /confirmunpause  |  /extend^n",
+        "^n  == GAME PAUSED ==^n^n  Type: %s^n  By: %s^n^n  Elapsed: %d:%02d%s  |  Remaining: %d:%02d^n  Extensions: %d/%d^n^n  Pauses Left: A:%d X:%d^n^n%s^n",
         pauseType,
         g_lastPauseBy[0] ? g_lastPauseBy : "Server",
-        elapsedMin, elapsedSec,
+        elapsedMin, elapsedSec, frozenIndicator,
         remainMin, remainSec,
         g_pauseExtensions, cachedMaxExt,
-        pausesA, pausesX);
+        pausesA, pausesX,
+        statusLine);
 }
 
 stock setup_auto_unpause_request() {
@@ -793,49 +979,58 @@ stock send_discord_with_hostname(const message[]) {
 }
 
 stock send_discord_message(const message[]) {
+    // Debug: Log that we're attempting to send
+    log_ktp("event=DISCORD_SEND_ATTEMPT msg='%.64s...' disabled=%d", message, g_disableDiscord);
+
     // Skip Discord if disabled (scrim/12man mode)
-    if (g_disableDiscord) return;
-
-    // Get the appropriate channel ID for the current match type
-    new channelId[64];
-    get_discord_channel_id(channelId, charsmax(channelId));
-
-    // Check if Discord is configured (from INI)
-    if (!g_discordRelayUrl[0] || !channelId[0] || !g_discordAuthSecret[0]) {
-        // Discord not configured, skip silently
+    if (g_disableDiscord) {
+        log_ktp("event=DISCORD_SKIPPED reason='disabled'");
         return;
     }
 
-    // Escape special characters for JSON
-    new escapedMsg[512];
+    // Get the appropriate channel ID for the current match type
+    // NOTE: Using global buffers (g_discord*) to avoid AMX stack overflow (16KB limit)
+    get_discord_channel_id(g_discordChannelIdBuf, charsmax(g_discordChannelIdBuf));
+
+    // Check if Discord is configured (from INI)
+    if (!g_discordRelayUrl[0] || !g_discordChannelIdBuf[0] || !g_discordAuthSecret[0]) {
+        // Discord not configured, log which field is missing
+        log_ktp("event=DISCORD_NOT_CONFIGURED url=%d channel=%d auth=%d",
+                g_discordRelayUrl[0] ? 1 : 0,
+                g_discordChannelIdBuf[0] ? 1 : 0,
+                g_discordAuthSecret[0] ? 1 : 0);
+        return;
+    }
+
+    // Escape special characters for JSON (using global buffer)
     new msgLen = strlen(message);
     new j = 0;
     for (new i = 0; i < msgLen; i++) {
         // Ensure we have room for escape sequence (2 chars) + null terminator
-        if (j >= charsmax(escapedMsg) - 3) break;
+        if (j >= charsmax(g_discordEscapedMsg) - 3) break;
 
         // Handle special characters that need escaping
         switch (message[i]) {
-            case '"': { escapedMsg[j++] = 92; escapedMsg[j++] = '"'; }  // 92 = backslash
-            case 92: { escapedMsg[j++] = 92; escapedMsg[j++] = 92; }    // backslash
-            case 10: { escapedMsg[j++] = 92; escapedMsg[j++] = 'n'; }   // newline
-            case 13: { escapedMsg[j++] = 92; escapedMsg[j++] = 'r'; }   // carriage return
-            case 9: { escapedMsg[j++] = 92; escapedMsg[j++] = 't'; }    // tab
+            case '"': { g_discordEscapedMsg[j++] = 92; g_discordEscapedMsg[j++] = '"'; }  // 92 = backslash
+            case 92: { g_discordEscapedMsg[j++] = 92; g_discordEscapedMsg[j++] = 92; }    // backslash
+            case 10: { g_discordEscapedMsg[j++] = 92; g_discordEscapedMsg[j++] = 'n'; }   // newline
+            case 13: { g_discordEscapedMsg[j++] = 92; g_discordEscapedMsg[j++] = 'r'; }   // carriage return
+            case 9: { g_discordEscapedMsg[j++] = 92; g_discordEscapedMsg[j++] = 't'; }    // tab
             default: {
                 // Copy character as-is if printable, skip control chars
                 if (message[i] >= 32 || message[i] == 10 || message[i] == 13 || message[i] == 9) {
-                    escapedMsg[j++] = message[i];
+                    g_discordEscapedMsg[j++] = message[i];
                 }
             }
         }
     }
-    escapedMsg[j] = EOS;
+    g_discordEscapedMsg[j] = EOS;
 
-    // Build JSON payload
-    new payload[768];
-    formatex(payload, charsmax(payload),
-        "{^"channelId^":^"%s^",^"content^":^"```[KTP] %s```^"}",
-        channelId, escapedMsg);
+    // Build JSON payload (using global buffer)
+    // Note: No code block wrapper - let Discord render markdown formatting
+    formatex(g_discordPayload, charsmax(g_discordPayload),
+        "{^"channelId^":^"%s^",^"content^":^"[KTP] %s^"}",
+        g_discordChannelIdBuf, g_discordEscapedMsg);
 
     // Create cURL handle
     new CURL:curl = curl_easy_init();
@@ -849,20 +1044,26 @@ stock send_discord_message(const message[]) {
         // Set URL from INI config
         curl_easy_setopt(curl, CURLOPT_URL, g_discordRelayUrl);
 
+        // Disable SSL verification (Linux servers may not have CA bundle configured)
+        // This is acceptable since we're connecting to our own trusted Discord relay
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+
         // Set headers
         g_curlHeaders = curl_slist_append(SList_Empty, "Content-Type: application/json");
 
-        new authHeader[192];
-        formatex(authHeader, charsmax(authHeader), "X-Relay-Auth: %s", g_discordAuthSecret);
-        g_curlHeaders = curl_slist_append(g_curlHeaders, authHeader);
+        formatex(g_discordAuthHeader, charsmax(g_discordAuthHeader), "X-Relay-Auth: %s", g_discordAuthSecret);
+        g_curlHeaders = curl_slist_append(g_curlHeaders, g_discordAuthHeader);
 
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_curlHeaders);
 
-        // Set POST data
-        curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, payload);
+        // Set POST data (using global buffer)
+        curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_discordPayload);
 
         // Set timeout (5 seconds)
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5);
+
+        // Debug: Log the request
+        log_ktp("event=DISCORD_CURL_SEND url='%s' channel='%s'", g_discordRelayUrl, g_discordChannelIdBuf);
 
         // Perform request asynchronously (non-blocking)
         curl_easy_perform(curl, "discord_callback");
@@ -874,10 +1075,13 @@ stock send_discord_message(const message[]) {
 }
 
 public discord_callback(CURL:curl, CURLcode:code) {
+    log_ktp("event=DISCORD_CALLBACK code=%d", _:code);
     if (code != CURLE_OK) {
         new error[128];
         curl_easy_strerror(code, error, charsmax(error));
         log_ktp("event=DISCORD_ERROR curl_code=%d error='%s'", _:code, error);
+    } else {
+        log_ktp("event=DISCORD_SUCCESS");
     }
     // Cleanup curl handle
     curl_easy_cleanup(curl);
@@ -889,9 +1093,32 @@ public discord_callback(CURL:curl, CURLcode:code) {
     }
 }
 
+// Escape a string for JSON string value (handles quotes, backslashes, newlines)
+stock escape_for_json(const input[], output[], maxlen) {
+    new j = 0;
+    new inputLen = strlen(input);
+    for (new i = 0; i < inputLen && j < maxlen - 2; i++) {
+        switch (input[i]) {
+            case '"': { output[j++] = 92; output[j++] = '"'; }   // escape quote
+            case 92:  { output[j++] = 92; output[j++] = 92; }    // escape backslash
+            case 10:  { output[j++] = 92; output[j++] = 'n'; }   // escape newline
+            case 13:  { } // skip carriage return
+            default:  { output[j++] = input[i]; }
+        }
+    }
+    output[j] = EOS;
+}
+
+// Global buffers for escaped roster strings (avoid stack overflow)
+new g_rosterAlliesEscaped[768];
+new g_rosterAxisEscaped[768];
+new g_serverHostnameEscaped[128];
+
 stock send_player_roster_to_discord() {
-    // Build player roster with teams, names, SteamIDs, and IPs
-    new alliesRoster[1024], axisRoster[1024];
+    // Build player roster with teams using embed format
+    // NOTE: Using global buffers (g_roster*) to avoid AMX stack overflow (16KB limit)
+    g_rosterAllies[0] = EOS;
+    g_rosterAxis[0] = EOS;
     new alliesCount = 0, axisCount = 0;
 
     // Collect all connected players
@@ -901,54 +1128,109 @@ stock send_player_roster_to_discord() {
     for (new i = 0; i < pnum; i++) {
         new id = players[i];
 
-        new name[32], authid[44], ip[32], teamId;
+        new name[32], authid[44], teamId;
         get_user_name(id, name, charsmax(name));
         get_user_authid(id, authid, charsmax(authid));
-        get_user_ip(id, ip, charsmax(ip), 1);
         teamId = get_user_team(id);
 
-        // Format player entry
-        new entry[128];
-        formatex(entry, charsmax(entry), "%s [%s | %s]", name, authid, ip);
+        // Format player entry with bullet point, name, and steamid in parens
+        // Using actual newline char (10) - will be escaped to \n for JSON later
+        new entry[96];
+        formatex(entry, charsmax(entry), "- %s (%s)", name, authid);
 
         // Add to appropriate team roster
         if (teamId == 1) { // Allies
-            new currentLen = strlen(alliesRoster);
+            new currentLen = strlen(g_rosterAllies);
             new entryLen = strlen(entry);
-            new requiredSpace = entryLen + (alliesCount > 0 ? 2 : 0); // +2 for ", "
+            new requiredSpace = entryLen + (alliesCount > 0 ? 1 : 0); // +1 for newline separator
 
-            if (currentLen + requiredSpace < charsmax(alliesRoster)) {
+            if (currentLen + requiredSpace < charsmax(g_rosterAllies)) {
                 if (alliesCount > 0) {
-                    add(alliesRoster, charsmax(alliesRoster), ", ");
+                    // Add newline separator between players
+                    new sep[4];
+                    formatex(sep, charsmax(sep), "%c", 10);
+                    add(g_rosterAllies, charsmax(g_rosterAllies), sep);
                 }
-                add(alliesRoster, charsmax(alliesRoster), entry);
+                add(g_rosterAllies, charsmax(g_rosterAllies), entry);
                 alliesCount++;
             }
         } else if (teamId == 2) { // Axis
-            new currentLen = strlen(axisRoster);
+            new currentLen = strlen(g_rosterAxis);
             new entryLen = strlen(entry);
-            new requiredSpace = entryLen + (axisCount > 0 ? 2 : 0); // +2 for ", "
+            new requiredSpace = entryLen + (axisCount > 0 ? 1 : 0);
 
-            if (currentLen + requiredSpace < charsmax(axisRoster)) {
+            if (currentLen + requiredSpace < charsmax(g_rosterAxis)) {
                 if (axisCount > 0) {
-                    add(axisRoster, charsmax(axisRoster), ", ");
+                    // Add newline separator between players
+                    new sep[4];
+                    formatex(sep, charsmax(sep), "%c", 10);
+                    add(g_rosterAxis, charsmax(g_rosterAxis), sep);
                 }
-                add(axisRoster, charsmax(axisRoster), entry);
+                add(g_rosterAxis, charsmax(g_rosterAxis), entry);
                 axisCount++;
             }
         }
     }
 
-    // Build and send roster message
-    new rosterMsg[2048];
-    formatex(rosterMsg, charsmax(rosterMsg),
-        "👥 **Player Roster**\n**Allies (%d):** %s\n**Axis (%d):** %s",
-        alliesCount, alliesRoster[0] ? alliesRoster : "None",
-        axisCount, axisRoster[0] ? axisRoster : "None");
+    // Escape roster strings for JSON (converts newlines to \n, quotes to \", etc.)
+    escape_for_json(g_rosterAllies[0] ? g_rosterAllies : "No players", g_rosterAlliesEscaped, charsmax(g_rosterAlliesEscaped));
+    escape_for_json(g_rosterAxis[0] ? g_rosterAxis : "No players", g_rosterAxisEscaped, charsmax(g_rosterAxisEscaped));
+    escape_for_json(g_serverHostname, g_serverHostnameEscaped, charsmax(g_serverHostnameEscaped));
 
-    send_discord_message(rosterMsg);
+    // Build title: "MM/DD/YYYY TeamA vs TeamB"
+    new dateStr[16];
+    get_time("%m/%d/%Y", dateStr, charsmax(dateStr));
+    new embedTitle[128];
+    formatex(embedTitle, charsmax(embedTitle), "%s %s vs %s", dateStr, g_teamName[1], g_teamName[2]);
 
-    log_ktp("event=ROSTER_LOGGED allies=%d axis=%d", alliesCount, axisCount);
+    // Escape title for JSON
+    new embedTitleEscaped[160];
+    escape_for_json(embedTitle, embedTitleEscaped, charsmax(embedTitleEscaped));
+
+    // Build Discord embed JSON payload
+    // Embed with two inline fields (teams side by side), match ID and server in footer
+    formatex(g_rosterEmbedPayload, charsmax(g_rosterEmbedPayload),
+        "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":3447003,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true}],^"footer^":{^"text^":^"Match: %s | Server: %s^"}}]}",
+        g_discordChannelIdBuf,
+        embedTitleEscaped,
+        g_teamName[1], alliesCount, g_rosterAlliesEscaped,
+        g_teamName[2], axisCount, g_rosterAxisEscaped,
+        g_matchId, g_serverHostnameEscaped);
+
+    // Send embed via curl (similar to send_discord_message but with embed payload)
+    send_discord_embed_raw(g_rosterEmbedPayload);
+
+    log_ktp("event=ROSTER_LOGGED allies=%d axis=%d match_id=%s", alliesCount, axisCount, g_matchId);
+}
+
+// Send raw JSON payload to Discord (for embeds)
+stock send_discord_embed_raw(const payload[]) {
+#if defined HAS_CURL
+    if (g_disableDiscord) return;
+    if (!g_discordRelayUrl[0] || !g_discordChannelIdBuf[0] || !g_discordAuthSecret[0]) return;
+
+    new CURL:curl = curl_easy_init();
+    if (curl) {
+        if (g_curlHeaders != SList_Empty) {
+            curl_slist_free_all(g_curlHeaders);
+            g_curlHeaders = SList_Empty;
+        }
+
+        curl_easy_setopt(curl, CURLOPT_URL, g_discordRelayUrl);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+
+        g_curlHeaders = curl_slist_append(SList_Empty, "Content-Type: application/json");
+        formatex(g_discordAuthHeader, charsmax(g_discordAuthHeader), "X-Relay-Auth: %s", g_discordAuthSecret);
+        g_curlHeaders = curl_slist_append(g_curlHeaders, g_discordAuthHeader);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_curlHeaders);
+
+        curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, payload);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5);
+
+        log_ktp("event=DISCORD_EMBED_SEND");
+        curl_easy_perform(curl, "discord_callback");
+    }
+#endif
 }
 
 // NOTE: Removed unused Discord wrapper functions:
@@ -1391,6 +1673,11 @@ public countdown_tick() {
             log_ktp("event=TECH_BUDGET_DEDUCT team=%d elapsed=%d budget_before=%d budget_after=%d",
                     teamId, techPauseElapsed, budgetBefore, g_techBudget[teamId]);
 
+            // Persist tech budget to localinfo for 2nd half restoration
+            if (g_currentHalf == 1) {
+                save_tech_budgets_to_localinfo();
+            }
+
             // Announce tech pause duration and remaining budget
             new buf1[16], buf2[16];
             fmt_seconds(techPauseElapsed, buf1, charsmax(buf1));
@@ -1419,12 +1706,15 @@ public countdown_tick() {
     g_unpauseConfirmedOther = false;
     g_isTechPause = false;
     g_techPauseStartTime = 0;
+    g_techPauseFrozenTime = 0;
     g_disconnectedPlayerName[0] = EOS;
     g_disconnectedPlayerTeam = 0;
     g_disconnectCountdown = 0;
+    g_autoConfirmLeft = 0;
     safe_remove_task(g_taskAutoUnpauseReqId);
     safe_remove_task(g_taskAutoReqCountdownId);
     safe_remove_task(g_taskPauseHudId);
+    safe_remove_task(g_taskAutoConfirmId);
     stop_unpause_reminder();
 }
 
@@ -1505,9 +1795,49 @@ public disconnect_countdown_tick() {
     }
 }
 
+// Real-time unpause reminder check (called from OnPausedHUDUpdate hook during pause)
+stock check_unpause_reminder_realtime() {
+    if (!g_isPaused || g_countdownActive) return;
+
+    // Both confirmed - countdown should have started, stop reminding
+    if (g_unpauseRequested && g_unpauseConfirmedOther) return;
+
+    // Only remind if one team has acted but not both
+    if (!g_unpauseRequested && !g_unpauseConfirmedOther) return;
+
+    static lastReminderTime = 0;
+    new currentTime = get_systime();
+    new reminderInterval = floatround(g_unpauseReminderSecs);
+    if (reminderInterval < 5) reminderInterval = 15;
+
+    // Check if enough time has passed since last reminder
+    if (currentTime - lastReminderTime < reminderInterval) return;
+    lastReminderTime = currentTime;
+
+    new ownerTeamName[32], otherTeamName[32];
+    team_name_from_id(g_pauseOwnerTeam, ownerTeamName, charsmax(ownerTeamName));
+    new otherTeam = (g_pauseOwnerTeam == 1) ? 2 : 1;
+    team_name_from_id(otherTeam, otherTeamName, charsmax(otherTeamName));
+
+    // Remind the team that hasn't acted yet
+    if (g_unpauseRequested && !g_unpauseConfirmedOther) {
+        // Owner requested, waiting for other team to /confirmunpause
+        announce_all("[KTP] Waiting for %s to /confirmunpause", otherTeamName);
+    } else if (!g_unpauseRequested && g_unpauseConfirmedOther) {
+        // Other team confirmed, waiting for owner to /resume
+        announce_all("[KTP] Waiting for %s to /resume", ownerTeamName);
+    }
+}
+
 // Real-time pause timer check (uses get_systime instead of game time)
 stock check_pause_timer_realtime() {
     if (!g_isPaused) return;
+
+    // If tech pause budget is frozen (owner did /resume), skip timer checks
+    // The auto-confirmunpause timer handles resuming in this case
+    if (g_isTechPause && g_techPauseFrozenTime > 0) {
+        return;
+    }
 
     static lastWarning30 = 0;
     static lastWarning10 = 0;
@@ -1576,6 +1906,65 @@ public OnPausedHUDUpdate() {
         } else {
             // Countdown finished - trigger unpause
             g_countdownActive = false;
+
+            // If this was a tech pause, calculate elapsed time and deduct from budget
+            // (Must be done BEFORE clearing g_isTechPause and g_techPauseStartTime)
+            // Skip if budget was already frozen on /resume (g_techPauseFrozenTime != 0)
+            if (g_isTechPause && g_techPauseStartTime > 0 && g_techPauseFrozenTime == 0) {
+                new teamId = g_pauseOwnerTeam;
+                if (teamId == 1 || teamId == 2) {
+                    new currentTime = get_systime();
+                    new techPauseElapsed = 0;
+
+                    // Validate time values to prevent underflow
+                    if (currentTime >= g_techPauseStartTime) {
+                        techPauseElapsed = currentTime - g_techPauseStartTime;
+                        // Sanity check: cap at reasonable maximum (1 hour)
+                        if (techPauseElapsed > 3600) {
+                            techPauseElapsed = 3600;
+                            log_ktp("event=TECH_PAUSE_ELAPSED_WARNING elapsed=%d capped=3600 reason='exceeds_maximum'",
+                                    currentTime - g_techPauseStartTime);
+                        }
+                    } else {
+                        // System clock adjusted backwards - use 0 to avoid corruption
+                        log_ktp("event=TECH_PAUSE_TIME_ERROR current=%d start=%d reason='clock_skew'",
+                                currentTime, g_techPauseStartTime);
+                    }
+
+                    // Deduct from budget
+                    new budgetBefore = g_techBudget[teamId];
+                    g_techBudget[teamId] -= techPauseElapsed;
+                    if (g_techBudget[teamId] < 0) g_techBudget[teamId] = 0;
+
+                    new teamName[16];
+                    team_name_from_id(teamId, teamName, charsmax(teamName));
+
+                    log_ktp("event=TECH_BUDGET_DEDUCT team=%d elapsed=%d budget_before=%d budget_after=%d",
+                            teamId, techPauseElapsed, budgetBefore, g_techBudget[teamId]);
+
+                    // Persist tech budget to localinfo for 2nd half restoration
+                    if (g_currentHalf == 1) {
+                        save_tech_budgets_to_localinfo();
+                    }
+
+                    // Announce tech pause duration and remaining budget
+                    new buf1[16], buf2[16];
+                    fmt_seconds(techPauseElapsed, buf1, charsmax(buf1));
+                    fmt_seconds(g_techBudget[teamId], buf2, charsmax(buf2));
+                    announce_all("Tech pause lasted %s. %s budget remaining: %s",
+                        buf1, teamName, buf2);
+
+                    // Warn if budget is low or exhausted
+                    if (g_techBudget[teamId] == 0) {
+                        announce_all("WARNING: %s tech budget EXHAUSTED!", teamName);
+                    } else if (g_techBudget[teamId] <= 60) {
+                        new buf[16];
+                        fmt_seconds(g_techBudget[teamId], buf, charsmax(buf));
+                        announce_all("WARNING: %s has only %s of tech budget remaining!", teamName, buf);
+                    }
+                }
+            }
+
             announce_all("=== LIVE! ===");
             log_ktp("event=LIVE map=%s requested_by='%s'", g_currentMap, g_lastUnpauseBy[0] ? g_lastUnpauseBy : "unknown");
             ktp_unpause_now("countdown");
@@ -1585,8 +1974,42 @@ public OnPausedHUDUpdate() {
             g_unpauseConfirmedOther = false;
             g_isTechPause = false;
             g_techPauseStartTime = 0;
+            g_techPauseFrozenTime = 0;
             safe_remove_task(g_taskCountdownId);
+            safe_remove_task(g_taskAutoConfirmId);
+            g_autoConfirmLeft = 0;
             return HC_CONTINUE;
+        }
+    }
+
+    // Handle auto-confirmunpause countdown during pause (tasks don't run during pause!)
+    if (g_autoConfirmLeft > 0 && !g_countdownActive) {
+        g_autoConfirmLeft--;
+
+        // Warnings at 30s, 10s, 5s
+        if (g_autoConfirmLeft == 30) {
+            new otherTeam = (g_pauseOwnerTeam == 1) ? 2 : 1;
+            new otherTeamName[32];
+            team_name_from_id(otherTeam, otherTeamName, charsmax(otherTeamName));
+            announce_all("[KTP] %s: 30 seconds to /confirmunpause!", otherTeamName);
+        } else if (g_autoConfirmLeft == 10) {
+            announce_all("[KTP] 10 seconds to auto-resume!");
+        } else if (g_autoConfirmLeft == 5) {
+            announce_all("[KTP] 5 seconds to auto-resume!");
+        }
+
+        // Time's up - auto confirm
+        if (g_autoConfirmLeft <= 0) {
+            g_autoConfirmLeft = 0;
+            safe_remove_task(g_taskAutoConfirmId);
+
+            announce_all("[KTP] Auto-confirming unpause (60 second timeout).");
+            log_ktp("event=AUTO_CONFIRMUNPAUSE reason='60s_timeout'");
+
+            // Set confirmed and start countdown
+            g_unpauseConfirmedOther = true;
+            stop_unpause_reminder();
+            start_unpause_countdown("auto-confirm");
         }
     }
 
@@ -1595,6 +2018,8 @@ public OnPausedHUDUpdate() {
         show_pending_hud_during_pause();
         // Still check pause timer for warnings/timeout
         check_pause_timer_realtime();
+        // Check unpause reminders using real-time
+        check_unpause_reminder_realtime();
         return HC_CONTINUE;
     }
 
@@ -1603,6 +2028,9 @@ public OnPausedHUDUpdate() {
 
     // Check pause timer for warnings/timeout using real-world time
     check_pause_timer_realtime();
+
+    // Check unpause reminders using real-time
+    check_unpause_reminder_realtime();
 
     return HC_CONTINUE;
 }
@@ -1636,8 +2064,8 @@ public pending_hud_tick() {
     set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 1.2, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "KTP Match Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type /ready when ready.",
-        pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need);
+        "KTP Match Pending%s^n%s: %d/%d ready (tech:%ds)^n%s: %d/%d ready (tech:%ds)^nNeed %d/team - Type /ready when ready.",
+        pauseInfo, g_teamName[1], alliesReady, alliesPlayers, techA, g_teamName[2], axisReady, axisPlayers, techX, need);
 }
 
 // Show pending HUD during pause (called from OnPausedHUDUpdate hook)
@@ -1664,8 +2092,8 @@ stock show_pending_hud_during_pause() {
     set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 0.1, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "KTP Match Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type /ready when ready.",
-        pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need);
+        "KTP Match Pending%s^n%s: %d/%d ready (tech:%ds)^n%s: %d/%d ready (tech:%ds)^nNeed %d/team - Type /ready when ready.",
+        pauseInfo, g_teamName[1], alliesReady, alliesPlayers, techA, g_teamName[2], axisReady, axisPlayers, techX, need);
 }
 
 public prestart_hud_tick() {
@@ -1673,9 +2101,9 @@ public prestart_hud_tick() {
     set_hudmessage(255, 210, 0, 0.02, 0.08, 0, 0.0, 1.2, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "KTP Pre-Start: Waiting for /confirm from each team^nAllies: %s^nAxis: %s^nCommands: /confirm, /prestatus, /cancel",
-        g_preConfirmAllies ? g_confirmAlliesBy : "—",
-        g_preConfirmAxis   ? g_confirmAxisBy   : "—"
+        "KTP Pre-Start: Waiting for /confirm from each team^n%s: %s^n%s: %s^nCommands: /confirm, /prestatus, /cancel",
+        g_teamName[1], g_preConfirmAllies ? g_confirmAlliesBy : "—",
+        g_teamName[2], g_preConfirmAxis   ? g_confirmAxisBy   : "—"
     );
 }
 
@@ -1757,18 +2185,28 @@ public plugin_init() {
     register_clcmd("say_team .resume",  "cmd_chat_resume");
     register_clcmd("say /confirmunpause",      "cmd_confirm_unpause");
     register_clcmd("say_team /confirmunpause", "cmd_confirm_unpause");
+    register_clcmd("say .confirmunpause",      "cmd_confirm_unpause");
+    register_clcmd("say_team .confirmunpause", "cmd_confirm_unpause");
     register_clcmd("say /cresume",             "cmd_confirm_unpause");
     register_clcmd("say_team /cresume",        "cmd_confirm_unpause");
+    register_clcmd("say .cresume",             "cmd_confirm_unpause");
+    register_clcmd("say_team .cresume",        "cmd_confirm_unpause");
     register_clcmd("say /cunpause",            "cmd_confirm_unpause");
     register_clcmd("say_team /cunpause",       "cmd_confirm_unpause");
+    register_clcmd("say .cunpause",            "cmd_confirm_unpause");
+    register_clcmd("say_team .cunpause",       "cmd_confirm_unpause");
 
     // Pause extension
     register_clcmd("say /extend",       "cmd_extend_pause");
     register_clcmd("say_team /extend",  "cmd_extend_pause");
+    register_clcmd("say .extend",       "cmd_extend_pause");
+    register_clcmd("say_team .extend",  "cmd_extend_pause");
 
     // Cancel disconnect auto-pause
     register_clcmd("say /cancelpause",       "cmd_cancel_disconnect_pause");
     register_clcmd("say_team /cancelpause",  "cmd_cancel_disconnect_pause");
+    register_clcmd("say .cancelpause",       "cmd_cancel_disconnect_pause");
+    register_clcmd("say_team .cancelpause",  "cmd_cancel_disconnect_pause");
 
     // Technical pause
     register_clcmd("say /tech",        "cmd_tech_pause");
@@ -1804,8 +2242,12 @@ public plugin_init() {
     register_clcmd("say_team .confirm",   "cmd_pre_confirm");
     register_clcmd("say /notconfirm",     "cmd_pre_notconfirm");
     register_clcmd("say_team /notconfirm","cmd_pre_notconfirm");
+    register_clcmd("say .notconfirm",     "cmd_pre_notconfirm");
+    register_clcmd("say_team .notconfirm","cmd_pre_notconfirm");
     register_clcmd("say /prestatus",      "cmd_pre_status");
     register_clcmd("say_team /prestatus", "cmd_pre_status");
+    register_clcmd("say .prestatus",      "cmd_pre_status");
+    register_clcmd("say_team .prestatus", "cmd_pre_status");
     register_clcmd("say prestatus",       "cmd_pre_status");
     register_clcmd("say_team prestatus",  "cmd_pre_status");
 
@@ -1847,14 +2289,20 @@ public plugin_init() {
     // Mapping maintenance
     register_clcmd("say /reloadmaps",       "cmd_reload_maps");
     register_clcmd("say_team /reloadmaps",  "cmd_reload_maps");
+    register_clcmd("say .reloadmaps",       "cmd_reload_maps");
+    register_clcmd("say_team .reloadmaps",  "cmd_reload_maps");
     register_clcmd("say /ktpconfig",        "cmd_ktpconfig");
     register_clcmd("say_team /ktpconfig",   "cmd_ktpconfig");
+    register_clcmd("say .ktpconfig",        "cmd_ktpconfig");
+    register_clcmd("say_team .ktpconfig",   "cmd_ktpconfig");
     register_clcmd("say ktpconfig",         "cmd_ktpconfig");
     register_clcmd("say_team ktpconfig",    "cmd_ktpconfig");
 
     //Debug
     register_clcmd("say /ktpdebug", "cmd_ktpdebug");
     register_clcmd("say_team /ktpdebug", "cmd_ktpdebug");
+    register_clcmd("say .ktpdebug", "cmd_ktpdebug");
+    register_clcmd("say_team .ktpdebug", "cmd_ktpdebug");
 
     // Season control (password protected) - say commands handled by say hook
     register_clcmd("ktp_season", "cmd_ktpseason");  // Console command for admins
@@ -1889,6 +2337,7 @@ public plugin_init() {
     new msgTeamScore = get_user_msgid("TeamScore");
     if (msgTeamScore > 0) {
         register_message(msgTeamScore, "msg_TeamScore");
+        log_ktp("event=TEAMSCORE_MSG_REGISTERED msgid=%d", msgTeamScore);
     }
 
     g_hudSync = CreateHudSyncObj();
@@ -1936,6 +2385,9 @@ stock restore_match_context_from_localinfo() {
     new halfPending[4];
     get_localinfo(LOCALINFO_HALF_PENDING, halfPending, charsmax(halfPending));
 
+    // Debug: Always log what we found
+    log_ktp("event=CONTEXT_CHECK half_pending='%s' current_map=%s", halfPending, g_currentMap);
+
     if (!equal(halfPending, "1")) {
         return; // No pending 2nd half
     }
@@ -1960,20 +2412,30 @@ stock restore_match_context_from_localinfo() {
     g_secondHalfPending = true;
     g_currentHalf = 1;  // Will become 2 when match goes live
 
-    // Restore pause counts (persist across halves)
+    // Restore pause counts and tech budgets (persist across halves)
+    // NOTE: These are saved by 1st half SIDE (Allies/Axis), but teams swap sides in 2nd half!
+    // So we need to swap them: 1st half Allies budget -> 2nd half Axis, and vice versa
     new buf[16];
+    new savedPauseAllies = 0, savedPauseAxis = 0;
+    new savedTechAllies = 0, savedTechAxis = 0;
+
     get_localinfo(LOCALINFO_PAUSE_ALLIES, buf, charsmax(buf));
-    if (buf[0]) g_pauseCountTeam[1] = str_to_num(buf);
+    if (buf[0]) savedPauseAllies = str_to_num(buf);
 
     get_localinfo(LOCALINFO_PAUSE_AXIS, buf, charsmax(buf));
-    if (buf[0]) g_pauseCountTeam[2] = str_to_num(buf);
+    if (buf[0]) savedPauseAxis = str_to_num(buf);
 
-    // Restore tech budget remaining
     get_localinfo(LOCALINFO_TECH_ALLIES, buf, charsmax(buf));
-    if (buf[0]) g_techBudget[1] = str_to_num(buf);
+    if (buf[0]) savedTechAllies = str_to_num(buf);
 
     get_localinfo(LOCALINFO_TECH_AXIS, buf, charsmax(buf));
-    if (buf[0]) g_techBudget[2] = str_to_num(buf);
+    if (buf[0]) savedTechAxis = str_to_num(buf);
+
+    // Swap for 2nd half: Team that was Allies is now Axis, and vice versa
+    g_pauseCountTeam[1] = savedPauseAxis;   // Current Allies = was Axis in 1st half
+    g_pauseCountTeam[2] = savedPauseAllies; // Current Axis = was Allies in 1st half
+    g_techBudget[1] = savedTechAxis;        // Current Allies = was Axis in 1st half
+    g_techBudget[2] = savedTechAllies;      // Current Axis = was Allies in 1st half
 
     // Restore first half scores by team identity
     get_localinfo(LOCALINFO_SCORE_TEAM1, buf, charsmax(buf));
@@ -2021,6 +2483,7 @@ public plugin_end() {
     safe_remove_task(g_taskPrePauseId);
     safe_remove_task(g_taskUnreadyReminderId);
     safe_remove_task(g_taskUnpauseReminderId);
+    safe_remove_task(g_taskScoreSaveId);
 
     // Handle half tracking on map change
     handle_map_change();
@@ -2029,6 +2492,10 @@ public plugin_end() {
 stock handle_map_change() {
     // Called when map is changing (plugin_end)
     // If we just finished the first half of a match, prepare for second half
+
+    // Debug: Log the state on map change
+    log_ktp("event=MAP_CHANGE_CHECK half=%d matchLive=%d matchId=%s matchMap=%s",
+            g_currentHalf, g_matchLive ? 1 : 0, g_matchId, g_matchMap);
 
     if (g_currentHalf == 1 && g_matchLive) {
         // First half just ended - prepare for second half
@@ -2112,6 +2579,9 @@ stock handle_map_change() {
         // ===============================================================
 
         // =============== SCORE CALCULATION WITH SIDE SWAP ===============
+        // Get current scores from dodx before calculating
+        update_match_scores_from_dodx();
+
         // In 2nd half, teams have swapped sides:
         // - Team 1 (started as Allies) is now on Axis -> their 2nd half score is g_matchScore[2]
         // - Team 2 (started as Axis) is now on Allies -> their 2nd half score is g_matchScore[1]
@@ -2168,6 +2638,10 @@ stock handle_map_change() {
         g_matchLive = false;
         clear_match_id();  // Clear match ID after 2nd half ends
 
+        // Reset match type and Discord flag for next match
+        g_matchType = MATCH_TYPE_COMPETITIVE;
+        g_disableDiscord = false;
+
         // Reset team names to defaults after match ends
         reset_team_names();
 
@@ -2189,6 +2663,44 @@ stock clear_localinfo_match_context() {
     set_localinfo(LOCALINFO_SCORE_TEAM2, "");
     set_localinfo(LOCALINFO_TEAMNAME1, "");
     set_localinfo(LOCALINFO_TEAMNAME2, "");
+}
+
+// Save match context to localinfo for 2nd half restoration
+// Called proactively when 1st half goes live, and again in handle_map_change
+stock save_match_context_for_second_half() {
+    new buf[16];
+
+    // Core match identity
+    set_localinfo(LOCALINFO_MATCH_ID, g_matchId);
+    set_localinfo(LOCALINFO_MATCH_MAP, g_matchMap);
+    set_localinfo(LOCALINFO_HALF_PENDING, "1");
+
+    // Pause counts (per-match, persist across halves)
+    num_to_str(g_pauseCountTeam[1], buf, charsmax(buf));
+    set_localinfo(LOCALINFO_PAUSE_ALLIES, buf);
+    num_to_str(g_pauseCountTeam[2], buf, charsmax(buf));
+    set_localinfo(LOCALINFO_PAUSE_AXIS, buf);
+
+    // Tech budget remaining
+    num_to_str(g_techBudget[1], buf, charsmax(buf));
+    set_localinfo(LOCALINFO_TECH_ALLIES, buf);
+    num_to_str(g_techBudget[2], buf, charsmax(buf));
+    set_localinfo(LOCALINFO_TECH_AXIS, buf);
+
+    // Team names by identity (team1 = started as Allies in 1st half)
+    set_localinfo(LOCALINFO_TEAMNAME1, g_team1Name);
+    set_localinfo(LOCALINFO_TEAMNAME2, g_team2Name);
+
+    // Note: Scores are saved via save_first_half_scores() when half actually ends
+}
+
+// Save tech budgets to localinfo (called when budget changes during 1st half)
+stock save_tech_budgets_to_localinfo() {
+    new buf[16];
+    num_to_str(g_techBudget[1], buf, charsmax(buf));
+    set_localinfo(LOCALINFO_TECH_ALLIES, buf);
+    num_to_str(g_techBudget[2], buf, charsmax(buf));
+    set_localinfo(LOCALINFO_TECH_AXIS, buf);
 }
 
 // Shared handler
@@ -2258,16 +2770,14 @@ public client_putinserver(id) {
 
     client_print(
         id, print_chat,
-        "[KTP] need=%d | unpause_countdown=%d | prepause=%d | tech_budget=%d | Allies %d/%d (tech:%ds), Axis %d/%d (tech:%ds) | map=%s cfg=%s (%s)",
+        "[KTP] need=%d | unpause_countdown=%d | prepause=%d | tech_budget=%d | %s %d/%d (tech:%ds), %s %d/%d (tech:%ds) | map=%s cfg=%s (%s)",
         g_readyRequired, g_countdownSeconds, g_prePauseSeconds, g_techBudgetSecs,
-        alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, g_currentMap, found ? cfg : "-", found ? "found" : "MISS"
+        g_teamName[1], alliesReady, alliesPlayers, techA, g_teamName[2], axisReady, axisPlayers, techX, g_currentMap, found ? cfg : "-", found ? "found" : "MISS"
     );
 
     client_print(id, print_chat, "%s version %s by %s", PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR);
     client_print(id, print_console, "%s version %s by %s", PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR);
 }
-
-
 
 // ================= Counts & commands =================
 stock get_ready_counts(&alliesPlayers, &axisPlayers, &alliesReady, &axisReady) {
@@ -2424,20 +2934,56 @@ stock handle_resume_request(id, const name[], const sid[], const team[], teamId)
             return PLUGIN_HANDLED;
         }
     }
+
     // Owner requests unpause
     g_unpauseRequested = true;
     g_autoReqLeft = 0; // stop HUD timer
     copy(g_lastUnpauseBy, charsmax(g_lastUnpauseBy), name);
+
+    // If this is a tech pause, freeze the budget now (stop deducting time)
+    if (g_isTechPause && g_techPauseStartTime > 0 && g_techPauseFrozenTime == 0) {
+        g_techPauseFrozenTime = get_systime();
+        new elapsed = g_techPauseFrozenTime - g_techPauseStartTime;
+        if (elapsed > 0 && elapsed < 3600) {  // sanity check
+            new budgetBefore = g_techBudget[g_pauseOwnerTeam];
+            g_techBudget[g_pauseOwnerTeam] -= elapsed;
+            if (g_techBudget[g_pauseOwnerTeam] < 0) g_techBudget[g_pauseOwnerTeam] = 0;
+            log_ktp("event=TECH_BUDGET_FROZEN team=%d elapsed=%d budget_before=%d budget_after=%d",
+                    g_pauseOwnerTeam, elapsed, budgetBefore, g_techBudget[g_pauseOwnerTeam]);
+
+            // Persist tech budget to localinfo for 2nd half restoration
+            if (g_currentHalf == 1) {
+                save_tech_budgets_to_localinfo();
+            }
+
+            new buf[16];
+            fmt_seconds(g_techBudget[g_pauseOwnerTeam], buf, charsmax(buf));
+            announce_all("Tech pause time used: %d seconds. %s has %s remaining.", elapsed, team, buf);
+        }
+    }
+
     log_ktp("event=UNPAUSE_REQUEST_OWNER team=%d by=\'%s\' steamid=%s", g_pauseOwnerTeam, name, safe_sid(sid));
-    announce_all("%s requested unpause. Waiting for the other team to /confirmunpause.", team);
+
+    // Get other team name for announcement
+    new otherTeam = (g_pauseOwnerTeam == 1) ? 2 : 1;
+    new otherTeamName[32];
+    team_name_from_id(otherTeam, otherTeamName, charsmax(otherTeamName));
+
+    announce_all("%s requested unpause.", team);
+    announce_all("%s has 60 seconds to /confirmunpause or game will auto-resume.", otherTeamName);
 
     // If the other team has pre-confirmed (rare), start the countdown now
     if (g_unpauseConfirmedOther) {
         stop_unpause_reminder();
+        safe_remove_task(g_taskAutoConfirmId);
         start_unpause_countdown(g_lastUnpauseBy);
     } else {
         // Start reminder for other team to /confirmunpause
         start_unpause_reminder();
+
+        // Start 60s auto-confirmunpause timer
+        // Note: set_task doesn't run during pause, so OnPausedHUDUpdate handles the countdown
+        g_autoConfirmLeft = 60;
     }
 
     return PLUGIN_HANDLED;
@@ -2494,6 +3040,10 @@ public cmd_confirm_unpause(id) {
     log_ktp("event=UNPAUSE_CONFIRM_OTHER team=%d by=\'%s\' steamid=%s", tid, name, safe_sid(sid));
     announce_all("%s confirmed unpause.", team);
 
+    // Cancel auto-confirmunpause timer (they confirmed manually)
+    safe_remove_task(g_taskAutoConfirmId);
+    g_autoConfirmLeft = 0;
+
     // If owner already requested (or auto-request fired), we can start countdown
     if (g_unpauseRequested) {
         stop_unpause_reminder();
@@ -2514,6 +3064,15 @@ public cmd_extend_pause(id) {
 
     if (!g_isPaused) {
         client_print(id, print_chat, "[KTP] No active pause to extend.");
+        return PLUGIN_HANDLED;
+    }
+
+    // Only the pause-owning team can extend
+    new tid = get_user_team_id(id);
+    if (g_pauseOwnerTeam != 0 && tid != g_pauseOwnerTeam) {
+        new teamName[16];
+        team_name_from_id(g_pauseOwnerTeam, teamName, charsmax(teamName));
+        client_print(id, print_chat, "[KTP] Only %s (pause owner) can extend this pause.", teamName);
         return PLUGIN_HANDLED;
     }
 
@@ -2620,6 +3179,9 @@ public cmd_tech_pause(id) {
     g_unpauseConfirmedOther = false;
     g_isTechPause = true;
 
+    // Set pause duration to remaining tech budget (not fixed 5 minutes)
+    g_pauseDurationSec = g_techBudget[tid];
+
     // Schedule auto-unpause request
     setup_auto_unpause_request();
 
@@ -2644,6 +3206,12 @@ public cmd_ktpdebug(id) {
 // ========== TEAM NAME COMMANDS ==========
 
 public cmd_setteamallies(id) {
+    // Only allow custom team names for /ktp and /draft matches (during pre-start or pending phase)
+    if ((!g_matchPending && !g_preStartPending) || (g_matchType != MATCH_TYPE_COMPETITIVE && g_matchType != MATCH_TYPE_DRAFT)) {
+        client_print(id, print_chat, "[KTP] Custom team names only available for /ktp and /draft matches.");
+        return PLUGIN_HANDLED;
+    }
+
     // Only captains/admins during pre-match
     if (g_matchLive) {
         client_print(id, print_chat, "[KTP] Cannot change team names during live match.");
@@ -2690,6 +3258,12 @@ public cmd_setteamallies(id) {
 }
 
 public cmd_setteamaxis(id) {
+    // Only allow custom team names for /ktp and /draft matches (during pre-start or pending phase)
+    if ((!g_matchPending && !g_preStartPending) || (g_matchType != MATCH_TYPE_COMPETITIVE && g_matchType != MATCH_TYPE_DRAFT)) {
+        client_print(id, print_chat, "[KTP] Custom team names only available for /ktp and /draft matches.");
+        return PLUGIN_HANDLED;
+    }
+
     // Only captains/admins during pre-match
     if (g_matchLive) {
         client_print(id, print_chat, "[KTP] Cannot change team names during live match.");
@@ -2764,6 +3338,9 @@ public cmd_score(id) {
         return PLUGIN_HANDLED;
     }
 
+    // Get fresh scores from dodx
+    update_match_scores_from_dodx();
+
     if (g_currentHalf == 1) {
         // 1st half: scores are directly by current side (no swap yet)
         client_print(id, print_chat, "[KTP] Match Score (1st half): %s %d - %d %s",
@@ -2822,6 +3399,10 @@ public cmd_say_hook(id) {
     if (equali(args, "/ktp", 4) || equali(args, ".ktp", 4)) {
         // Must be exactly /ktp or have a space after for password
         if (strlen(args) == 4 || args[4] == ' ') {
+            // Explicitly set competitive match type and enable Discord
+            // (scrim/12man/draft handlers set their own types before calling cmd_match_start)
+            g_matchType = MATCH_TYPE_COMPETITIVE;
+            g_disableDiscord = false;
             return cmd_match_start(id);
         }
     }
@@ -2852,13 +3433,15 @@ public cmd_say_hook(id) {
 
 // ===== Start / Pre-Start =====
 public cmd_match_start(id) {
-    // DEBUG: Log entry to function
-    log_amx("[KTP DEBUG] cmd_match_start CALLED by player %d, g_ktpSeasonActive=%d, g_matchType=%d", id, g_ktpSeasonActive, g_matchType);
+    // Ensure Discord is enabled for competitive matches
+    // (scrim/12man/draft set g_matchType and g_disableDiscord before calling this)
+    if (g_matchType == MATCH_TYPE_COMPETITIVE) {
+        g_disableDiscord = false;  // Enable Discord for competitive matches
+    }
 
     // Season check - only applies to competitive matches (/start, /ktp)
     // Draft, scrim, and 12man modes bypass this check via their own handlers
     if (!g_ktpSeasonActive && g_matchType == MATCH_TYPE_COMPETITIVE) {
-        log_amx("[KTP DEBUG] Season check FAILED - returning early");
         client_print(id, print_chat, "[KTP] Competitive matches are disabled outside KTP season.");
         client_print(id, print_chat, "[KTP] Use /draft, /12man, or /scrim instead.");
         return PLUGIN_HANDLED;
@@ -2887,9 +3470,6 @@ public cmd_match_start(id) {
             // Console command or unexpected format - use as-is
             copy(password, charsmax(password), args);
         }
-
-        // DEBUG: Log what we parsed
-        log_amx("[KTP DEBUG] cmd_match_start: args='%s' password='%s'", args, password);
 
         if (!password[0]) {
             client_print(id, print_chat, "[KTP] Usage: /ktp <password> or .ktp <password>");
@@ -2987,9 +3567,9 @@ public cmd_start_draft(id) {
 
 public cmd_pre_status(id) {
     if (!g_preStartPending) { client_print(id, print_chat, "[KTP] Not in pre-start."); return PLUGIN_HANDLED; }
-    client_print(id, print_chat, "[KTP] Pre-Start — Allies: %s | Axis: %s",
-        g_preConfirmAllies ? g_confirmAlliesBy : "—",
-        g_preConfirmAxis   ? g_confirmAxisBy   : "—");
+    client_print(id, print_chat, "[KTP] Pre-Start — %s: %s | %s: %s",
+        g_teamName[1], g_preConfirmAllies ? g_confirmAlliesBy : "—",
+        g_teamName[2], g_preConfirmAxis   ? g_confirmAxisBy   : "—");
     return PLUGIN_HANDLED;
 }
 
@@ -3030,32 +3610,28 @@ public cmd_pre_confirm(id) {
     // per-team confirmation gating
     if (tid == 1) {
         if (g_preConfirmAllies) {
-            client_print(id, print_chat, "[KTP] Allies already confirmed by %s.", g_confirmAlliesBy);
+            client_print(id, print_chat, "[KTP] %s already confirmed by %s.", g_teamName[1], g_confirmAlliesBy);
             return PLUGIN_HANDLED;
         }
         g_preConfirmAllies = true;
         copy(g_confirmAlliesBy, charsmax(g_confirmAlliesBy), who);
-        announce_all("Pre-Start: Allies confirmed by %s.", who);
+        announce_all("Pre-Start: %s confirmed by %s.", g_teamName[1], who);
 
-        // Prompt captain to set team name if still default
-        if (equal(g_teamName[1], "Allies")) {
-            client_print(id, print_chat, "[KTP] Set your team name: /setallies <name>");
-            client_print(id, print_chat, "[KTP] Example: /setallies KTP");
-        }
+        // Prompt BOTH teams to set their team names (if still default)
+        prompt_team_to_set_name(1);  // Prompt Allies
+        prompt_team_to_set_name(2);  // Prompt Axis
     } else if (tid == 2) {
         if (g_preConfirmAxis) {
-            client_print(id, print_chat, "[KTP] Axis already confirmed by %s.", g_confirmAxisBy);
+            client_print(id, print_chat, "[KTP] %s already confirmed by %s.", g_teamName[2], g_confirmAxisBy);
             return PLUGIN_HANDLED;
         }
         g_preConfirmAxis = true;
         copy(g_confirmAxisBy, charsmax(g_confirmAxisBy), who);
-        announce_all("Pre-Start: Axis confirmed by %s.", who);
+        announce_all("Pre-Start: %s confirmed by %s.", g_teamName[2], who);
 
-        // Prompt captain to set team name if still default
-        if (equal(g_teamName[2], "Axis")) {
-            client_print(id, print_chat, "[KTP] Set your team name: /setaxis <name>");
-            client_print(id, print_chat, "[KTP] Example: /setaxis ABC");
-        }
+        // Prompt BOTH teams to set their team names (if still default)
+        prompt_team_to_set_name(1);  // Prompt Allies
+        prompt_team_to_set_name(2);  // Prompt Axis
     } else {
         client_print(id, print_chat, "[KTP] You must be on Allies or Axis to confirm.");
         return PLUGIN_HANDLED;
@@ -3080,7 +3656,7 @@ public cmd_pre_confirm(id) {
         enter_pending_phase(g_captain2_name[0] ? g_captain2_name : g_captain1_name);
 
         // RCON visibility
-        console_print(0, "[KTP] Pending: need=%d (Allies/Axis).", g_readyRequired);
+        console_print(0, "[KTP] Pending: need=%d (%s/%s).", g_readyRequired, g_teamName[1], g_teamName[2]);
     }
 
     return PLUGIN_HANDLED;
@@ -3134,8 +3710,11 @@ public cmd_cancel(id) {
     g_techBudget[1] = 0;
     g_techBudget[2] = 0;
     g_techPauseStartTime = 0;
+    g_techPauseFrozenTime = 0;
     g_pauseStartTime = 0;
+    g_autoConfirmLeft = 0;
     safe_remove_task(g_taskPrePauseId);
+    safe_remove_task(g_taskAutoConfirmId);
     g_prePauseCountdown = false;
     g_prePauseLeft = 0;
 
@@ -3178,7 +3757,12 @@ public cmd_ready(id) {
 
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
-    announce_all("%s [%s] is READY. Allies %d/%d | Axis %d/%d (need %d each).", name, sid, alliesReady, alliesPlayers, axisReady, axisPlayers, g_readyRequired);
+    announce_all("%s [%s] is READY. %s %d/%d | %s %d/%d (need %d each).", name, sid, g_teamName[1], alliesReady, alliesPlayers, g_teamName[2], axisReady, axisPlayers, g_readyRequired);
+
+    // Debug log for match start condition
+    log_ktp("event=READY_CHECK allies_ready=%d axis_ready=%d need=%d will_start=%d",
+            alliesReady, axisReady, g_readyRequired,
+            (alliesReady >= g_readyRequired && axisReady >= g_readyRequired) ? 1 : 0);
 
     // Start match when both teams have enough ready players
     if (alliesReady >= g_readyRequired && axisReady >= g_readyRequired) {
@@ -3198,6 +3782,16 @@ public cmd_ready(id) {
             g_currentHalf = 2;
             g_secondHalfPending = false;
             copy(halfText, charsmax(halfText), "2nd half");
+
+            // Announce 2nd half with team side swap and first half scores
+            announce_all("=== 2nd HALF STARTING ===");
+            announce_all("Teams are switching sides!");
+            // g_team1Name = team that started as Allies (now on Axis)
+            // g_team2Name = team that started as Axis (now on Allies)
+            // g_firstHalfScore[1] = Team 1's first half score, g_firstHalfScore[2] = Team 2's first half score
+            announce_all("1st Half Score: %s %d - %d %s", g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
+            announce_all("%s is now playing as Allies", g_team2Name);
+            announce_all("%s is now playing as Axis", g_team1Name);
         } else {
             // New match, first half
 
@@ -3250,13 +3844,14 @@ public cmd_ready(id) {
         arrayset(g_ready, 0, sizeof g_ready);
         safe_remove_task(g_taskPendingHudId);
         safe_remove_task(g_taskUnreadyReminderId);
+        ClearSyncHud(0, g_hudSync);  // Clear pending HUD immediately
 
         // First LIVE of this half → mark match live
         g_matchLive       = true;
 
         // Reset tech budgets only for NEW matches (1st half), not 2nd half continuation
         // Tech budget persists across halves (per-match budget, not per-half)
-        if (!g_secondHalfPending) {
+        if (g_currentHalf == 1) {
             g_techBudget[1]   = g_techBudgetSecs;
             g_techBudget[2]   = g_techBudgetSecs;
             // Reset match scores for new match (1st half only)
@@ -3296,9 +3891,25 @@ public cmd_ready(id) {
         g_unpauseRequested = false;
         g_unpauseConfirmedOther = false;
 
-        // Go LIVE immediately (no pause during ready phase)
+        // Go LIVE immediately - unpause if needed
+        if (g_isPaused) {
+            ktp_unpause_now("match_start");
+        }
         announce_all("=== MATCH IS LIVE! ===");
         log_ktp("event=LIVE map=%s match_id=%s half=%s", g_currentMap, g_matchId, halfText);
+
+        // =============== Proactive context save for 1st half ===============
+        // Save match context to localinfo NOW so that if plugin_end fails
+        // to run (engine shutdown issue), the context is already persisted
+        if (g_currentHalf == 1) {
+            save_match_context_for_second_half();
+            log_ktp("event=PROACTIVE_CONTEXT_SAVE match_id=%s map=%s half=1", g_matchId, g_matchMap);
+
+            // Start periodic score saving (every 30 seconds) during 1st half
+            // This ensures scores are persisted even if plugin_end doesn't run on map change
+            start_periodic_score_save();
+        }
+        // ===================================================================
 
     }
     return PLUGIN_HANDLED;
@@ -3318,7 +3929,7 @@ public cmd_notready(id) {
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
     new need = g_readyRequired;
-    announce_all("%s [%s] is NOT READY. Allies %d/%d | Axis %d/%d (need %d each).", name, sid, alliesReady, alliesPlayers, axisReady, axisPlayers, need);
+    announce_all("%s [%s] is NOT READY. %s %d/%d | %s %d/%d (need %d each).", name, sid, g_teamName[1], alliesReady, alliesPlayers, g_teamName[2], axisReady, axisPlayers, need);
     return PLUGIN_HANDLED;
 }
 
@@ -3333,8 +3944,8 @@ public cmd_status(id) {
     new need = g_readyRequired;
 
     client_print(id, print_chat, "[KTP] ===== MATCH STATUS =====");
-    client_print(id, print_chat, "[KTP] Allies: %d/%d ready (need %d)", alliesReady, alliesPlayers, need);
-    client_print(id, print_chat, "[KTP] Axis: %d/%d ready (need %d)", axisReady, axisPlayers, need);
+    client_print(id, print_chat, "[KTP] %s: %d/%d ready (need %d)", g_teamName[1], alliesReady, alliesPlayers, need);
+    client_print(id, print_chat, "[KTP] %s: %d/%d ready (need %d)", g_teamName[2], axisReady, axisPlayers, need);
 
     // Show ready players
     // OPTIMIZED: Use index-based formatex instead of add() for 30-40% faster string building (Phase 5)
@@ -3373,7 +3984,9 @@ public cmd_whoneedsready(id) {
         return PLUGIN_HANDLED;
     }
 
-    new alliesUnready[512], axisUnready[512];
+    // NOTE: Using global buffers (g_unready*) to avoid AMX stack overflow (16KB limit)
+    g_unreadyAllies[0] = EOS;  // Clear global buffers before use
+    g_unreadyAxis[0] = EOS;
     new alliesIdx = 0, axisIdx = 0;
     new alliesCount = 0, axisCount = 0;
 
@@ -3393,12 +4006,12 @@ public cmd_whoneedsready(id) {
             formatex(entry, charsmax(entry), "%s [%s]", name, sid);
 
             if (tid == 1) { // Allies
-                if (alliesIdx > 0) alliesIdx += formatex(alliesUnready[alliesIdx], charsmax(alliesUnready) - alliesIdx, ", ");
-                alliesIdx += formatex(alliesUnready[alliesIdx], charsmax(alliesUnready) - alliesIdx, "%s", entry);
+                if (alliesIdx > 0) alliesIdx += formatex(g_unreadyAllies[alliesIdx], charsmax(g_unreadyAllies) - alliesIdx, ", ");
+                alliesIdx += formatex(g_unreadyAllies[alliesIdx], charsmax(g_unreadyAllies) - alliesIdx, "%s", entry);
                 alliesCount++;
             } else { // Axis
-                if (axisIdx > 0) axisIdx += formatex(axisUnready[axisIdx], charsmax(axisUnready) - axisIdx, ", ");
-                axisIdx += formatex(axisUnready[axisIdx], charsmax(axisUnready) - axisIdx, "%s", entry);
+                if (axisIdx > 0) axisIdx += formatex(g_unreadyAxis[axisIdx], charsmax(g_unreadyAxis) - axisIdx, ", ");
+                axisIdx += formatex(g_unreadyAxis[axisIdx], charsmax(g_unreadyAxis) - axisIdx, "%s", entry);
                 axisCount++;
             }
         }
@@ -3408,10 +4021,10 @@ public cmd_whoneedsready(id) {
     if (alliesCount > 0 || axisCount > 0) {
         announce_all("=== PLAYERS NEED TO /READY ===");
         if (alliesCount > 0) {
-            announce_all("Allies (%d): %s", alliesCount, alliesUnready);
+            announce_all("%s (%d): %s", g_teamName[1], alliesCount, g_unreadyAllies);
         }
         if (axisCount > 0) {
-            announce_all("Axis (%d): %s", axisCount, axisUnready);
+            announce_all("%s (%d): %s", g_teamName[2], axisCount, g_unreadyAxis);
         }
     } else {
         announce_all("All players are ready! Match should start.");
@@ -3428,7 +4041,9 @@ public unready_reminder_tick() {
     }
 
     // Build unready lists for each team
-    new alliesUnready[256], axisUnready[256];
+    // NOTE: Using global buffers (g_unready*) to avoid AMX stack overflow (16KB limit)
+    g_unreadyAllies[0] = EOS;  // Clear global buffers before use
+    g_unreadyAxis[0] = EOS;
     new alliesIdx = 0, axisIdx = 0;
     new alliesCount = 0, axisCount = 0;
 
@@ -3444,12 +4059,12 @@ public unready_reminder_tick() {
             get_user_name(player, name, charsmax(name));
 
             if (tid == 1) { // Allies
-                if (alliesIdx > 0) alliesIdx += formatex(alliesUnready[alliesIdx], charsmax(alliesUnready) - alliesIdx, ", ");
-                alliesIdx += formatex(alliesUnready[alliesIdx], charsmax(alliesUnready) - alliesIdx, "%s", name);
+                if (alliesIdx > 0) alliesIdx += formatex(g_unreadyAllies[alliesIdx], charsmax(g_unreadyAllies) - alliesIdx, ", ");
+                alliesIdx += formatex(g_unreadyAllies[alliesIdx], charsmax(g_unreadyAllies) - alliesIdx, "%s", name);
                 alliesCount++;
             } else { // Axis
-                if (axisIdx > 0) axisIdx += formatex(axisUnready[axisIdx], charsmax(axisUnready) - axisIdx, ", ");
-                axisIdx += formatex(axisUnready[axisIdx], charsmax(axisUnready) - axisIdx, "%s", name);
+                if (axisIdx > 0) axisIdx += formatex(g_unreadyAxis[axisIdx], charsmax(g_unreadyAxis) - axisIdx, ", ");
+                axisIdx += formatex(g_unreadyAxis[axisIdx], charsmax(g_unreadyAxis) - axisIdx, "%s", name);
                 axisCount++;
             }
         }
@@ -3462,10 +4077,10 @@ public unready_reminder_tick() {
 
         if (tid == 1 && alliesCount > 0) {
             // Tell Allies who on their team needs to ready
-            client_print(player, print_chat, "[KTP] Waiting for: %s (%d players)", alliesUnready, alliesCount);
+            client_print(player, print_chat, "[KTP] Waiting for: %s (%d players)", g_unreadyAllies, alliesCount);
         } else if (tid == 2 && axisCount > 0) {
             // Tell Axis who on their team needs to ready
-            client_print(player, print_chat, "[KTP] Waiting for: %s (%d players)", axisUnready, axisCount);
+            client_print(player, print_chat, "[KTP] Waiting for: %s (%d players)", g_unreadyAxis, axisCount);
         }
     }
 }
@@ -3508,6 +4123,51 @@ stock start_unpause_reminder() {
 // Stop unpause reminder task
 stock stop_unpause_reminder() {
     safe_remove_task(g_taskUnpauseReminderId);
+}
+
+// Auto-confirmunpause countdown (60 seconds after owner /resume)
+public auto_confirmunpause_tick() {
+    // Stop if no longer paused or countdown already started
+    if (!g_isPaused || g_countdownActive) {
+        safe_remove_task(g_taskAutoConfirmId);
+        g_autoConfirmLeft = 0;
+        return;
+    }
+
+    // Stop if other team already confirmed
+    if (g_unpauseConfirmedOther) {
+        safe_remove_task(g_taskAutoConfirmId);
+        g_autoConfirmLeft = 0;
+        return;
+    }
+
+    g_autoConfirmLeft--;
+
+    // Warnings at 30s, 10s, 5s
+    if (g_autoConfirmLeft == 30) {
+        new otherTeam = (g_pauseOwnerTeam == 1) ? 2 : 1;
+        new otherTeamName[32];
+        team_name_from_id(otherTeam, otherTeamName, charsmax(otherTeamName));
+        announce_all("[KTP] %s: 30 seconds to /confirmunpause!", otherTeamName);
+    } else if (g_autoConfirmLeft == 10) {
+        announce_all("[KTP] 10 seconds to auto-resume!");
+    } else if (g_autoConfirmLeft == 5) {
+        announce_all("[KTP] 5 seconds to auto-resume!");
+    }
+
+    // Time's up - auto confirm
+    if (g_autoConfirmLeft <= 0) {
+        safe_remove_task(g_taskAutoConfirmId);
+        g_autoConfirmLeft = 0;
+
+        announce_all("[KTP] Auto-confirming unpause (60 second timeout).");
+        log_ktp("event=AUTO_CONFIRMUNPAUSE reason='60s_timeout'");
+
+        // Set confirmed and start countdown
+        g_unpauseConfirmedOther = true;
+        stop_unpause_reminder();
+        start_unpause_countdown("auto-confirm");
+    }
 }
 
 stock enter_pending_phase(const initiator[]) {
@@ -3579,11 +4239,11 @@ public cmd_ktpconfig(id) {
     new techA = g_techBudget[1], techX = g_techBudget[2];
 
     client_print(id, print_chat,
-        "[KTP] need=%d | tech_budget=%d | Allies %d/%d (tech:%ds), Axis %d/%d (tech:%ds) | map=%s cfg=%s (%s)",
-        g_readyRequired, g_techBudgetSecs, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, g_currentMap, found?cfg:"-", found?"found":"MISS");
+        "[KTP] need=%d | tech_budget=%d | %s %d/%d (tech:%ds), %s %d/%d (tech:%ds) | map=%s cfg=%s (%s)",
+        g_readyRequired, g_techBudgetSecs, g_teamName[1], alliesReady, alliesPlayers, techA, g_teamName[2], axisReady, axisPlayers, techX, g_currentMap, found?cfg:"-", found?"found":"MISS");
     client_print(id, print_console,
-        "[KTP] need=%d | tech_budget=%d | Allies %d/%d (tech:%ds), Axis %d/%d (tech:%ds) | map=%s cfg=%s (%s)",
-        g_readyRequired, g_techBudgetSecs, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, g_currentMap, found?cfg:"-", found?"found":"MISS");
+        "[KTP] need=%d | tech_budget=%d | %s %d/%d (tech:%ds), %s %d/%d (tech:%ds) | map=%s cfg=%s (%s)",
+        g_readyRequired, g_techBudgetSecs, g_teamName[1], alliesReady, alliesPlayers, techA, g_teamName[2], axisReady, axisPlayers, techX, g_currentMap, found?cfg:"-", found?"found":"MISS");
     return PLUGIN_HANDLED;
 }
 
@@ -3635,9 +4295,7 @@ public cmd_ktpseason(id) {
     }
 
     // Toggle season status
-    log_amx("[KTP DEBUG] ktpseason BEFORE toggle: g_ktpSeasonActive=%d", g_ktpSeasonActive);
     g_ktpSeasonActive = !g_ktpSeasonActive;
-    log_amx("[KTP DEBUG] ktpseason AFTER toggle: g_ktpSeasonActive=%d", g_ktpSeasonActive);
 
     // Get player identity for logging
     new name[32], sid[44], ip[32];

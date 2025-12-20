@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.9.0** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.9.1** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -901,10 +901,10 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.9.0
-- **Status**: Stable (Awaiting VPS Testing for HLStatsX integration)
-- **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.0
-- **Last Updated**: December 18, 2025
+- **Current Version**: v0.9.1
+- **Status**: Stable (Score persistence and Discord embeds verified on VPS)
+- **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.5
+- **Last Updated**: December 20, 2025
 - **Platforms**: Day of Defeat 1.3
 
 ---
@@ -913,7 +913,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.9.0                       ║
+║             KTP MATCH HANDLER v0.9.1                       ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -946,4 +946,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.9.0** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️
+**KTP Match Handler v0.9.1** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️

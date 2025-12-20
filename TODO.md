@@ -1,8 +1,8 @@
 # KTPMatchHandler TODO
 
 > **Created:** 2025-12-16
-> **Last Updated:** 2025-12-18
-> **Current Version:** 0.9.0 (Season Control + Match Password Protection)
+> **Last Updated:** 2025-12-20
+> **Current Version:** 0.9.1 (Discord Embed Roster + Score Persistence Fix)
 
 This document tracks planned features and improvements for KTPMatchHandler.
 Use this to maintain context across conversation resets.
@@ -643,7 +643,7 @@ ORDER BY kills DESC;
 ```
 
 #### Tasks - Phase 6 (Requires Live VPS Testing)
-- [ ] Test warmup → match transition
+- [x] Test warmup → match transition
 - [ ] Test match → post-match transition
 - [ ] Test half tracking across map change
 - [ ] Verify query separation works
@@ -670,6 +670,29 @@ ORDER BY kills DESC;
 | KTPHLStatsX | `scripts/hlstats.pl` | 4 | Add match context tracking | ✅ Done |
 | KTPHLStatsX | `scripts/HLstats_EventHandlers.plib` | 4 | Add KTP event handlers | ✅ Done |
 | KTPHLStatsX | `sql/ktp_schema.sql` | 5 | New tables and columns | ✅ Done |
+
+---
+
+## v0.9.1 Release Summary
+
+**Released:** 2025-12-20
+**Status:** Compiled and staged to server
+
+### Fixes Delivered
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Discord Embed Roster | ✅ Done | Side-by-side team display with inline fields |
+| Score Persistence | ✅ Done | `msg_TeamScore` hook saves to localinfo on every game tick |
+| Discord Newlines | ✅ Done | Proper JSON escaping via `escape_for_json()` |
+| Periodic Score Save | ✅ Done | Backup task every 30s during 1st half |
+
+### Technical Changes
+
+- **`msg_TeamScore()` hook** now persists scores to localinfo immediately when game updates
+- **`escape_for_json()`** helper function for proper JSON string escaping
+- **Discord embed format** for roster with match ID in footer
+- **Removed code block wrapper** from Discord messages so markdown renders
 
 ---
 
@@ -769,18 +792,17 @@ public unready_reminder_tick()  // Periodic unready player reminder
 
 ## Known Edge Cases (To Test on VPS)
 
-| Edge Case | Expected Behavior | Risk |
-|-----------|-------------------|------|
-| Player disconnects mid-match | Stats flush on disconnect with matchid | Low |
-| Server crash during match | Match context lost, no KTP_MATCH_END logged | Medium |
-| Map change without /end | Should flush stats and log KTP_MATCH_END | Medium |
-| Multiple matches same map | Each gets unique matchid (timestamp differs) | Low |
-| HLStatsX daemon restart mid-match | Context hash cleared, subsequent events have no matchid | Medium |
-| Very long match (>2 hours) | Timestamp-based matchid still unique | Low |
-| Bot kills during match | Bots excluded from stats_logging | Low |
-| MySQL connection failure | Events logged to file but match_id may be lost | Medium |
+| Edge Case | Expected Behavior | Status |
+|-----------|-------------------|--------|
+| Player disconnects mid-match | Stats flush on disconnect with matchid | ✅ Verified |
+| Server crash during match | Match context lost, no KTP_MATCH_END logged | Untested |
+| Map change without /end | Should flush stats and log KTP_MATCH_END | Untested |
+| Multiple matches same map | Each gets unique matchid (timestamp differs) | Untested |
+| HLStatsX daemon restart mid-match | Context hash cleared, subsequent events have no matchid | Untested |
+| Very long match (>2 hours) | Timestamp-based matchid still unique | Untested |
+| MySQL connection failure | Events logged to file but match_id may be lost | Untested |
 
 ---
 
-*Last compiled: 2025-12-18 (v0.9.0)*
+*Last compiled: 2025-12-20 (v0.9.1)*
 *Staged to: N:\Nein_\KTP DoD Server\dod\addons\ktpamx\plugins\*
