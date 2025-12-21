@@ -1,61 +1,156 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
+
+:: Skip pause if running non-interactively (set CI=1 before calling)
+if "%CI%"=="" set "INTERACTIVE=1"
 
 echo ========================================
 echo KTPMatchHandler Plugin Compiler
-echo Using KTPAMXX 2.0 via WSL
+echo Using KTPAMXX via WSL
 echo ========================================
 echo.
 
-:: WSL paths (Windows N:\ = /mnt/n/)
-set "WSL_COMPILER=/mnt/n/Nein_/KTP/amxmodx_2_0"
-set "WSL_AMXXPC=%WSL_COMPILER%/amxxpc"
-set "WSL_INCLUDE=%WSL_COMPILER%/include"
-set "WSL_REAPI_INCLUDE=/mnt/n/Nein_/KTP Git Projects/KTPReAPI/reapi/extra/amxmodx/scripting/include"
-set "WSL_REAPI_VERSION=/mnt/n/Nein_/KTP Git Projects/KTPReAPI/reapi/version"
+:: ============================================
+:: Path Configuration
+:: ============================================
 
-:: Get the script directory in WSL format
-set "SCRIPT_DIR=%~dp0"
-:: Convert Windows path to WSL path (N:\ -> /mnt/n/)
-set "SCRIPT_DIR=%SCRIPT_DIR:\=/%"
-set "SCRIPT_DIR=%SCRIPT_DIR:N:=/mnt/n%"
+:: KTPAMXX paths (source of truth for includes)
+set "KTPAMXX_DIR=N:\Nein_\KTP Git Projects\KTPAMXX"
+set "KTPAMXX_BUILD=%KTPAMXX_DIR%\obj-linux\packages\base\addons\ktpamx\scripting"
+set "KTPAMXX_INCLUDES=%KTPAMXX_DIR%\plugins\include"
 
-:: Output directory (Windows path for mkdir)
-set "OUTPUT=%~dp0compiled"
-if not exist "%OUTPUT%" mkdir "%OUTPUT%"
+:: Plugin paths
+set "PLUGIN_DIR=%~dp0"
+set "PLUGIN_NAME=KTPMatchHandler"
+set "OUTPUT_DIR=%PLUGIN_DIR%compiled"
 
-:: WSL output path
-set "WSL_OUTPUT=%SCRIPT_DIR%compiled"
+:: Staging path (server)
+set "STAGE_DIR=N:\Nein_\KTP DoD Server\dod\addons\ktpamx\plugins"
 
-echo Compiling KTPMatchHandler.sma via WSL...
+:: Temp build directory (no spaces)
+set "TEMP_BUILD=/tmp/ktpbuild"
+
+:: ============================================
+:: Validation
+:: ============================================
+
+:: Check KTPAMXX build exists
+if not exist "%KTPAMXX_BUILD%\amxxpc" (
+    echo [ERROR] KTPAMXX Linux compiler not found!
+    echo         Expected: %KTPAMXX_BUILD%\amxxpc
+    echo         Please build KTPAMXX first: cd KTPAMXX ^&^& ./build_linux.sh
+    if defined INTERACTIVE pause
+    exit /b 1
+)
+
+:: Check includes exist
+if not exist "%KTPAMXX_INCLUDES%\amxmodx.inc" (
+    echo [ERROR] KTPAMXX includes not found!
+    echo         Expected: %KTPAMXX_INCLUDES%
+    if defined INTERACTIVE pause
+    exit /b 1
+)
+
+:: Check source file exists
+if not exist "%PLUGIN_DIR%%PLUGIN_NAME%.sma" (
+    echo [ERROR] Source file not found: %PLUGIN_NAME%.sma
+    if defined INTERACTIVE pause
+    exit /b 1
+)
+
+:: Create output directory
+if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%"
+
+:: ============================================
+:: Convert paths to WSL format
+:: ============================================
+
+set "WSL_KTPAMXX_BUILD=%KTPAMXX_BUILD:\=/%"
+set "WSL_KTPAMXX_BUILD=%WSL_KTPAMXX_BUILD:N:=/mnt/n%"
+
+set "WSL_KTPAMXX_INCLUDES=%KTPAMXX_INCLUDES:\=/%"
+set "WSL_KTPAMXX_INCLUDES=%WSL_KTPAMXX_INCLUDES:N:=/mnt/n%"
+
+set "WSL_PLUGIN_DIR=%PLUGIN_DIR:\=/%"
+set "WSL_PLUGIN_DIR=%WSL_PLUGIN_DIR:N:=/mnt/n%"
+
+set "WSL_OUTPUT_DIR=%OUTPUT_DIR:\=/%"
+set "WSL_OUTPUT_DIR=%WSL_OUTPUT_DIR:N:=/mnt/n%"
+
+:: ============================================
+:: Compile
+:: ============================================
+
+echo [INFO] Compiling %PLUGIN_NAME%.sma...
+echo        Compiler: %KTPAMXX_BUILD%\amxxpc
+echo        Includes: %KTPAMXX_INCLUDES%
 echo.
 
-:: Compile the plugin using WSL
-:: Note: Paths with spaces need proper quoting
-wsl bash -c "cd '%SCRIPT_DIR%' && '%WSL_AMXXPC%' KTPMatchHandler.sma -i'%WSL_INCLUDE%' -i'%WSL_REAPI_INCLUDE%' -i'%WSL_REAPI_VERSION%' -o'%WSL_OUTPUT%/KTPMatchHandler.amxx'"
+:: Build WSL command that:
+:: 1. Creates temp build directory
+:: 2. Copies compiler and .so to temp
+:: 3. Copies source file (converting line endings)
+:: 4. Copies all includes
+:: 5. Compiles
+:: 6. Copies result back
 
-if %ERRORLEVEL% EQU 0 (
+set WSL_CMD=^
+mkdir -p %TEMP_BUILD% ^&^& ^
+cp '%WSL_KTPAMXX_BUILD%/amxxpc' %TEMP_BUILD%/ ^&^& ^
+cp '%WSL_KTPAMXX_BUILD%/amxxpc32.so' %TEMP_BUILD%/ ^&^& ^
+cp -r '%WSL_KTPAMXX_INCLUDES%' %TEMP_BUILD%/include ^&^& ^
+sed 's/\r$//' '%WSL_PLUGIN_DIR%%PLUGIN_NAME%.sma' ^> %TEMP_BUILD%/%PLUGIN_NAME%.sma ^&^& ^
+cd %TEMP_BUILD% ^&^& ^
+./amxxpc %PLUGIN_NAME%.sma -i./include -o%PLUGIN_NAME%.amxx ^&^& ^
+cp %PLUGIN_NAME%.amxx '%WSL_OUTPUT_DIR%/'
+
+:: Execute via WSL
+wsl bash -c "%WSL_CMD%"
+
+if %ERRORLEVEL% NEQ 0 (
     echo.
     echo ========================================
-    echo BUILD SUCCESSFUL!
+    echo [FAILED] Compilation failed!
     echo ========================================
-    echo Output: %OUTPUT%\KTPMatchHandler.amxx
+    if defined INTERACTIVE pause
+    exit /b 1
+)
+
+:: ============================================
+:: Verify Output
+:: ============================================
+
+if not exist "%OUTPUT_DIR%\%PLUGIN_NAME%.amxx" (
     echo.
-    echo Copying to staging folder...
-    set "STAGING=N:\Nein_\KTP DoD Server\dod\addons\ktpamx\plugins"
-    copy /Y "%OUTPUT%\KTPMatchHandler.amxx" "%STAGING%\KTPMatchHandler.amxx"
-    if %ERRORLEVEL% EQU 0 (
-        echo Staged: %STAGING%\KTPMatchHandler.amxx
-    ) else (
-        echo WARNING: Failed to copy to staging folder
-    )
-) else (
-    echo.
-    echo ========================================
-    echo BUILD FAILED!
-    echo ========================================
-    echo Check the errors above.
+    echo [ERROR] Output file not created!
+    if defined INTERACTIVE pause
+    exit /b 1
 )
 
 echo.
-pause
+echo ========================================
+echo [SUCCESS] Compilation successful!
+echo ========================================
+echo Output: %OUTPUT_DIR%\%PLUGIN_NAME%.amxx
+echo.
+
+:: ============================================
+:: Stage to Server
+:: ============================================
+
+echo [INFO] Staging to server...
+if not exist "%STAGE_DIR%" (
+    echo [WARN] Stage directory does not exist: %STAGE_DIR%
+    echo        Skipping staging.
+) else (
+    copy /Y "%OUTPUT_DIR%\%PLUGIN_NAME%.amxx" "%STAGE_DIR%\%PLUGIN_NAME%.amxx" >nul
+    if !ERRORLEVEL! EQU 0 (
+        echo [OK] Staged: %STAGE_DIR%\%PLUGIN_NAME%.amxx
+    ) else (
+        echo [WARN] Failed to stage to server
+    )
+)
+
+echo.
+echo Done!
+if defined INTERACTIVE pause

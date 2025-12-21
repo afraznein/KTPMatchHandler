@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.2] - 2025-12-21
+
+### Fixed
+- **Discord Message ID Capture** - Fixed curl response handling for embed editing
+  - Root cause: `CURLOPT_WRITEDATA` was passed file path string instead of file handle
+  - Solution: Open file with `fopen()`, set `CURLOPT_WRITEFUNCTION` callback, pass handle to curl
+  - Discord message ID now properly captured and stored in localinfo for 2nd half editing
+  - New function: `discord_curl_write()` - Writes response data to file handle
+  - New global: `g_discordResponseHandle[]` - File handle array for curl callback
+
+- **Scoreboard Restoration After Round Restart** - Scores now persist after 2nd half starts
+  - Root cause: DoD round restart resets scoreboard immediately after `dodx_set_team_score()` call
+  - Solution: 3-second delayed restoration task runs after round restart completes
+  - New function: `task_delayed_score_restore()` - Restores scores after round restart
+  - New function: `schedule_score_restoration()` - Schedules delayed restoration
+  - New task ID: `g_taskScoreRestoreId` (55613)
+
+- **TeamScore Message Format** - Fixed DoD-specific message parsing
+  - Root cause: Code used `get_msg_arg_string()` expecting team name like CS/HL
+  - Reality: DoD sends BYTE team index (1=Allies, 2=Axis), not string
+  - Fix: Changed to `get_msg_arg_int(1)` for correct team index parsing
+  - `TEAMSCORE_RAW` and `SCORE_UPDATE` events now properly logged
+
+### Technical
+- Curl write callback properly integrated with AMX curl module
+- File handle cleanup in `discord_embed_callback()` prevents resource leaks
+- Score restoration uses task-based delay for timing consistency
+
+---
+
 ## [0.9.1] - 2025-12-20
 
 ### Added
@@ -363,6 +393,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+[0.9.2]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/afraznein/KTPMatchHandler/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/afraznein/KTPMatchHandler/compare/v0.7.1...v0.8.0
