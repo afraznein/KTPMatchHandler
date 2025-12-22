@@ -6,6 +6,83 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.16] - 2025-12-21
+
+### Changed
+- Version bump for consistency across source and documentation
+
+---
+
+## [0.9.15] - 2025-12-21
+
+### Fixed
+- **Server Crash on 2nd Half Start** - Fixed crash during map exec
+  - Cause: `broadcast_team_score()` sending network messages during map load when players not connected
+  - Solution: Only broadcast in delayed tasks (5s+), use `dodx_set_team_score()` for immediate set
+
+---
+
+## [0.9.14] - 2025-12-21
+
+### Fixed
+- **/score Command Double-Counting** - Command no longer double-counts 1st half scores in 2nd half
+  - Root cause: Treated cumulative scoreboard as 2nd-half-only, then added 1st half again
+  - Solution: Use same calculation as `build_scores_field()` - subtract 1st half from cumulative
+
+---
+
+## [0.9.13] - 2025-12-21
+
+### Fixed
+- **Scoreboard Client Update** - Scoreboard now updates for all clients on 2nd half score restoration
+  - Root cause: `dodx_set_team_score()` only set internal server value, not broadcast to clients
+  - Clients only saw update when next flag was capped (triggering game's TeamScore message)
+  - Solution: Send TeamScore message to all clients after setting internal score
+
+### Added
+- `broadcast_team_score()` - Sends TeamScore message (MSG_ALL) to force client scoreboard update
+- `set_and_broadcast_score()` - Combined function for score restoration (set + broadcast)
+
+### Technical
+- Uses DoD TeamScore format: BYTE team (1=Allies, 2=Axis), SHORT score
+- Called after each `dodx_set_team_score()` in delayed restoration tasks
+
+---
+
+## [0.9.12] - 2025-12-21
+
+### Fixed
+- **Discord Embed 2nd Half Score** - Embed now shows correct 0-0 score at 2nd half start
+  - Root cause: Subtraction logic caused wrong values (e.g., 10-6 became 4 instead of 0)
+  - Solution: Sync `g_matchScore` immediately after score restoration
+
+### Changed
+- Multiple restoration attempts at 5s, 8s, 12s, 15s after 2nd half start
+
+---
+
+## [0.9.11] - 2025-12-21
+
+### Fixed
+- **Discord Newlines** - Embed uses `^n` for newlines (properly escaped to `\n` in JSON)
+
+---
+
+## [0.9.10] - 2025-12-21
+
+### Changed
+- **Score Save Timing** - Initial periodic score save at 2 seconds (was 30 seconds)
+  - Ensures 0-0 is persisted early in case of early map change
+
+---
+
+## [0.9.9] - 2025-12-21
+
+### Removed
+- Redundant plain text Discord message at match start (only embed message sent now)
+
+---
+
 ## [0.9.2] - 2025-12-21
 
 ### Fixed
@@ -393,6 +470,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+[0.9.16]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.15...v0.9.16
+[0.9.15]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.14...v0.9.15
+[0.9.14]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.13...v0.9.14
+[0.9.13]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.12...v0.9.13
+[0.9.12]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.11...v0.9.12
+[0.9.11]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.10...v0.9.11
+[0.9.10]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.9...v0.9.10
+[0.9.9]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.2...v0.9.9
 [0.9.2]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/afraznein/KTPMatchHandler/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/afraznein/KTPMatchHandler/compare/v0.8.0...v0.9.0

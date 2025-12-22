@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.9.1** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.9.16** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -35,7 +35,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **ReAPI Pause Integration**: Direct pause control via `rh_set_server_pause()` - bypasses engine
 - **Complete Time Freeze**: `host_frame` stops, `g_psv.time` frozen, physics halted
 - **Works with `pausable 0`**: Block engine pause, only KTP system works
-- **Unified Countdown**: ALL pause entry points use 5-second countdown
+- **Unified Countdown**: 3-second pre-pause countdown, 5-second unpause countdown
 - **Real-Time HUD Updates**: MM:SS timer during pause (KTP-ReHLDS + KTP-ReAPI)
 - **Server Messages Work**: rcon say, join/leave events display during pause
 - **Player Chat**: Server processes, client rendering WIP (KTP-ReHLDS feature)
@@ -113,12 +113,16 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
    ktp_pause_duration "300"              // 5-minute base pause
    ktp_pause_extension "120"             // 2-minute extensions
    ktp_pause_max_extensions "2"          // Max 2 extensions
-   ktp_prepause_seconds "5"              // Countdown before pause
-   ktp_prematch_pause_seconds "5"        // Pre-match countdown
+   ktp_prepause_seconds "3"              // Countdown before pause (live match)
+   ktp_prematch_pause_seconds "3"        // Countdown before pause (pre-match)
+   ktp_pause_countdown "5"               // Unpause countdown duration
+   ktp_unpause_autorequest_secs "300"    // Auto-request unpause after 5 min
 
    // Match System
    ktp_ready_required "6"                // Players needed to ready
    ktp_tech_budget_seconds "300"         // 5-min tech budget per team
+   ktp_unready_reminder_secs "30"        // Unready reminder interval
+   ktp_unpause_reminder_secs "15"        // Unpause reminder interval
 
    // File Paths (auto-detected, only set if using custom paths)
    // ktp_maps_file "<configsdir>/ktp_maps.ini"
@@ -138,28 +142,28 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 ### Starting a Match
 
 ```
-Player types: /start <password>    (password required for competitive)
+Player types: .ktp <password>    (password required for competitive)
      ↓
-Both teams type: /confirm (one captain per team)
+Both teams type: .confirm (one captain per team)
      ↓
-Players type: /ready (6 per team by default)
+Players type: .ready (6 per team by default)
      ↓
-Match goes LIVE! (5-second countdown)
+Match goes LIVE! (3-second countdown)
      ↓
 Map config auto-executes
 ```
 
 **Alternative Match Types (no password required):**
-- `/draft` - Draft match (always available, competitive config)
-- `/12man` - 12-man match (casual play)
-- `/scrim` - Scrim match (practice)
+- `.draft` - Draft match (always available, competitive config)
+- `.12man` - 12-man match (casual play)
+- `.scrim` - Scrim match (practice)
 
 ### Pause System
 
 **To Pause:**
 ```
-/pause          Tactical pause (5-sec countdown → PAUSED)
-/tech           Technical pause (uses team budget)
+.pause          Tactical pause (3-sec countdown → PAUSED)
+.tech           Technical pause (uses team budget)
 ```
 
 **During Pause (shows real-time HUD):**
@@ -174,71 +178,72 @@ Map config auto-executes
 
   Pauses Left: A:1 X:0
 
-  /resume  |  /confirmunpause  |  /extend
+  .resume  |  .go  |  .ext
 ```
 
 **To Unpause:**
 ```
-Team 1: /resume           ← Initiates unpause countdown
-Team 2: /confirmunpause   ← Confirms (both teams must agree)
+Team 1: .resume    ← Initiates unpause request
+Team 2: .go        ← Confirms (both teams must agree)
      ↓
 5-second countdown → LIVE!
 ```
 
 **Pause Features:**
-- `/extend` - Add 2 minutes (max 2× = 4 minutes total)
+- `.ext` - Add 2 minutes (max 2× = 4 minutes total)
 - Auto-warnings at 30s and 10s remaining
 - Auto-unpause when timer expires
-- `/cancelpause` - Cancel disconnect auto-pause (10-sec window)
+- `.nodc` - Cancel disconnect auto-pause (10-sec window)
 
 ### All Commands
 
+> **Note:** All commands work with both `/` and `.` prefixes (e.g., `.pause` or `/pause`). The `.` prefix is preferred as it's shorter.
+
 #### Match Control
 ```
-/start <pw>, /ktp <pw>  Initiate competitive match (password required)
-/draft                  Initiate draft match (no password, always available)
-/12man                  Initiate 12-man match (no password)
-/scrim                  Initiate scrim match (no password)
-/confirm                Confirm team ready for start
-/notconfirm             Remove team confirmation
-/ready                  Mark yourself ready
-/notready               Mark yourself not ready
-/whoneedsready          Show unready players with Steam IDs
-/unready                Alias for /whoneedsready
-/status                 View detailed match status
-/prestatus              View pre-start confirmation status
-/cancel                 Cancel match/pre-start
+.ktp <pw>               Initiate competitive match (password required)
+.draft                  Initiate draft match (no password, always available)
+.12man                  Initiate 12-man match (no password)
+.scrim                  Initiate scrim match (no password)
+.confirm                Confirm team ready for start
+.notconfirm             Remove team confirmation
+.ready, .rdy            Mark yourself ready
+.notready               Mark yourself not ready
+.status                 View detailed match status
+.prestatus              View pre-start confirmation status
+.cancel                 Cancel match/pre-start
 ```
 
 #### Pause Control
 ```
-/pause                  Tactical pause (5-sec countdown)
-/tech                   Technical pause
-/resume                 Request unpause (owner team)
-/confirmunpause         Confirm unpause (other team)
-/cresume, /cunpause     Aliases for confirmunpause
-/extend                 Extend pause +2 minutes
-/cancelpause            Cancel disconnect auto-pause
+.pause, .tac            Tactical pause (3-sec countdown)
+.tech, .technical       Technical pause (uses team budget)
+.resume                 Request unpause (owner team)
+.go                     Confirm unpause (other team)
+.ext, .extend           Extend pause +2 minutes
+.nodc, .stopdc          Cancel disconnect auto-pause
 ```
 
 #### Team Names & Score
 ```
-/setteamallies <name>   Set custom Allies team name
-/setteamaxis <name>     Set custom Axis team name
-/teamnames              Show current team names
-/resetteamnames         Reset to default (Allies/Axis)
-/score                  Show current match score
+.setallies <name>       Set custom Allies team name
+.setaxis <name>         Set custom Axis team name
+.names                  Show current team names
+.resetnames             Reset to default (Allies/Axis)
+.score                  Show current match score
 ```
 
 #### Admin Commands
 ```
-ktp_pause               Server/RCON pause (same as /pause)
-/reloadmaps             Reload map configuration
-/ktpconfig              View current CVARs
-/ktpdebug               Toggle debug mode
-/ktpseason              Check season status
-/ktpseason <pw>         Toggle season active/inactive (admin password)
+ktp_pause               Server/RCON pause (same as .pause)
+.cfg                    View current CVARs
 ```
+
+#### Additional Aliases
+All commands also work with the `/` prefix and some have additional forms:
+- `pause`, `resume`, `confirm`, `cancel`, `status` (without prefix)
+- `/tactical`, `.tactical` (same as `.pause`)
+- `/technical` (same as `.tech`)
 
 ---
 
@@ -283,8 +288,8 @@ server_cmd("pause");         // Requires pausable 1
 
 | Type | Limit | Duration | Extensions | Command | Budget |
 |------|-------|----------|------------|---------|--------|
-| **Tactical** | 1 per team/match | 5 min | 2× 2 min | `/pause` | No |
-| **Technical** | Unlimited | Uses budget | Unlimited | `/tech` | 5 min/team/match |
+| **Tactical** | 1 per team/match | 5 min | 2× 2 min | `.pause` | No |
+| **Technical** | Unlimited | Uses budget | Unlimited | `.tech` | 5 min/team/match |
 | **Disconnect** | Auto | Uses budget | Unlimited | Auto | From tech |
 
 > **Note (v0.7.1):** Tactical pause limits and tech budgets are now per-MATCH, not per-half. Teams cannot reset their pause allowance by going to 2nd half.
@@ -292,11 +297,11 @@ server_cmd("pause");         // Requires pausable 1
 ### Pause Flow
 
 ```
-Player types /pause
+Player types .pause
          ↓
-5-second countdown
-  "Pausing in 5..."
-  "Pausing in 4..."
+3-second countdown
+  "Pausing in 3..."
+  "Pausing in 2..."
   ...
          ↓
 rh_set_server_pause(true)
@@ -313,7 +318,7 @@ Real-time timer counts up
          ↓
 Warnings at 30s and 10s
          ↓
-Auto-unpause OR /resume → /confirmunpause
+Auto-unpause OR .resume → .go
          ↓
 5-second countdown
   "Unpausing in 5..."
@@ -383,17 +388,18 @@ discord_auth_secret=your-secret-here
 ```
 // ===== Pause System =====
 ktp_pause_duration "300"              // Base pause duration (seconds) - Default: 5 min
-ktp_pause_extension "120"             // Extension time per /extend - Default: 2 min
+ktp_pause_extension "120"             // Extension time per .ext - Default: 2 min
 ktp_pause_max_extensions "2"          // Max extensions allowed - Default: 2
-ktp_prepause_seconds "5"              // Countdown before pause (live match)
-ktp_prematch_pause_seconds "5"        // Countdown before pause (pre-match)
+ktp_prepause_seconds "3"              // Countdown before pause (live match)
+ktp_prematch_pause_seconds "3"        // Countdown before pause (pre-match)
 ktp_pause_countdown "5"               // Unpause countdown duration
-ktp_force_pausable "1"                // Force pausable=1 (not needed with ReAPI)
+ktp_unpause_autorequest_secs "300"    // Auto-request unpause after N seconds
+ktp_unpause_reminder_secs "15"        // Reminder interval for unpause confirmation
 
 // ===== Match System =====
 ktp_ready_required "6"                // Players needed to ready per team
 ktp_tech_budget_seconds "300"         // Technical pause budget per team (5 min)
-ktp_unpause_autorequest_secs "300"    // Auto-request unpause after N seconds
+ktp_unready_reminder_secs "30"        // Reminder interval for unready players
 
 // ===== File Paths (auto-detected, override only if needed) =====
 ktp_maps_file "<configsdir>/ktp_maps.ini"    // Auto-detected at runtime
@@ -766,8 +772,8 @@ static bool:warned_10sec = false;
 - ✅ **ReAPI pause natives** - `rh_set_server_pause()` for direct control
 - ✅ **Works with `pausable 0`** - Block engine pause, use KTP system only
 - ✅ **Unified countdown system** - ALL pause entry points use countdown
-- ✅ **Pre-pause countdown** - 5-second warning before pause
-- ✅ **Pause extensions** - `/extend` adds 2 minutes (max 2×)
+- ✅ **Pre-pause countdown** - 3-second warning before pause
+- ✅ **Pause extensions** - `.ext` adds 2 minutes (max 2×)
 - ✅ **Real-time HUD updates** - MM:SS timer via ReAPI hook
 - ✅ **Auto-warnings** - 30-second and 10-second alerts
 - ✅ **Auto-unpause** - When timer expires
@@ -901,10 +907,10 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.9.1
+- **Current Version**: v0.9.16
 - **Status**: Stable (Score persistence and Discord embeds verified on VPS)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.5
-- **Last Updated**: December 20, 2025
+- **Last Updated**: December 21, 2025
 - **Platforms**: Day of Defeat 1.3
 
 ---
@@ -913,37 +919,40 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.9.1                       ║
+║             KTP MATCH HANDLER v0.9.16                      ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
-║  /start <pw>    Start competitive match (password req)     ║
-║  /draft         Start draft match (no password)            ║
-║  /12man         Start 12-man match (no password)           ║
-║  /scrim         Start scrim match (no password)            ║
-║  /confirm       Confirm team ready                         ║
-║  /ready         Mark yourself ready                        ║
-║  /status        View match status                          ║
-║  /score         View current match score                   ║
+║  .ktp <pw>      Start competitive match (password req)     ║
+║  .draft         Start draft match (no password)            ║
+║  .12man         Start 12-man match (no password)           ║
+║  .scrim         Start scrim match (no password)            ║
+║  .confirm       Confirm team ready                         ║
+║  .ready         Mark yourself ready                        ║
+║  .status        View match status                          ║
+║  .score         View current match score                   ║
 ║                                                            ║
 ║  PAUSE CONTROL                                             ║
-║  /pause         Tactical pause (5-sec countdown)           ║
-║  /tech          Technical pause                            ║
-║  /resume        Request unpause (your team)                ║
-║  /confirmunpause Confirm unpause (other team)              ║
-║  /extend        Add 2 minutes (max 2×)                     ║
+║  .pause         Tactical pause (3-sec countdown)           ║
+║  .tech          Technical pause                            ║
+║  .resume        Request unpause (your team)                ║
+║  .go            Confirm unpause (other team)               ║
+║  .ext           Add 2 minutes (max 2×)                     ║
+║  .nodc          Cancel disconnect auto-pause               ║
 ║                                                            ║
-║  ADMIN                                                     ║
-║  /ktpseason     Check/toggle season status (admin pw)      ║
+║  TEAM NAMES                                                ║
+║  .setallies     Set Allies team name                       ║
+║  .setaxis       Set Axis team name                         ║
+║  .names         Show current team names                    ║
 ║                                                            ║
 ║  MATCH TYPES                                               ║
-║  COMPETITIVE    /start, /ktp (password + season required)  ║
-║  DRAFT          /draft (always allowed, no Discord)        ║
-║  12MAN          /12man (always allowed, no Discord)        ║
-║  SCRIM          /scrim (always allowed, no Discord)        ║
+║  COMPETITIVE    .ktp (password + season required)          ║
+║  DRAFT          .draft (always allowed, no Discord)        ║
+║  12MAN          .12man (always allowed, no Discord)        ║
+║  SCRIM          .scrim (always allowed, no Discord)        ║
 ╚════════════════════════════════════════════════════════════╝
 ```
 
 ---
 
-**KTP Match Handler v0.9.1** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️
+**KTP Match Handler v0.9.16** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️
