@@ -32,6 +32,12 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **KTP_MATCH_START/END**: Log markers for HLStatsX daemon parsing
 - **Per-Match Tracking**: Same match ID persists across both halves
 
+### HLTV Recording Integration (v0.10.1+)
+- **Automatic Demo Recording**: [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) hooks into match events
+- **Match-Type Naming**: Demos named `<type>_<matchid>_<map>.dem` (e.g., `ktp_KTP-1735052400-dod_anzio_dod_anzio.dem`)
+- **Start/Stop Control**: Recording starts on 1st half LIVE, stops on match end
+- **UDP RCON**: Sends record/stoprecording commands to paired HLTV instance
+
 ### Advanced Pause System (ReAPI Native)
 - **ReAPI Pause Integration**: Direct pause control via `rh_set_server_pause()` - bypasses engine
 - **Complete Time Freeze**: `host_frame` stops, `g_psv.time` frozen, physics halted
@@ -73,6 +79,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 **Optional:**
 - cURL extension (for Discord webhook notifications)
 - ReAPI module (for enhanced pause HUD updates - plugin works without it)
+- [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) (automatic HLTV demo recording on match start/end)
 
 ### Installation
 
@@ -855,6 +862,7 @@ MIT License - See [LICENSE](LICENSE) file for details
 - **GitHub Issues**: [Report Bugs](https://github.com/afraznein/KTPMatchHandler/issues)
 - **KTP-ReHLDS**: [Custom ReHLDS Fork](https://github.com/afraznein/KTP-ReHLDS)
 - **KTP-ReAPI**: [Custom ReAPI Fork](https://github.com/afraznein/KTP-ReAPI)
+- **KTPHLTVRecorder**: [Automatic HLTV Demo Recording](https://github.com/afraznein/KTPHLTVRecorder)
 
 **Upstream Projects:**
 - **ReAPI**: [Original ReAPI](https://github.com/s1lentq/reapi)
@@ -908,10 +916,10 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.9.16
+- **Current Version**: v0.10.1
 - **Status**: Stable (Score persistence and Discord embeds verified on VPS)
-- **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.5
-- **Last Updated**: December 21, 2025
+- **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.6
+- **Last Updated**: December 26, 2025
 - **Platforms**: Day of Defeat 1.3
 
 ---
@@ -920,7 +928,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.9.16                      ║
+║             KTP MATCH HANDLER v0.10.1                      ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -956,4 +964,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.9.16** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️
+**KTP Match Handler v0.10.1** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️
