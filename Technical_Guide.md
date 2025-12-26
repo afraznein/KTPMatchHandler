@@ -13,7 +13,7 @@
 
 **No Metamod Required** - Runs on Linux and Windows via ReHLDS Extension Mode
 
-**Last Updated:** 2025-12-22
+**Last Updated:** 2025-12-26
 
 [Architecture](#-six-layer-architecture) • [Components](#-component-documentation) • [Installation](#-complete-installation-guide) • [Repositories](#-github-repositories)
 
@@ -28,10 +28,11 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 6: Application Plugins (AMX Plugins)                                  │
-│  KTPMatchHandler v0.9.16 - Match workflow, pause system, HLStatsX integration│
+│  KTPMatchHandler v0.10.1 - Match workflow, pause, OT system, HLStatsX        │
+│  KTPHLTVRecorder v1.0.0  - Auto HLTV recording via match events              │
 │  KTPCvarChecker v7.7     - Real-time cvar enforcement                        │
 │  KTPFileChecker v2.1     - File consistency validation + Discord             │
-│  KTPAdminAudit v2.1.0    - Menu-based kick/ban with audit logging            │
+│  KTPAdminAudit v2.2.0    - Menu-based kick/ban + RCON audit logging          │
 │  stats_logging.sma       - DODX weaponstats with match ID support            │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ Uses AMXX Forwards & Natives
@@ -50,23 +51,23 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
                               ↓ Uses AMXX Module API
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 3: Engine Bridge Modules (AMXX Modules)                               │
-│  KTP-ReAPI v5.25.0.0-ktp - Exposes ReHLDS/ReGameDLL hooks to plugins         │
+│  KTP-ReAPI v5.29.0.361-ktp - Exposes ReHLDS/ReGameDLL hooks to plugins       │
 │  Extension Mode: No Metamod, uses KTPAMXX GetEngineFuncs()                   │
-│  Custom Hook: RH_SV_UpdatePausedHUD for real-time pause HUD                  │
+│  Custom Hooks: RH_SV_UpdatePausedHUD (pause HUD), RH_SV_Rcon (RCON audit)    │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ Uses ReHLDS Hookchains
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 2: Scripting Platform (ReHLDS Extension)                              │
-│  KTPAMXX v2.6.0 - AMX Mod X fork with extension mode + HLStatsX integration  │
+│  KTPAMXX v2.6.1 - AMX Mod X fork with extension mode + HLStatsX integration  │
 │  Loads as ReHLDS extension, no Metamod required                              │
 │  Provides: client_cvar_changed forward, MF_RegModuleFrameFunc()              │
-│  New: ktp_drop_client native, ktp_discord.inc shared integration             │
+│  New: ktp_drop_client native, ktp_discord.inc v1.1.0 (curl module)           │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ ReHLDS Extension API
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  Layer 1: Game Engine (KTP-ReHLDS v3.19.0+)                                  │
+│  Layer 1: Game Engine (KTP-ReHLDS v3.20.0+)                                  │
 │  Custom ReHLDS fork with extension loader + KTP features                     │
-│  Provides: SV_UpdatePausedHUD hook, pfnClientCvarChanged callback            │
+│  Provides: SV_UpdatePausedHUD hook, SV_Rcon hook, pfnClientCvarChanged       │
 │  Blocked: kick, banid, removeid, addip, removeip (use .kick/.ban instead)    │
 │  Extension hooks: SV_ClientCommand, SV_InactivateClients, AlertMessage,      │
 │                   PF_TraceLine, PF_SetClientKeyValue, SV_PlayerRunPreThink   │
@@ -80,7 +81,7 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 │                                                                              │
 │  VPS Services:                                                               │
 │  - KTPFileDistributor       - .NET 8 file sync daemon (SFTP distribution)   │
-│  - KTPHLTVKicker v5.9       - Java HLTV spectator management                │
+│  - HLTV Scheduled Restarts  - systemd timer (replaces KTPHLTVKicker)        │
 │                                                                              │
 │  SDK Layer:                                                                  │
 │  - KTP HLSDK v1.0.0         - pfnClientCvarChanged callback headers          │
@@ -322,7 +323,7 @@ rehlds/
 ### Layer 1: KTP-ReHLDS (Engine)
 
 **Repository:** [github.com/afraznein/KTPReHLDS](https://github.com/afraznein/KTPReHLDS)
-**Version:** 3.19.0+
+**Version:** 3.20.0.896+
 **License:** MIT
 
 <details>
@@ -356,7 +357,7 @@ Standard GoldSrc pause freezes everything. KTP-ReHLDS provides selective freeze:
 | Entity thinking                      | Commands (`/pause`, `/resume`)     |
 | Projectiles                          | Client message buffers             |
 
-#### Extension Mode Hookchains (v3.16.0-3.18.0)
+#### Extension Mode Hookchains (v3.16.0-3.20.0)
 
 | Hook                       | Purpose                              | Used By              |
 |----------------------------|--------------------------------------|----------------------|
@@ -369,6 +370,7 @@ Standard GoldSrc pause freezes everything. KTP-ReHLDS provides selective freeze:
 | `PF_TraceLine`             | TraceLine interception               | DODX `TraceLine`     |
 | `PF_SetClientKeyValue`     | Client key/value changes             | DODX stats           |
 | `SV_PlayerRunPreThink`     | Player PreThink loop                 | DODX shot tracking   |
+| `SV_Rcon` (v3.20.0+)       | RCON command interception            | KTPAdminAudit        |
 
 #### Custom Hook: `SV_UpdatePausedHUD`
 
@@ -501,7 +503,7 @@ void SV_ParseCvarValue(client_t *cl, sizebuf_t *msg) {
 ### Layer 2: KTPAMXX (Scripting Platform)
 
 **Repository:** [github.com/afraznein/KTPAMXX](https://github.com/afraznein/KTPAMXX)
-**Version:** 2.6.0
+**Version:** 2.6.1
 **License:** GPL v3
 **Base:** AMX Mod X 1.10.0.5468-dev
 
@@ -864,7 +866,7 @@ addons/ktpamx/
 ### Layer 3: KTP-ReAPI (Engine Bridge Module)
 
 **Repository:** [github.com/afraznein/KTPReAPI](https://github.com/afraznein/KTPReAPI)
-**Version:** 5.25.0.0-ktp
+**Version:** 5.29.0.361-ktp
 **License:** GPL v3
 **Base:** ReAPI 5.26+
 
@@ -902,9 +904,9 @@ void OnAmxxAttach() {
 </details>
 
 <details>
-<summary><b>⚡ Custom KTP Hook: RH_SV_UpdatePausedHUD</b></summary>
+<summary><b>⚡ Custom KTP Hooks: RH_SV_UpdatePausedHUD & RH_SV_Rcon</b></summary>
 
-#### The Critical Hook for Real-Time Pause HUD
+#### Pause HUD Hook (RH_SV_UpdatePausedHUD)
 
 ```pawn
 // In reapi_engine_const.inc
@@ -919,6 +921,25 @@ enum RehldsHook {
     RH_SV_UpdatePausedHUD,
 };
 ```
+
+#### RCON Audit Hook (RH_SV_Rcon) - v3.20.0+
+
+```pawn
+// In reapi_engine_const.inc
+enum RehldsHook {
+    // ... standard hooks ...
+
+    /*
+    * Called when an RCON command is received (KTP-ReHLDS v3.20.0+)
+    * Params: (netadr, cmd, responseBuffer, responseBufferSize)
+    * @note Use for auditing server control commands (quit, restart, etc.)
+    * @note Return HC_SUPERCEDE to block the command
+    */
+    RH_SV_Rcon,
+};
+```
+
+**Used By:** KTPAdminAudit v2.2.0+ for logging RCON quit/restart commands to Discord
 
 #### Plugin Usage
 
@@ -1196,7 +1217,7 @@ forward dod_stats_flush(id);
 #### KTPMatchHandler
 
 **Repository:** [github.com/afraznein/KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler)
-**Version:** 0.9.16
+**Version:** 0.10.1
 **License:** MIT
 
 <details>
@@ -1226,6 +1247,14 @@ forward dod_stats_flush(id);
    Pause system active
    Full logging with match ID
    Score tracking per half
+
+5a. OVERTIME (if regulation ties)
+   - Auto-triggers when scores tied at match end
+   - 5-minute rounds, side swaps between OT rounds
+   - First team ahead at round end wins (repeat if still tied)
+   - Optional 10-min break before OT (.otbreak/.skip)
+   - Tech budget resets for OT
+   - OT state persists via localinfo (_ktp_ots, _ktp_otst)
 
 6. HALF END / MATCH END
    - dodx_flush_all_stats() - flush match stats
@@ -1373,7 +1402,7 @@ fc_exactweapons "0"  // Same hitbox bounds allowed (public servers)
 #### KTPAdminAudit
 
 **Repository:** [github.com/afraznein/KTPAdminAudit](https://github.com/afraznein/KTPAdminAudit)
-**Version:** 2.1.0
+**Version:** 2.2.0
 **License:** MIT
 
 <details>
@@ -1386,6 +1415,7 @@ fc_exactweapons "0"  // Same hitbox bounds allowed (public servers)
 - **Immunity protection** - Players with ADMIN_IMMUNITY (a) cannot be kicked/banned
 - **Ban duration selection** - 1 hour, 1 day, 1 week, or permanent
 - **Discord audit logging** - Real-time notifications to configured channels
+- **RCON audit logging** (v2.2.0+) - Logs quit/restart commands with source IP via RH_SV_Rcon hook
 - **ReHLDS integration** - Uses `ktp_drop_client` native to bypass blocked kick command
 
 #### Why ktp_drop_client?
@@ -1856,87 +1886,92 @@ WantedBy=multi-user.target
 
 ---
 
-#### KTPHLTVKicker
+#### KTPHLTVRecorder
 
-**Repository:** [github.com/afraznein/KTPHLTVKicker](https://github.com/afraznein/KTPHLTVKicker)
-**Version:** 5.9
-**Platform:** Java (Windows Task Scheduler)
+**Repository:** [github.com/afraznein/KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder)
+**Version:** 1.0.0
+**Platform:** AMX/Pawn Plugin
 **License:** MIT
 
 <details>
-<summary><b>📺 HLTV Spectator Management</b></summary>
+<summary><b>📹 Automatic HLTV Demo Recording</b></summary>
 
 #### Purpose
 
-HLTV spectator bots consume player slots on game servers. They're used for recording demos but should be removed when not needed to free slots for actual players.
+Automatically records HLTV demos when KTPMatchHandler matches start and stop. Eliminates manual demo recording and ensures consistent naming for match archives.
 
-KTPHLTVKicker automatically:
-1. Connects to configured game servers via RCON
-2. Lists connected players
-3. Identifies HLTV spectator bots (by name pattern)
-4. Kicks them to free the slot
+KTPHLTVRecorder:
+1. Hooks KTPMatchHandler's `ktp_match_start` forward
+2. Sends UDP RCON `record` command to paired HLTV server
+3. Hooks `ktp_match_end` forward
+4. Sends `stoprecording` command
 
 #### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Windows Task Scheduler                                      │
-│  - Trigger: Daily at 4:00 AM                                 │
-│  - Action: Run KTPHLTVKicker.jar                             │
+│  KTPMatchHandler                                             │
+│  - Fires ktp_match_start(matchid, map, type, half)          │
+│  - Fires ktp_match_end(matchid, map)                         │
 └─────────────────────────────┬───────────────────────────────┘
-                              │
+                              │ AMX Forward
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│  KTPHLTVKicker (Java)                                        │
-│  - Reads .env for server list                                │
-│  - Uses Steam Condenser for GoldSrc RCON                     │
-│  - Handles offline servers gracefully                        │
+│  KTPHLTVRecorder                                             │
+│  - Receives match events                                     │
+│  - Formats demo name: <type>_<matchid>_<map>.dem            │
+│  - Uses Sockets module for UDP RCON                         │
 └─────────────────────────────┬───────────────────────────────┘
-                              │ RCON (UDP)
+                              │ UDP RCON
                               ↓
-┌───────────────────┐   ┌───────────────────┐   ┌─────────────┐
-│  KTP NY Server    │   │  KTP CHI Server   │   │  KTP DAL... │
-│  - status         │   │  - status         │   │             │
-│  - kick HLTV      │   │  - kick HLTV      │   │             │
-└───────────────────┘   └───────────────────┘   └─────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  HLTV Server (paired 1:1 with game server)                   │
+│  - Receives: record ktp_KTP-1735052400-dod_anzio_dod_anzio  │
+│  - Receives: stoprecording                                   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-#### Configuration (.env)
+#### Configuration (hltv_recorder.ini)
 
-```bash
-# Server list (comma-separated)
-SERVERS=ny.example.com:27015,chi.example.com:27015,dal.example.com:27015
-
-# RCON passwords (server-specific or shared)
-RCON_PASSWORD_NY=secret1
-RCON_PASSWORD_CHI=secret2
-RCON_PASSWORD_DEFAULT=defaultsecret
-
-# HLTV detection pattern
-HLTV_NAME_PATTERN=HLTV.*|TV-.*
-
-# Timeout for offline servers (seconds)
-CONNECT_TIMEOUT=5
+```ini
+; HLTV Recorder Configuration
+hltv_enabled = 1
+hltv_ip = 74.91.112.242
+hltv_port = 27020
+hltv_rcon = ktpadmin
 ```
 
-#### Steam Condenser Usage
+#### Demo Naming Format
 
-```java
-// Using Steam Condenser library for GoldSrc RCON
-GoldSrcServer server = new GoldSrcServer(address);
-server.rconAuth(password);
+`<matchtype>_<matchid>_<map>.dem`
 
-// Get player list
-String status = server.rconExec("status");
+Examples:
+- `ktp_KTP-1735052400-dod_anzio_dod_anzio.dem`
+- `scrim_KTP-1735052400-dod_flash_dod_flash.dem`
+- `draft_KTP-1735052400-dod_avalanche_dod_avalanche.dem`
 
-// Parse and kick HLTV players
-for (String player : parseHLTVPlayers(status)) {
-    server.rconExec("kick " + player);
-    log.info("Kicked HLTV: " + player);
-}
-```
+#### HLTV Server Pairing
+
+Each game server should have a 1:1 pairing with an HLTV instance:
+
+| Game Server | Port | HLTV Port |
+|-------------|------|-----------|
+| Atlanta 1   | 27015 | 27020 |
+| Atlanta 2   | 27016 | 27021 |
+| Atlanta 3   | 27017 | 27022 |
 
 </details>
+
+---
+
+#### KTPHLTVKicker (DEFUNCT)
+
+> **Note:** This project has been replaced by scheduled HLTV restarts via systemd timers.
+> HLTV instances now restart at 3AM/11AM EST, which clears any stale connections.
+
+**Repository:** [github.com/afraznein/KTPHLTVKicker](https://github.com/afraznein/KTPHLTVKicker)
+**Version:** 5.9 (final)
+**Status:** DEFUNCT
 
 ---
 
@@ -2164,20 +2199,21 @@ discord_channel_id_audit_competitive=3333333333333333333
 
 | Layer    | Repository                                              | Version       | Description                         |
 |----------|---------------------------------------------------------|---------------|-------------------------------------|
-| Engine   | [KTP-ReHLDS](https://github.com/afraznein/KTPReHLDS)    | 3.19.0+       | Custom ReHLDS with extension loader |
+| Engine   | [KTP-ReHLDS](https://github.com/afraznein/KTPReHLDS)    | 3.20.0.896+   | Custom ReHLDS with extension loader |
 | SDK      | [KTP HLSDK](https://github.com/afraznein/KTPhlsdk)      | 1.0.0         | SDK headers with callback support   |
-| Platform | [KTPAMXX](https://github.com/afraznein/KTPAMXX)         | 2.6.0         | AMX Mod X extension mode fork       |
-| Bridge   | [KTP-ReAPI](https://github.com/afraznein/KTPReAPI)      | 5.25.0.0-ktp  | ReAPI extension mode fork           |
+| Platform | [KTPAMXX](https://github.com/afraznein/KTPAMXX)         | 2.6.1         | AMX Mod X extension mode fork       |
+| Bridge   | [KTP-ReAPI](https://github.com/afraznein/KTPReAPI)      | 5.29.0.361-ktp| ReAPI extension mode fork           |
 | HTTP     | [KTP AMXX Curl](https://github.com/afraznein/KTPAmxxCurl)| 1.1.1-ktp    | Non-blocking HTTP module            |
 
 ### Application Plugins
 
 | Plugin        | Repository                                                      | Version | Description                    |
 |---------------|-----------------------------------------------------------------|---------|--------------------------------|
-| Match Handler | [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler) | 0.9.16  | Match workflow + HLStatsX      |
+| Match Handler | [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler) | 0.10.1  | Match workflow + OT + HLStatsX |
+| HLTV Recorder | [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) | 1.0.0   | Auto HLTV demo recording       |
 | Cvar Checker  | [KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)   | 7.7     | Client cvar enforcement        |
 | File Checker  | [KTPFileChecker](https://github.com/afraznein/KTPFileChecker)   | 2.1     | File consistency + Discord     |
-| Admin Audit   | [KTPAdminAudit](https://github.com/afraznein/KTPAdminAudit)     | 2.1.0   | Menu-based kick/ban + audit    |
+| Admin Audit   | [KTPAdminAudit](https://github.com/afraznein/KTPAdminAudit)     | 2.2.0   | Menu-based kick/ban + RCON audit |
 
 ### Supporting Infrastructure
 
@@ -2185,8 +2221,8 @@ discord_channel_id_audit_competitive=3333333333333333333
 |------------------|-------------------------------------------------------------------|---------|----------------------------|
 | Discord Relay    | [Discord Relay](https://github.com/afraznein/discord-relay)       | 1.0.1   | Cloud Run webhook proxy    |
 | HLStatsX         | [KTPHLStatsX](https://github.com/afraznein/KTPHLStatsX)           | 0.1.0   | Match-based stats tracking |
-| File Distributor | [KTPFileDistributor](https://github.com/afraznein/KTPFileDistributor) | -   | SFTP file distribution     |
-| HLTV Kicker      | [KTPHLTVKicker](https://github.com/afraznein/KTPHLTVKicker)       | 5.9     | HLTV spectator management  |
+| File Distributor | [KTPFileDistributor](https://github.com/afraznein/KTPFileDistributor) | 1.0.0 | SFTP file distribution     |
+| ~~HLTV Kicker~~  | [KTPHLTVKicker](https://github.com/afraznein/KTPHLTVKicker)       | 5.9     | DEFUNCT - replaced by systemd restarts |
 
 ### Upstream Projects
 
@@ -2236,6 +2272,6 @@ discord_channel_id_audit_competitive=3333333333333333333
 
 *Cross-platform: Windows + Linux*
 
-**Last Updated:** 2025-12-22
+**Last Updated:** 2025-12-26
 
 </div>

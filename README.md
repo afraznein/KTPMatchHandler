@@ -232,6 +232,13 @@ Team 2: .go        ← Confirms (both teams must agree)
 .nodc, .stopdc          Cancel disconnect auto-pause
 ```
 
+#### Overtime (when triggered)
+```
+.otbreak                Request 10-minute break before OT
+.skip                   Skip break / end break early
+.ext                    Extend break +5 minutes (2x per team)
+```
+
 #### Team Names & Score
 ```
 .setallies <name>       Set custom Allies team name
@@ -604,6 +611,34 @@ static bool:warned_10sec = false;
 
 ## 📝 Changelog
 
+### v0.10.1 (2025-12-24) - External Plugin Forwards
+
+**Added:**
+- ✅ **ktp_match_start forward** - External plugins can hook match start events (used by KTPHLTVRecorder)
+- ✅ **ktp_match_end forward** - External plugins can hook match end events
+- ✅ **HLTV Recording integration** - KTPHLTVRecorder hooks these forwards for automatic demo recording
+
+**Technical:**
+- Forwards fire on 1st half start and match completion (regulation or OT)
+
+---
+
+### v0.10.0 (2025-12-23) - Overtime System
+
+**Added:**
+- ✅ **Automatic Overtime** - Triggers when regulation ends in a tie
+- ✅ **5-minute OT rounds** - Each round is 5 minutes, first team ahead at round end wins
+- ✅ **Side swaps** - Teams swap sides between OT rounds
+- ✅ **Break system** - Optional 10-minute break before OT with `.otbreak` / `.skip` commands
+- ✅ **Break extensions** - `.ext` adds 5 minutes (2x per team during break)
+- ✅ **OT state persistence** - OT round, scores, tech budgets survive map changes via localinfo
+
+**Technical:**
+- New localinfo keys: `_ktp_reg` (regulation totals), `_ktp_ots` (OT scores), `_ktp_otst` (OT state)
+- Mode-based context detection: `h2`, `ot1`, `ot2`, etc.
+
+---
+
 ### v0.7.1 (2025-12-18) - Match Context Persistence & Per-Match Pause Limits
 
 **Added:**
@@ -948,6 +983,11 @@ For support and questions, please open an issue on GitHub.
 ║  .go            Confirm unpause (other team)               ║
 ║  .ext           Add 2 minutes (max 2×)                     ║
 ║  .nodc          Cancel disconnect auto-pause               ║
+║                                                            ║
+║  OVERTIME (when triggered)                                 ║
+║  .otbreak       Request 10-min break before OT             ║
+║  .skip          Skip/end break early                       ║
+║  .ext           Extend break +5 min (2× per team)          ║
 ║                                                            ║
 ║  TEAM NAMES                                                ║
 ║  .setallies     Set Allies team name                       ║
