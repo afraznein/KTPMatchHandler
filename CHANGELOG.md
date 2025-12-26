@@ -6,6 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.1] - 2025-12-23
+
+### Added
+- **Overtime System** - Complete OT implementation for competitive matches
+  - Triggers automatically when regulation ends tied
+  - 60-second voting period for optional 10-minute break (`.otbreak` / `.skip`)
+  - 5-minute extensions during break (`.ext`, 2x per team max)
+  - 5-minute OT rounds (mp_timelimit 5)
+  - Teams swap sides each OT round (OT1: Team1=Allies, OT2: Team1=Axis, etc.)
+  - Tech budget resets once at OT start (full budget for both teams)
+  - Infinite OT rounds until winner determined
+  - Grand total scores carried over to scoreboard each OT round
+  - Full state persistence across map changes via localinfo
+
+- **OT Localinfo Keys** - New keys for OT state persistence
+  - `_ktp_reg` - Regulation totals
+  - `_ktp_ots` - OT scores per round (pipe-separated)
+  - `_ktp_otst` - OT state (tech budgets + starting side)
+
+- **OT Commands**
+  - `.otbreak` - Vote for 10-minute break before OT
+  - `.skip` - Skip break voting or end break early
+  - `.ext` - Extend break by 5 minutes (2x per team)
+
+- **HUD Announcements**
+  - OT triggered with voting options (60 sec display)
+  - OT break countdown (updates every 30 sec)
+  - OT round start with grand totals
+  - OT winner announcement with score breakdown
+  - Regulation winner HUD announcement
+
+### Fixed
+- OT HUD argument order (team names and scores)
+- Score restoration unified for 2nd half and OT using pending score variables
+
+### Technical
+- New globals: `g_inOvertime`, `g_otRound`, `g_regulationScore[]`, `g_otScores[][]`
+- New globals: `g_otTechBudget[]`, `g_otTeam1StartsAs`, `g_otBreakExtensions[]`
+- New globals: `g_pendingScoreAllies`, `g_pendingScoreAxis`
+- Functions: `trigger_overtime()`, `handle_ot_round_end()`, `save_ot_context()`
+- Functions: `start_ot_break()`, `task_ot_break_tick()`, `end_ot_break()`
+- Functions: `cmd_otbreak()`, `cmd_ot_skip()`, `cmd_ot_extend()`
+- Helper functions for OT score string formatting/parsing
+
+---
+
 ## [0.9.16] - 2025-12-21
 
 ### Changed

@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.9.16** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.1** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -16,7 +16,8 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **Season Control**: Password-protected season toggle - disable competitive matches off-season
 - **Match Password Protection**: Competitive matches require password entry
 - **Half Tracking**: Automatic 1st/2nd half detection with map rotation adjustment
-- **Match Context Persistence**: Match ID, pause counts, and tech budget survive map changes via localinfo
+- **Overtime System**: Automatic OT when regulation ties - 5-min rounds, side swaps, break voting
+- **Match Context Persistence**: Match ID, pause counts, tech budget, and OT state survive map changes via localinfo
 - **Unique Match IDs**: Format `KTP-{timestamp}-{mapname}` for stats correlation
 - **Captain System**: Team confirmation before ready-up phase
 - **Ready-Up System**: Configurable player count per team (default: 6)
@@ -35,7 +36,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **ReAPI Pause Integration**: Direct pause control via `rh_set_server_pause()` - bypasses engine
 - **Complete Time Freeze**: `host_frame` stops, `g_psv.time` frozen, physics halted
 - **Works with `pausable 0`**: Block engine pause, only KTP system works
-- **Unified Countdown**: 3-second pre-pause countdown, 5-second unpause countdown
+- **Unified Countdown**: 5-second pre-pause countdown, 5-second unpause countdown
 - **Real-Time HUD Updates**: MM:SS timer during pause (KTP-ReHLDS + KTP-ReAPI)
 - **Server Messages Work**: rcon say, join/leave events display during pause
 - **Player Chat**: Server processes, client rendering WIP (KTP-ReHLDS feature)
@@ -113,8 +114,8 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
    ktp_pause_duration "300"              // 5-minute base pause
    ktp_pause_extension "120"             // 2-minute extensions
    ktp_pause_max_extensions "2"          // Max 2 extensions
-   ktp_prepause_seconds "3"              // Countdown before pause (live match)
-   ktp_prematch_pause_seconds "3"        // Countdown before pause (pre-match)
+   ktp_prepause_seconds "5"              // Countdown before pause (live match)
+   ktp_prematch_pause_seconds "5"        // Countdown before pause (pre-match)
    ktp_pause_countdown "5"               // Unpause countdown duration
    ktp_unpause_autorequest_secs "300"    // Auto-request unpause after 5 min
 
@@ -148,7 +149,7 @@ Both teams type: .confirm (one captain per team)
      ↓
 Players type: .ready (6 per team by default)
      ↓
-Match goes LIVE! (3-second countdown)
+Match goes LIVE! (5-second countdown)
      ↓
 Map config auto-executes
 ```
@@ -162,7 +163,7 @@ Map config auto-executes
 
 **To Pause:**
 ```
-.pause          Tactical pause (3-sec countdown → PAUSED)
+.pause          Tactical pause (5-sec countdown → PAUSED)
 .tech           Technical pause (uses team budget)
 ```
 
@@ -216,7 +217,7 @@ Team 2: .go        ← Confirms (both teams must agree)
 
 #### Pause Control
 ```
-.pause, .tac            Tactical pause (3-sec countdown)
+.pause, .tac            Tactical pause (5-sec countdown)
 .tech, .technical       Technical pause (uses team budget)
 .resume                 Request unpause (owner team)
 .go                     Confirm unpause (other team)
@@ -299,9 +300,9 @@ server_cmd("pause");         // Requires pausable 1
 ```
 Player types .pause
          ↓
-3-second countdown
-  "Pausing in 3..."
-  "Pausing in 2..."
+5-second countdown
+  "Pausing in 5..."
+  "Pausing in 4..."
   ...
          ↓
 rh_set_server_pause(true)
@@ -390,8 +391,8 @@ discord_auth_secret=your-secret-here
 ktp_pause_duration "300"              // Base pause duration (seconds) - Default: 5 min
 ktp_pause_extension "120"             // Extension time per .ext - Default: 2 min
 ktp_pause_max_extensions "2"          // Max extensions allowed - Default: 2
-ktp_prepause_seconds "3"              // Countdown before pause (live match)
-ktp_prematch_pause_seconds "3"        // Countdown before pause (pre-match)
+ktp_prepause_seconds "5"              // Countdown before pause (live match)
+ktp_prematch_pause_seconds "5"        // Countdown before pause (pre-match)
 ktp_pause_countdown "5"               // Unpause countdown duration
 ktp_unpause_autorequest_secs "300"    // Auto-request unpause after N seconds
 ktp_unpause_reminder_secs "15"        // Reminder interval for unpause confirmation
@@ -772,7 +773,7 @@ static bool:warned_10sec = false;
 - ✅ **ReAPI pause natives** - `rh_set_server_pause()` for direct control
 - ✅ **Works with `pausable 0`** - Block engine pause, use KTP system only
 - ✅ **Unified countdown system** - ALL pause entry points use countdown
-- ✅ **Pre-pause countdown** - 3-second warning before pause
+- ✅ **Pre-pause countdown** - 5-second warning before pause
 - ✅ **Pause extensions** - `.ext` adds 2 minutes (max 2×)
 - ✅ **Real-time HUD updates** - MM:SS timer via ReAPI hook
 - ✅ **Auto-warnings** - 30-second and 10-second alerts
@@ -933,7 +934,7 @@ For support and questions, please open an issue on GitHub.
 ║  .score         View current match score                   ║
 ║                                                            ║
 ║  PAUSE CONTROL                                             ║
-║  .pause         Tactical pause (3-sec countdown)           ║
+║  .pause         Tactical pause (5-sec countdown)           ║
 ║  .tech          Technical pause                            ║
 ║  .resume        Request unpause (your team)                ║
 ║  .go            Confirm unpause (other team)               ║
