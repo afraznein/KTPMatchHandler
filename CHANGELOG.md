@@ -6,6 +6,407 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.30] - 2026-01-01
+
+### Added
+- **`.commands` / `.cmds` command** - Prints categorized command list to console
+  - Match Setup, Ready System, Pause System, Overtime, Team Names, Status & Info sections
+  - Chat message directs player to check console
+- **HLTV reminders** - Added connection reminders before match start
+  - Pre-start phase: Reminder when `.ktp` command is used
+  - Pending phase: Reminder when entering pending phase
+  - 2nd half/OT: Reminder to verify HLTV still connected before resuming
+- **2nd half pending HUD** - Repeating HUD shows "=== 2ND HALF - Type .ready ===" with scores
+  - HUD task now properly started during 2nd half restoration
+  - Shows team names and 1st half scores while waiting for readies
+
+### Fixed
+- **Intermission freeze** - Server no longer freezes at end of 2nd half/OT
+  - Root cause: `HC_SUPERCEDE` during intermission blocked changelevel, leaving game stuck
+  - Solution: Use `HC_CONTINUE` and let changelevel proceed after processing
+- **OT trigger stays on same map** - Match now correctly stays on current map for overtime
+  - Root cause: Changelevel proceeded to next map in rotation instead of same map
+  - Solution: When OT triggered, save OT state to localinfo, force changelevel to same map with `HC_SUPERCEDE`
+  - New function: `save_ot_state_for_first_round()` - Persists OT state for map reload
+
+### Removed
+- **Debug commands** - Removed `.sbtest` and `.teamtest` admin commands (no longer needed)
+
+### Technical
+- `process_second_half_end_changelevel()` now returns `bool` - true if OT triggered
+- `OnChangeLevel()` handles OT case specially - forces changelevel to same map
+- Pending HUD task started during 2nd half and OT restoration in `check_match_context()`
+
+---
+
+## [0.10.28] - 2026-01-01
+
+### Added
+- **Delayed changelevel with announcements** - Complete match finalization before map change
+  - 2nd half and OT round ends now SUPERSEDE the engine changelevel (`HC_SUPERCEDE`)
+  - Winner/OT announcement in chat with detailed score breakdown
+  - Brief HUD (3 seconds) so players can see scoreboard
+  - Discord embed update with match result BEFORE map change
+  - 5-second countdown before manual map change with HUD display
+  - Manual changelevel after countdown using `server_cmd("changelevel %s")`
+
+### Fixed
+- **Match end never processed** - Logevents fire at exact moment of map change
+  - Root cause: Logevent-based detection was unreliable (events never processed)
+  - Solution: Changelevel hook intercepts BEFORE map change, not during
+  - 2nd half being skipped is now FIXED - state is finalized before map change
+
+### Changed
+- Removed logevent-based game end detection (was source of the bug)
+- `handle_map_change()` replaced by specialized functions:
+  - `handle_first_half_end()` - 1st half, allows immediate changelevel
+  - `process_second_half_end_changelevel()` - 2nd half, supersedes with countdown
+  - `process_ot_round_end_changelevel()` - OT rounds, supersedes with countdown
+- `handle_ot_round_end()` replaced by `process_ot_round_end_changelevel()`
+
+### Technical
+- `OnChangeLevel()` now branches based on match state (1st half vs 2nd/OT)
+- Uses `g_pendingChangeMap` to store target map during countdown
+- Countdown task `task_changelevel_countdown()` shows HUD and executes changelevel
+- OT tie (another round needed) saves state and immediately changelevel (no countdown)
+
+---
+
+## [0.10.27] - 2026-01-01
+
+### Added
+- **Changelevel hook integration** - Reliable match state finalization
+  - Uses new `RH_PF_changelevel_I` hook from KTP-ReHLDS/KTP-ReAPI
+  - Intercepts ALL map changes BEFORE they happen (not after like logevents)
+  - Guarantees `handle_map_change()` runs before map actually changes
+  - Extensive logging: `CHANGELEVEL_HOOK`, `CHANGELEVEL_INTERCEPT`, `CHANGELEVEL_FINALIZED`
+  - ~~Fallback: Logevent detection still active as backup~~ (Removed in 0.10.28)
+
+### Technical
+- Hook registered in `plugin_init()` via `RegisterHookChain(RH_PF_changelevel_I, ...)`
+- `OnChangeLevel(map[], landmark[])` handler properly finalizes match state
+- Prevents double-processing with `g_changeLevelHandled` flag
+- Cancels pending logevent tasks when changelevel hook fires first
+
+---
+
+## [0.10.26] - 2025-12-31
+
+### Fixed
+- **False overtime trigger after 1st half** - Critical bug fix
+  - Root cause: Logevents for "scored" fire at exact moment of map change, never processed by plugin
+  - Previous fixes (0.10.24, 0.10.25) relied on `handle_map_change()` running, but it never does
+  - New detection: Check for `_ktp_h2` scores to distinguish 1st half end from 2nd half end
+  - If `mode='h2'` + `live='1'` but NO h2 scores → 1st half just ended, restore for 2nd half
+  - If `mode='h2'` + `live='1'` AND has h2 scores → 2nd half ended, finalize match
+
+---
+
+## [0.10.25] - 2025-12-31
+
+### Fixed
+- **Race condition in game end detection** - Critical bug fix
+  - Previous fix (0.10.24) didn't work because `handle_map_change()` never ran
+  - Root cause: Map changes in same second as scored events, 0.5s delayed task never executes
+  - Fix: Call `handle_map_change()` synchronously on 2nd scored event instead of via delayed task
+  - Backup task still scheduled on 1st event in case 2nd event is missed
+
+---
+
+## [0.10.24] - 2025-12-31
+
+### Fixed
+- **False overtime trigger on 2nd half load** - Critical bug fix
+  - `_ktp_live` flag now cleared when 1st half ends (in `handle_map_change()`)
+  - Prevents false "2nd half ended" detection when 2nd half map loads
+  - Flow: 1st live sets flag → 1st end clears flag → 2nd live sets flag
+
+---
+
+## [0.10.23] - 2025-12-31
+
+### Added
+- **Robust match end detection** - Handles matches when `plugin_end()` doesn't run (extension mode)
+  - `LOCALINFO_H2_SCORES` (`_ktp_h2`) - Persists 2nd half running scores during periodic save
+  - `amx_nextmap` set to current map during 2nd half start - ensures map cycles back
+  - `finalize_completed_second_half()` - Full match finalization with OT support
+  - Overtime triggers correctly from finalize if scores are tied
+- **Custom team name native** - `dodx_set_scoreboard_team_name(team, name[])` in DODX module
+  - Sends TeamInfo message to all clients for each player on specified team
+  - `.teamtest` admin command to test custom team names
+
+### Technical
+- Map cycling back to same map + `_ktp_live="1"` = 2nd half ended (not pending)
+- 2nd half scores now persisted to localinfo every 30 seconds for crash/end detection
+
+---
+
+## [0.10.22] - 2025-12-31
+
+### Fixed
+- **Score calculation for 2nd half** - Accounts for restored 1st half scores in DODX
+  - `.score` command now correctly subtracts restored 1st half from DODX totals
+  - `handle_map_change()` 2nd half score calculation fixed (same formula)
+  - Formula: `team1SecondHalf = g_matchScore[2] - g_firstHalfScore[1]`
+
+### Added
+- `LOCALINFO_LIVE` (`_ktp_live`) - Tracks when match is live for abandoned match detection
+- `finalize_abandoned_match()` - Handles matches that end on different map
+- Discord notification and `ktp_match_end` forward for abandoned matches
+
+### Technical
+- Mode is no longer cleared after restoration (kept until match actually ends)
+- Enables detection of abandoned matches when plugin loads on new map
+
+---
+
+## [0.10.21] - 2025-12-31
+
+### Fixed
+- **2nd half restoration** - Players can now `.ready` after map change
+  - `g_matchPending = true` set during 2nd half restoration
+  - `g_matchLive = false` set explicitly to prevent "match in progress" error
+  - Captain display fixed to show correct team names after side swap
+
+### Added
+- "Type .ready to start 2nd half" announcement after restoration
+- OT restoration also sets `g_matchPending = true` for consistency
+
+---
+
+## [0.10.20] - 2025-12-31
+
+### Fixed
+- **TeamScore broadcast now works** - Proper scoreboard updates for 2nd half
+  - Added `dodx_broadcast_team_score()` native to DODX module (C++ level)
+  - Native properly sends TeamScore messages from module level (avoids AMX crash)
+  - Native sets gamerules score AND broadcasts to clients in one operation
+  - Updated `broadcast_team_score()` to use new native
+  - Added `g_skipTeamScoreAdjust` flag to prevent double-adjustment
+  - Scoreboard now shows correct cumulative scores immediately after 2nd half start
+
+### Technical
+- DODX module now exports `dodx_broadcast_team_score(team, score)` native
+- Message format: BYTE(team) + SHORT(score) sent via MESSAGE_BEGIN/MESSAGE_END
+- Avoids server crashes that occurred with AMX message_begin/write_byte/message_end
+
+---
+
+## [0.10.19] - 2025-12-31
+
+### Fixed
+- **Disabled TeamScore broadcast** - Prevents server crashes
+  - Both `write_byte(teamnum)` and `write_string("teamname")` formats caused crashes
+  - DODX `dodx_set_team_score()` still sets internal gamerules score
+  - Scoreboard updates naturally on next flag touch or round event
+  - Chat confirmation message still works
+
+---
+
+## [0.10.18] - 2025-12-31
+
+### Added
+- **Match start protection** - Prevents starting a new match when one is in progress
+  - Blocks `.ktp`, `.scrim`, `.12man`, `.draft` during live matches
+  - Blocks during pre-start phase (waiting for confirms)
+  - Blocks during pending phase (waiting for readies)
+  - 2nd half and OT still work (g_matchLive=false between halves)
+
+---
+
+## [0.10.17] - 2025-12-31
+
+### Fixed
+- **Critical**: Server crash on TeamScore broadcast - wrong message format
+  - DoD TeamScore expects `write_string("Allies")` not `write_byte(1)`
+  - Was using byte team number instead of team name string
+- **Overlapping HUD messages at 2nd half start**
+  - Removed redundant "RESTORING 1ST HALF SCORES" HUD (match start HUD already shows scores)
+  - Shortened "2nd HALF DETECTED" prestart HUD from 8s to 4s
+  - Changed delayed score confirmation from HUD to chat message
+
+---
+
+## [0.10.16] - 2025-12-31
+
+### Fixed
+- **Critical**: Score restoration timing - increased delay from 5s to 12s
+  - Root cause: `mp_clan_timer=10` means round actually restarts 10s after trigger
+  - With 5s delay, scores were restored DURING countdown, then reset on round restart
+  - Now waits 12s to ensure round restart has completed
+
+### Added
+- **Comprehensive safety checks in score restoration**
+  - `DELAYED_SCORE_RESTORE_START` - logs all state before starting
+  - `DELAYED_SCORE_RESTORE_ABORT` - if match not live or invalid scores
+  - `DODX_SCORE_SET` - logs before/after values for DODX set_team_score
+  - `DODX_SCORE_SET_VERIFY_FAIL` - if verification fails
+  - `BROADCAST_SCORE_PRECHECK` - logs connected count and msgid
+  - `BROADCAST_SCORE_ATTEMPT` - logs all values before broadcast
+  - `BROADCAST_SCORE_SENT` - after each TeamScore message
+  - `BROADCAST_SCORE_COMPLETE` - when done
+- Re-enabled TeamScore broadcast (was disabled in v0.9.15 due to crashes)
+  - With 12s delay, clients are connected and round restart is done
+  - Validates msgId and connected player count before broadcast
+
+---
+
+## [0.10.15] - 2025-12-31
+
+### Fixed
+- **Critical**: Periodic score tracking now runs in 2nd half (was only 1st half)
+  - `PERIODIC_SCORE_SAVE_STARTED` now logs for both halves
+  - Keeps `g_matchScore` updated for `.score` command and match end detection
+
+### Added
+- **Game end logevent hook** as backup for `plugin_end()` which may not fire in KTPAMXX extension mode
+  - Hooks team "scored" logevents at map end ("Allies" scored "X" with "Y" players)
+  - Triggers `handle_map_change()` to finalize match, update Discord, flush stats
+  - Logs: `GAME_END_LOGEVENT`, `GAME_END_DETECTED`
+
+---
+
+## [0.10.14] - 2025-12-31
+
+### Changed
+- `.score` command now broadcasts to all players instead of just the requester
+- Captain display now uses actual team names instead of generic "t1/t2"
+  - Before: `All players ready. Captains: nein_ (t1) vs scurryfunge (t2)`
+  - After: `All players ready. Captains: nein_ (Team1Name) vs scurryfunge (Team2Name)`
+
+---
+
+## [0.10.12] - 2025-12-31
+
+### Fixed
+- **Critical**: `.score` command math in 2nd half was completely wrong
+  - DODX resets on `mp_clan_restartround`, so `g_matchScore` is 2nd-half-only, not cumulative
+  - Was subtracting 1st half from 2nd-half-only scores (always showed 0 until exceeding 1st half)
+  - Now correctly: `total = firstHalfScore + secondHalfScore`
+- **Critical**: Match end score calculation had the same bug
+  - Final scores were calculated incorrectly
+  - Discord embed never updated with correct final score
+
+### Added
+- Debug logging in `plugin_end()` to trace why match completion wasn't triggering
+  - `PLUGIN_END_START` and `PLUGIN_END_COMPLETE` events
+
+---
+
+## [0.10.11] - 2025-12-30
+
+### Added
+- **2nd half HUD alert on prestart** - Shows HUD again when match command is used
+  - Players who missed map load announcement now see it on `.ktp`/`.12man`/etc.
+  - Same "2nd HALF DETECTED" message with team swap info
+
+---
+
+## [0.10.10] - 2025-12-30
+
+### Added
+- **2nd half detection HUD alert** - Prominent center-screen notification on map load
+  - Shows "2nd HALF DETECTED" with team swap info
+  - Displays which team is now Allies/Axis
+  - Notes that pause budgets carried over
+  - Yellow text, 8 second display duration
+
+---
+
+## [0.10.9] - 2025-12-30
+
+### Added
+- **Enhanced TeamScore debug logging** - Diagnose scoreboard sync issues
+  - Logs game score vs DODX internal score on every TeamScore message
+  - Logs before/after DODX scores in delayed score restore
+  - Includes timestamps for timing analysis
+
+---
+
+## [0.10.8] - 2025-12-30
+
+### Added
+- **Match type in HUD messages** - Pre-Start and Pending HUD now shows match type
+  - Pre-Start: "KTP Pre-Start (12man): Waiting for .confirm..."
+  - Pending: "KTP 12man Pending..." / "KTP Scrim Pending..." / etc.
+- Added `get_match_type_label()` helper function for consistent type display
+
+---
+
+## [0.10.7] - 2025-12-30
+
+### Reverted
+- **REVERTED**: `broadcast_team_score()` calls - caused server crashes
+  - TeamScore MSG_ALL crashes server even with 5s delay
+  - Scoreboard will update via game's native flag touch events instead
+  - Added HUD note: "Scoreboard syncs on flag touch"
+
+---
+
+## [0.10.6] - 2025-12-30
+
+### Fixed
+- **Critical**: Config path doubled (`configs/configs/ktp_anzio.cfg`) causing map configs to fail
+  - `ktp_maps.ini` entries already include `configs/` prefix
+  - `exec_map_config()` was prepending it again
+  - Match would start without proper timelimit/restart
+
+---
+
+## [0.10.5] - 2025-12-30
+
+### Fixed
+- **Critical**: Task ID collision between pause reminder and disconnect countdown tasks
+  - Both used ID 55608, causing tasks to overwrite each other
+  - Disconnect countdown now uses 55609
+- **Bug**: Regulation HUD argument order was swapped (`score2, g_team2Name` instead of `g_team2Name, score2`)
+  - Caused wrong scores displayed next to team names during 2nd half
+- Updated version header comment to match PLUGIN_VERSION
+
+### Changed
+- Removed 4 unused variables (dead code cleanup):
+  - `g_lastUnpauseById`, `g_confirmAlliesById`, `g_confirmAxisById` (never read)
+  - `g_ktpDiscordConfigLoaded` (redundant with `g_ktpDiscordEnabled`)
+- Fixed tag mismatch warning in mode detection
+- Compiles with zero warnings
+
+---
+
+## [0.10.4] - 2025-12-30
+
+### Changed
+- 12man duration selection now announces to all players (not just the captain)
+  - Example: `[KTP] PlayerName started a 12man match (20 minutes)`
+
+### Fixed
+- Fixed 21 instances of duplicate `[KTP][KTP]` prefix in announcements
+  - All `announce_all()` calls with embedded `[KTP]` prefix now use bare messages
+  - Affected: pause/unpause messages, OT break messages, team name reset, pre-confirm
+
+---
+
+## [0.10.3] - 2025-12-29
+
+### Fixed
+- **Critical**: Match start now always triggers `mp_clan_restartround 1` even if no map config is found
+  - Previously, if map config lookup failed, players wouldn't respawn and timelimit wasn't set
+  - Affected 12man/scrim matches on maps without dedicated config files
+
+---
+
+## [0.10.2] - 2025-12-29
+
+### Changed
+- Pre-Start announcement now includes match type (Match/Scrim/12man/Draft)
+  - Example: `[KTP] Pre-Start (Scrim) by Player on dod_anzio`
+
+### Fixed
+- Removed duplicate `[KTP]` prefix from Pre-Start announcements
+- Team name prompt (`.setallies`/`.setaxis`) now only shown for `.ktp` and `.draft` matches
+  - Scrims and 12mans no longer prompt for custom team names
+
+---
+
 ## [0.10.1] - 2025-12-23
 
 ### Added

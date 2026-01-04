@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.1** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.30** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -32,7 +32,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **KTP_MATCH_START/END**: Log markers for HLStatsX daemon parsing
 - **Per-Match Tracking**: Same match ID persists across both halves
 
-### HLTV Recording Integration (v0.10.1+)
+### HLTV Recording Integration (v0.10.4+)
 - **Automatic Demo Recording**: [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) hooks into match events
 - **Match-Type Naming**: Demos named `<type>_<matchid>_<map>.dem` (e.g., `ktp_KTP-1735052400-dod_anzio_dod_anzio.dem`)
 - **Start/Stop Control**: Recording starts on 1st half LIVE, stops on match end
@@ -248,8 +248,9 @@ Team 2: .go        ← Confirms (both teams must agree)
 .score                  Show current match score
 ```
 
-#### Admin Commands
+#### Help & Admin Commands
 ```
+.commands, .cmds        Show all commands (printed to console)
 ktp_pause               Server/RCON pause (same as .pause)
 .cfg                    View current CVARs
 ```
@@ -611,7 +612,23 @@ static bool:warned_10sec = false;
 
 ## 📝 Changelog
 
-### v0.10.1 (2025-12-24) - External Plugin Forwards
+### v0.10.30 (January 2026) - Bug Fixes & Help Command
+
+**Added:**
+- ✅ **`.commands` / `.cmds`** - New help command that prints all available commands to console
+
+**Fixed:**
+- 🔧 **Intermission freeze** - No longer freezes at end of 2nd half/OT
+- 🔧 **OT trigger** - Match now stays on same map for overtime instead of going to next in rotation
+- 🔧 **2nd half pending HUD** - Now shows "=== 2ND HALF - Type .ready ===" with scores
+- 🔧 **HLTV reminders** - Added at pre-start, pending, 2nd half, and OT continuation
+
+**Removed:**
+- ❌ Debug commands (`.sbtest`, `.teamtest`)
+
+---
+
+### v0.10.4 (2025-12-24) - External Plugin Forwards
 
 **Added:**
 - ✅ **ktp_match_start forward** - External plugins can hook match start events (used by KTPHLTVRecorder)
@@ -951,10 +968,10 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.10.1
+- **Current Version**: v0.10.30
 - **Status**: Stable (Score persistence and Discord embeds verified on VPS)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.6
-- **Last Updated**: December 26, 2025
+- **Last Updated**: January 2026
 - **Platforms**: Day of Defeat 1.3
 
 ---
@@ -963,7 +980,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.1                      ║
+║             KTP MATCH HANDLER v0.10.30                     ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1004,4 +1021,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.1** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️
+**KTP Match Handler v0.10.30** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️

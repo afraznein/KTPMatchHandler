@@ -13,7 +13,7 @@
 
 **No Metamod Required** - Runs on Linux and Windows via ReHLDS Extension Mode
 
-**Last Updated:** 2025-12-26
+**Last Updated:** 2026-01-01
 
 [Architecture](#-six-layer-architecture) • [Components](#-component-documentation) • [Installation](#-complete-installation-guide) • [Repositories](#-github-repositories)
 
@@ -28,12 +28,12 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 6: Application Plugins (AMX Plugins)                                  │
-│  KTPMatchHandler v0.10.1 - Match workflow, pause, OT system, HLStatsX        │
-│  KTPHLTVRecorder v1.0.0  - Auto HLTV recording via match events              │
-│  KTPCvarChecker v7.7     - Real-time cvar enforcement                        │
-│  KTPFileChecker v2.1     - File consistency validation + Discord             │
-│  KTPAdminAudit v2.2.0    - Menu-based kick/ban + RCON audit logging          │
-│  stats_logging.sma       - DODX weaponstats with match ID support            │
+│  KTPMatchHandler v0.10.30 - Match workflow, pause, OT system, HLStatsX       │
+│  KTPHLTVRecorder v1.0.4   - Auto HLTV recording via match events             │
+│  KTPCvarChecker v7.8      - Real-time cvar enforcement                       │
+│  KTPFileChecker v2.1      - File consistency validation + Discord            │
+│  KTPAdminAudit v2.6.0     - Menu-based kick/ban/changemap + audit            │
+│  stats_logging.sma        - DODX weaponstats with match ID support           │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ Uses AMXX Forwards & Natives
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -58,10 +58,10 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
                               ↓ Uses ReHLDS Hookchains
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 2: Scripting Platform (ReHLDS Extension)                              │
-│  KTPAMXX v2.6.1 - AMX Mod X fork with extension mode + HLStatsX integration  │
+│  KTPAMXX v2.6.2 - AMX Mod X fork with extension mode + HLStatsX integration  │
 │  Loads as ReHLDS extension, no Metamod required                              │
 │  Provides: client_cvar_changed forward, MF_RegModuleFrameFunc()              │
-│  New: ktp_drop_client native, ktp_discord.inc v1.1.0 (curl module)           │
+│  New: ktp_drop_client, DODX score broadcasting, ktp_discord.inc v1.1.0       │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ ReHLDS Extension API
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -503,7 +503,7 @@ void SV_ParseCvarValue(client_t *cl, sizebuf_t *msg) {
 ### Layer 2: KTPAMXX (Scripting Platform)
 
 **Repository:** [github.com/afraznein/KTPAMXX](https://github.com/afraznein/KTPAMXX)
-**Version:** 2.6.1
+**Version:** 2.6.2
 **License:** GPL v3
 **Base:** AMX Mod X 1.10.0.5468-dev
 
@@ -1154,6 +1154,13 @@ native dodx_get_match_id(output[], maxlen);
 
 // Set player's team name in private data
 native dodx_set_pl_teamname(id, const szName[]);
+
+// Broadcast TeamScore message to all clients (v2.6.2)
+native dodx_broadcast_team_score(team, score);
+
+// Set custom team name on scoreboard (v2.6.2)
+// Note: Client-side DoD hardcodes "Allies"/"Axis" - this may not work
+native dodx_set_scoreboard_team_name(team, const name[]);
 ```
 
 #### Match Workflow Integration
@@ -1217,8 +1224,25 @@ forward dod_stats_flush(id);
 #### KTPMatchHandler
 
 **Repository:** [github.com/afraznein/KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler)
-**Version:** 0.10.1
+**Version:** 0.10.30
 **License:** MIT
+
+<details>
+<summary><b>🆕 v0.10.30 Updates (January 2026)</b></summary>
+
+#### New Features
+- **`.commands` / `.cmds`** - Help command that prints all available commands to console
+- **2nd half pending HUD** - Now shows "=== 2ND HALF - Type .ready ===" with scores
+- **HLTV reminders** - Added at pre-start, pending, 2nd half, and OT continuation
+
+#### Bug Fixes
+- **Intermission freeze fix** - No longer freezes at end of 2nd half/OT
+- **OT trigger fix** - Match now stays on same map for overtime instead of going to next in rotation
+
+#### Removed
+- Debug commands (`.sbtest`, `.teamtest`) - No longer needed
+
+</details>
 
 <details>
 <summary><b>🏆 Match Workflow System</b></summary>
@@ -1248,8 +1272,9 @@ forward dod_stats_flush(id);
    Full logging with match ID
    Score tracking per half
 
-5a. OVERTIME (if regulation ties)
+5a. OVERTIME (if regulation ties) (v0.10.1+)
    - Auto-triggers when scores tied at match end
+   - Stays on same map for OT (fixed in v0.10.30)
    - 5-minute rounds, side swaps between OT rounds
    - First team ahead at round end wins (repeat if still tied)
    - Optional 10-min break before OT (.otbreak/.skip)
@@ -1336,7 +1361,7 @@ KTPMatchHandler updates HUD:
 #### KTPCvarChecker
 
 **Repository:** [github.com/afraznein/KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)
-**Version:** 7.7
+**Version:** 7.8
 **License:** GPL v2
 
 <details>
@@ -1402,7 +1427,7 @@ fc_exactweapons "0"  // Same hitbox bounds allowed (public servers)
 #### KTPAdminAudit
 
 **Repository:** [github.com/afraznein/KTPAdminAudit](https://github.com/afraznein/KTPAdminAudit)
-**Version:** 2.2.0
+**Version:** 2.6.0
 **License:** MIT
 
 <details>
@@ -1411,11 +1436,15 @@ fc_exactweapons "0"  // Same hitbox bounds allowed (public servers)
 #### Features
 
 - **Menu-based kick/ban** - Interactive player selection (no RCON needed)
-- **Admin flag permissions** - Requires ADMIN_KICK (c) or ADMIN_BAN (d)
+- **Menu-based map change** (v2.4.0+) - Map selection from ktp_maps.ini
+- **Admin flag permissions** - Requires ADMIN_KICK (c), ADMIN_BAN (d), or ADMIN_MAP (f)
 - **Immunity protection** - Players with ADMIN_IMMUNITY (a) cannot be kicked/banned
 - **Ban duration selection** - 1 hour, 1 day, 1 week, or permanent
 - **Discord audit logging** - Real-time notifications to configured channels
 - **RCON audit logging** (v2.2.0+) - Logs quit/restart commands with source IP via RH_SV_Rcon hook
+- **Console command audit** (v2.3.0+) - Catches all console commands including LinuxGSM via RH_ExecuteServerStringCmd
+- **Admin server commands** (v2.3.0+) - `.restart` / `.quit` with ADMIN_RCON flag
+- **HLTV kick support** (v2.3.0+) - HLTV proxies appear in kick menu
 - **ReHLDS integration** - Uses `ktp_drop_client` native to bypass blocked kick command
 
 #### Why ktp_drop_client?
@@ -1889,9 +1918,10 @@ WantedBy=multi-user.target
 #### KTPHLTVRecorder
 
 **Repository:** [github.com/afraznein/KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder)
-**Version:** 1.0.0
+**Version:** 1.0.4
 **Platform:** AMX/Pawn Plugin
 **License:** MIT
+**Requires:** KTPMatchHandler v0.10.4+ (for forwards)
 
 <details>
 <summary><b>📹 Automatic HLTV Demo Recording</b></summary>
@@ -1919,14 +1949,14 @@ KTPHLTVRecorder:
 ┌─────────────────────────────────────────────────────────────┐
 │  KTPHLTVRecorder                                             │
 │  - Receives match events                                     │
-│  - Formats demo name: <type>_<matchid>_<map>.dem            │
+│  - Formats demo name: <type>_<matchid>.dem                  │
 │  - Uses Sockets module for UDP RCON                         │
 └─────────────────────────────┬───────────────────────────────┘
                               │ UDP RCON
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │  HLTV Server (paired 1:1 with game server)                   │
-│  - Receives: record ktp_KTP-1735052400-dod_anzio_dod_anzio  │
+│  - Receives: record ktp_KTP-1735052400-dod_anzio            │
 │  - Receives: stoprecording                                   │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -1943,12 +1973,12 @@ hltv_rcon = ktpadmin
 
 #### Demo Naming Format
 
-`<matchtype>_<matchid>_<map>.dem`
+`<matchtype>_<matchid>.dem` (matchId already contains map name)
 
 Examples:
-- `ktp_KTP-1735052400-dod_anzio_dod_anzio.dem`
-- `scrim_KTP-1735052400-dod_flash_dod_flash.dem`
-- `draft_KTP-1735052400-dod_avalanche_dod_avalanche.dem`
+- `ktp_KTP-1735052400-dod_anzio.dem`
+- `scrim_KTP-1735052400-dod_flash.dem`
+- `draft_KTP-1735052400-dod_avalanche.dem`
 
 #### HLTV Server Pairing
 
@@ -2175,12 +2205,13 @@ discord_channel_id_audit_competitive=3333333333333333333
 | `.resetnames`        | Reset to default names    |
 | `.score`             | View current match score  |
 
-### Admin Commands
+### Help & Admin Commands
 
-| Command           | Description              |
-|-------------------|--------------------------|
-| `.cfg`            | View current CVARs       |
-| `ktp_pause`       | Server/RCON pause        |
+| Command                | Description                 |
+|------------------------|-----------------------------|
+| `.commands`, `.cmds`   | Show all commands (console) |
+| `.cfg`                 | View current CVARs          |
+| `ktp_pause`            | Server/RCON pause           |
 
 ### Admin Audit (KTPAdminAudit)
 
@@ -2188,8 +2219,12 @@ discord_channel_id_audit_competitive=3333333333333333333
 |-------------------|--------------------------|
 | `.kick`           | Open kick menu           |
 | `.ban`            | Open ban menu            |
+| `.changemap`      | Open map selection menu  |
+| `.restart`        | Restart server           |
+| `.quit`           | Shutdown server          |
 | `ktp_kick`        | Console kick command     |
 | `ktp_ban`         | Console ban command      |
+| `ktp_changemap`   | Console changemap command|
 
 ---
 
@@ -2201,19 +2236,19 @@ discord_channel_id_audit_competitive=3333333333333333333
 |----------|---------------------------------------------------------|---------------|-------------------------------------|
 | Engine   | [KTP-ReHLDS](https://github.com/afraznein/KTPReHLDS)    | 3.20.0.896+   | Custom ReHLDS with extension loader |
 | SDK      | [KTP HLSDK](https://github.com/afraznein/KTPhlsdk)      | 1.0.0         | SDK headers with callback support   |
-| Platform | [KTPAMXX](https://github.com/afraznein/KTPAMXX)         | 2.6.1         | AMX Mod X extension mode fork       |
+| Platform | [KTPAMXX](https://github.com/afraznein/KTPAMXX)         | 2.6.2         | AMX Mod X extension mode fork       |
 | Bridge   | [KTP-ReAPI](https://github.com/afraznein/KTPReAPI)      | 5.29.0.361-ktp| ReAPI extension mode fork           |
 | HTTP     | [KTP AMXX Curl](https://github.com/afraznein/KTPAmxxCurl)| 1.1.1-ktp    | Non-blocking HTTP module            |
 
 ### Application Plugins
 
-| Plugin        | Repository                                                      | Version | Description                    |
-|---------------|-----------------------------------------------------------------|---------|--------------------------------|
-| Match Handler | [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler) | 0.10.1  | Match workflow + OT + HLStatsX |
-| HLTV Recorder | [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) | 1.0.0   | Auto HLTV demo recording       |
-| Cvar Checker  | [KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)   | 7.7     | Client cvar enforcement        |
-| File Checker  | [KTPFileChecker](https://github.com/afraznein/KTPFileChecker)   | 2.1     | File consistency + Discord     |
-| Admin Audit   | [KTPAdminAudit](https://github.com/afraznein/KTPAdminAudit)     | 2.2.0   | Menu-based kick/ban + RCON audit |
+| Plugin        | Repository                                                      | Version  | Description                    |
+|---------------|-----------------------------------------------------------------|----------|--------------------------------|
+| Match Handler | [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler) | 0.10.30  | Match workflow + OT + HLStatsX |
+| HLTV Recorder | [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) | 1.0.4    | Auto HLTV demo recording       |
+| Cvar Checker  | [KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)   | 7.8      | Client cvar enforcement        |
+| File Checker  | [KTPFileChecker](https://github.com/afraznein/KTPFileChecker)   | 2.1      | File consistency + Discord     |
+| Admin Audit   | [KTPAdminAudit](https://github.com/afraznein/KTPAdminAudit)     | 2.6.0    | Menu-based kick/ban/changemap + audit |
 
 ### Supporting Infrastructure
 
@@ -2272,6 +2307,6 @@ discord_channel_id_audit_competitive=3333333333333333333
 
 *Cross-platform: Windows + Linux*
 
-**Last Updated:** 2025-12-26
+**Last Updated:** 2026-01-01
 
 </div>
