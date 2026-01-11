@@ -13,7 +13,7 @@
 
 **No Metamod Required** - Runs on Linux and Windows via ReHLDS Extension Mode
 
-**Last Updated:** 2026-01-01
+**Last Updated:** 2026-01-10
 
 [Architecture](#-six-layer-architecture) • [Components](#-component-documentation) • [Installation](#-complete-installation-guide) • [Repositories](#-github-repositories)
 
@@ -28,9 +28,9 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 6: Application Plugins (AMX Plugins)                                  │
-│  KTPMatchHandler v0.10.30 - Match workflow, pause, OT system, HLStatsX       │
-│  KTPHLTVRecorder v1.0.4   - Auto HLTV recording via match events             │
-│  KTPCvarChecker v7.8      - Real-time cvar enforcement                       │
+│  KTPMatchHandler v0.10.46 - Match workflow, pause, OT system, HLStatsX       │
+│  KTPHLTVRecorder v1.1.1   - Auto HLTV recording via HTTP API + FIFO pipes    │
+│  KTPCvarChecker v7.9      - Real-time cvar enforcement + Discord toggle      │
 │  KTPFileChecker v2.1      - File consistency validation + Discord            │
 │  KTPAdminAudit v2.6.0     - Menu-based kick/ban/changemap + audit            │
 │  stats_logging.sma        - DODX weaponstats with match ID support           │
@@ -45,7 +45,7 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
                               ↓ Uses AMXX Module API
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 4: HTTP/Networking Modules (AMXX Modules)                             │
-│  KTP AMXX Curl v1.1.1-ktp - Non-blocking HTTP/FTP via libcurl                │
+│  KTP AMXX Curl v1.2.0-ktp - Non-blocking HTTP/FTP via libcurl                │
 │  Uses MF_RegModuleFrameFunc() for async processing                           │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ Uses AMXX Module API
@@ -58,10 +58,10 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
                               ↓ Uses ReHLDS Hookchains
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 2: Scripting Platform (ReHLDS Extension)                              │
-│  KTPAMXX v2.6.2 - AMX Mod X fork with extension mode + HLStatsX integration  │
+│  KTPAMXX v2.6.3 - AMX Mod X fork with extension mode + HLStatsX integration  │
 │  Loads as ReHLDS extension, no Metamod required                              │
 │  Provides: client_cvar_changed forward, MF_RegModuleFrameFunc()              │
-│  New: ktp_drop_client, DODX score broadcasting, ktp_discord.inc v1.1.0       │
+│  New: ktp_drop_client, DODX score broadcasting, ktp_discord.inc v1.2.0       │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ ReHLDS Extension API
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -80,7 +80,7 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 │  - KTPHLStatsX v0.1.0       - Modified HLStatsX daemon with match tracking   │
 │                                                                              │
 │  VPS Services:                                                               │
-│  - KTPFileDistributor       - .NET 8 file sync daemon (SFTP distribution)   │
+│  - KTPFileDistributor v1.1.0 - .NET 8 file sync daemon (SFTP distribution)  │
 │  - HLTV Scheduled Restarts  - systemd timer (replaces KTPHLTVKicker)        │
 │                                                                              │
 │  SDK Layer:                                                                  │
@@ -503,7 +503,7 @@ void SV_ParseCvarValue(client_t *cl, sizebuf_t *msg) {
 ### Layer 2: KTPAMXX (Scripting Platform)
 
 **Repository:** [github.com/afraznein/KTPAMXX](https://github.com/afraznein/KTPAMXX)
-**Version:** 2.6.2
+**Version:** 2.6.3
 **License:** GPL v3
 **Base:** AMX Mod X 1.10.0.5468-dev
 
@@ -681,7 +681,7 @@ This native provides an audited alternative that:
 </details>
 
 <details>
-<summary><b>📡 ktp_discord.inc - Shared Discord Integration (v2.6.0)</b></summary>
+<summary><b>📡 ktp_discord.inc - Shared Discord Integration (v1.2.0)</b></summary>
 
 #### Purpose
 
@@ -762,14 +762,15 @@ discord_channel_id=1234567890123456789
 
 ; Match-type specific channels (for KTPMatchHandler)
 discord_channel_id_competitive=1111111111111111111
-discord_channel_id_12man=2222222222222222222
-discord_channel_id_draft=3333333333333333333
+discord_channel_id_scrim=2222222222222222222
+discord_channel_id_12man=3333333333333333333
+discord_channel_id_draft=4444444444444444444
 
 ; Audit channels (for KTPAdminAudit, KTPCvarChecker, KTPFileChecker)
 ; All channels matching "discord_channel_id_audit*" receive audit messages
-discord_channel_id_audit_main=4444444444444444444
-discord_channel_id_audit_backup=5555555555555555555
-discord_channel_id_admin=6666666666666666666
+discord_channel_id_audit_main=5555555555555555555
+discord_channel_id_audit_backup=6666666666666666666
+discord_channel_id_admin=7777777777777777777
 ```
 
 #### Usage Example
@@ -979,7 +980,7 @@ public OnPausedHUDUpdate() {
 ### Layer 4: KTP AMXX Curl (HTTP Module)
 
 **Repository:** [github.com/afraznein/KTPAMXXCurl](https://github.com/afraznein/KTPAMXXCurl)
-**Version:** 1.1.1-ktp
+**Version:** 1.2.0-ktp
 **License:** MIT
 **Base:** AmxxCurl by Polarhigh
 
@@ -1224,23 +1225,33 @@ forward dod_stats_flush(id);
 #### KTPMatchHandler
 
 **Repository:** [github.com/afraznein/KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler)
-**Version:** 0.10.30
+**Version:** 0.10.46
 **License:** MIT
 
 <details>
-<summary><b>🆕 v0.10.30 Updates (January 2026)</b></summary>
+<summary><b>🆕 Recent Updates (v0.10.32 - v0.10.46)</b></summary>
 
 #### New Features
-- **`.commands` / `.cmds`** - Help command that prints all available commands to console
-- **2nd half pending HUD** - Now shows "=== 2ND HALF - Type .ready ===" with scores
-- **HLTV reminders** - Added at pre-start, pending, 2nd half, and OT continuation
+- **Explicit OT Commands** (v0.10.42+) - `.ktpOT` and `.draftOT` for explicit overtime matches (requires KTP password)
+- **Dynamic Hostname** (v0.10.40+) - Server hostname reflects match state (e.g., "KTP | LIVE: TeamA vs TeamB | dod_charlie")
+- **Match Type-Specific Ready Requirements** (v0.10.37+) - Configurable players needed per match type
+- **1.3 Community 12man Queue ID** (v0.10.36+) - Integration with 1.3 Community queue system
+- **Chat-based Ready System** (v0.10.34+) - Players type .ready in chat instead of vote menus
+- **Localinfo State Persistence** - Match state survives server restarts via localinfo keys
+
+#### Commands Added
+- `.ktpOT <password>` - Start explicit overtime match (KTP password required)
+- `.draftOT <password>` - Start explicit draft overtime match (KTP password required)
+- `.commands` / `.cmds` - Help command that prints all available commands to console
 
 #### Bug Fixes
+- **OT Recursion Fix** (v0.10.41+) - Removed automatic OT triggering to prevent changelevel recursion
 - **Intermission freeze fix** - No longer freezes at end of 2nd half/OT
 - **OT trigger fix** - Match now stays on same map for overtime instead of going to next in rotation
 
-#### Removed
-- Debug commands (`.sbtest`, `.teamtest`) - No longer needed
+#### Match Type Changes
+- OT is now explicit: matches end at tie, captains manually start `.ktpOT` or `.draftOT`
+- New match types: `MATCH_TYPE_KTP_OT` and `MATCH_TYPE_DRAFT_OT`
 
 </details>
 
@@ -1272,12 +1283,12 @@ forward dod_stats_flush(id);
    Full logging with match ID
    Score tracking per half
 
-5a. OVERTIME (if regulation ties) (v0.10.1+)
-   - Auto-triggers when scores tied at match end
-   - Stays on same map for OT (fixed in v0.10.30)
+5a. OVERTIME (explicit, v0.10.42+)
+   - Matches end at tie with announcement: "Match tied X-X! Use .ktpOT or .draftOT"
+   - Captain types `.ktpOT <password>` to start explicit OT match
    - 5-minute rounds, side swaps between OT rounds
-   - First team ahead at round end wins (repeat if still tied)
-   - Optional 10-min break before OT (.otbreak/.skip)
+   - First team ahead at round end wins
+   - If still tied, captains run `.ktpOT` again for next OT round
    - Tech budget resets for OT
    - OT state persists via localinfo (_ktp_ots, _ktp_otst)
 
@@ -1289,12 +1300,14 @@ forward dod_stats_flush(id);
 
 #### Match Types
 
-| Type        | Command      | Password | Season Required | Config               |
-|-------------|--------------|----------|-----------------|----------------------|
-| Competitive | `.ktp`       | Required | Yes             | `mapname.cfg`        |
-| Draft       | `.draft`     | None     | No              | `mapname.cfg`        |
-| 12-Man      | `.12man`     | None     | No              | `mapname_12man.cfg`  |
-| Scrim       | `.scrim`     | None     | No              | `mapname_scrim.cfg`  |
+| Type        | Command      | Password | Season Required | Ready Req | Config               |
+|-------------|--------------|----------|-----------------|-----------|----------------------|
+| Competitive | `.ktp`       | Required | Yes             | 6         | `mapname.cfg`        |
+| Draft       | `.draft`     | None     | No              | 6         | `mapname.cfg`        |
+| 12-Man      | `.12man`     | None     | No              | 6         | `mapname_12man.cfg`  |
+| Scrim       | `.scrim`     | None     | No              | 1         | `mapname_scrim.cfg`  |
+| KTP OT      | `.ktpOT`     | Required | No              | 6         | `competitive.cfg`    |
+| Draft OT    | `.draftOT`   | Required | No              | 6         | `competitive.cfg`    |
 
 #### Season Control
 
@@ -1361,7 +1374,7 @@ KTPMatchHandler updates HUD:
 #### KTPCvarChecker
 
 **Repository:** [github.com/afraznein/KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)
-**Version:** 7.8
+**Version:** 7.9
 **License:** GPL v2
 
 <details>
@@ -1805,7 +1818,7 @@ GROUP BY (match_id IS NULL);
 #### KTPFileDistributor
 
 **Repository:** [github.com/afraznein/KTPFileDistributor](https://github.com/afraznein/KTPFileDistributor)
-**Version:** 1.0.0
+**Version:** 1.1.0
 **Platform:** .NET 8 Worker Service (Linux VPS)
 **License:** MIT
 
@@ -1918,13 +1931,13 @@ WantedBy=multi-user.target
 #### KTPHLTVRecorder
 
 **Repository:** [github.com/afraznein/KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder)
-**Version:** 1.0.4
+**Version:** 1.1.1
 **Platform:** AMX/Pawn Plugin
 **License:** MIT
-**Requires:** KTPMatchHandler v0.10.4+ (for forwards)
+**Requires:** KTPMatchHandler v0.10.4+ (for forwards), Curl module (for HTTP API)
 
 <details>
-<summary><b>📹 Automatic HLTV Demo Recording</b></summary>
+<summary><b>📹 Automatic HLTV Demo Recording via HTTP API</b></summary>
 
 #### Purpose
 
@@ -1932,11 +1945,11 @@ Automatically records HLTV demos when KTPMatchHandler matches start and stop. El
 
 KTPHLTVRecorder:
 1. Hooks KTPMatchHandler's `ktp_match_start` forward
-2. Sends UDP RCON `record` command to paired HLTV server
+2. Sends HTTP POST to HLTV API with `record` command
 3. Hooks `ktp_match_end` forward
-4. Sends `stoprecording` command
+4. Sends `stoprecording` via HTTP API
 
-#### Architecture
+#### Architecture (v1.1.0+ - HTTP API via FIFO pipes)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -1950,25 +1963,51 @@ KTPHLTVRecorder:
 │  KTPHLTVRecorder                                             │
 │  - Receives match events                                     │
 │  - Formats demo name: <type>_<matchid>.dem                  │
-│  - Uses Sockets module for UDP RCON                         │
+│  - Uses Curl module for HTTP POST to HLTV API               │
 └─────────────────────────────┬───────────────────────────────┘
-                              │ UDP RCON
+                              │ HTTP POST
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│  HLTV Server (paired 1:1 with game server)                   │
-│  - Receives: record ktp_KTP-1735052400-dod_anzio            │
+│  HLTV API Service (port 8087)                                │
+│  - Python HTTP server on data server                         │
+│  - Authenticates via X-Auth-Key header                       │
+│  - Writes commands to FIFO pipes                            │
+└─────────────────────────────┬───────────────────────────────┘
+                              │ FIFO pipe
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│  HLTV Wrapper + HLTV Instance                                │
+│  - hltv-wrapper.sh runs tail -f on FIFO                     │
+│  - Commands fed to HLTV stdin                               │
+│  - Receives: record ktpOT_KTP-1735052400-dod_anzio          │
 │  - Receives: stoprecording                                   │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+#### Data Server Components
+
+1. **HLTV API Service** (`/home/hltvserver/hltv-api.py`)
+   - Python HTTP server on port 8087
+   - Receives commands via POST /hltv/<port>/command
+   - Authenticates requests via X-Auth-Key header
+   - Writes commands to FIFO pipes
+
+2. **FIFO Pipes** (`/home/hltvserver/cmdpipes/hltv-<port>.pipe`)
+   - One pipe per HLTV instance
+   - Commands written to pipe are fed to HLTV stdin
+
+3. **HLTV Wrapper** (`/home/hltvserver/hltv-wrapper.sh`)
+   - Runs `tail -f` on FIFO pipe
+   - Pipes output to HLTV process stdin
 
 #### Configuration (hltv_recorder.ini)
 
 ```ini
 ; HLTV Recorder Configuration
 hltv_enabled = 1
-hltv_ip = 74.91.112.242
+hltv_api_url = http://74.91.112.242:8087
+hltv_api_key = KTPVPS2026
 hltv_port = 27020
-hltv_rcon = ktpadmin
 ```
 
 #### Demo Naming Format
@@ -1979,6 +2018,8 @@ Examples:
 - `ktp_KTP-1735052400-dod_anzio.dem`
 - `scrim_KTP-1735052400-dod_flash.dem`
 - `draft_KTP-1735052400-dod_avalanche.dem`
+- `ktpOT_KTP-1735052400-dod_anzio.dem` (explicit OT)
+- `draftOT_KTP-1735052400-dod_avalanche.dem` (explicit OT)
 
 #### HLTV Server Pairing
 
@@ -2132,14 +2173,16 @@ fc_separatelog "2"                    // Separate log file
 #### discord.ini
 
 ```ini
-discord_relay_url=https://your-relay.run.app/relay
+discord_relay_url=https://your-relay.run.app/reply
 discord_channel_id=1234567890123456789
 discord_auth_secret=your-secret-here
 
 ; Match-type specific channels
 discord_channel_id_competitive=1111111111111111111
-discord_channel_id_12man=2222222222222222222
-discord_channel_id_audit_competitive=3333333333333333333
+discord_channel_id_scrim=2222222222222222222
+discord_channel_id_12man=3333333333333333333
+discord_channel_id_draft=4444444444444444444
+discord_channel_id_audit_competitive=5555555555555555555
 ```
 
 ---
@@ -2174,6 +2217,8 @@ discord_channel_id_audit_competitive=3333333333333333333
 | Command            | Description                 | Notes                    |
 |--------------------|-----------------------------|--------------------------|
 | `.ktp <pw>`        | Initiate competitive match  | Requires season + password|
+| `.ktpOT <pw>`      | Start explicit KTP overtime | Requires KTP password    |
+| `.draftOT <pw>`    | Start explicit draft overtime| Requires KTP password   |
 | `.draft`           | Start draft match           | Always available         |
 | `.12man`           | Start 12-man match          | Always available         |
 | `.scrim`           | Start scrim match           | Always available         |
@@ -2236,17 +2281,17 @@ discord_channel_id_audit_competitive=3333333333333333333
 |----------|---------------------------------------------------------|---------------|-------------------------------------|
 | Engine   | [KTP-ReHLDS](https://github.com/afraznein/KTPReHLDS)    | 3.20.0.896+   | Custom ReHLDS with extension loader |
 | SDK      | [KTP HLSDK](https://github.com/afraznein/KTPhlsdk)      | 1.0.0         | SDK headers with callback support   |
-| Platform | [KTPAMXX](https://github.com/afraznein/KTPAMXX)         | 2.6.2         | AMX Mod X extension mode fork       |
+| Platform | [KTPAMXX](https://github.com/afraznein/KTPAMXX)         | 2.6.3         | AMX Mod X extension mode fork       |
 | Bridge   | [KTP-ReAPI](https://github.com/afraznein/KTPReAPI)      | 5.29.0.361-ktp| ReAPI extension mode fork           |
-| HTTP     | [KTP AMXX Curl](https://github.com/afraznein/KTPAmxxCurl)| 1.1.1-ktp    | Non-blocking HTTP module            |
+| HTTP     | [KTP AMXX Curl](https://github.com/afraznein/KTPAmxxCurl)| 1.2.0-ktp    | Non-blocking HTTP module            |
 
 ### Application Plugins
 
 | Plugin        | Repository                                                      | Version  | Description                    |
 |---------------|-----------------------------------------------------------------|----------|--------------------------------|
-| Match Handler | [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler) | 0.10.30  | Match workflow + OT + HLStatsX |
-| HLTV Recorder | [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) | 1.0.4    | Auto HLTV demo recording       |
-| Cvar Checker  | [KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)   | 7.8      | Client cvar enforcement        |
+| Match Handler | [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler) | 0.10.46  | Match workflow + explicit OT + HLStatsX |
+| HLTV Recorder | [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) | 1.1.1    | Auto HLTV demo recording via HTTP API |
+| Cvar Checker  | [KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)   | 7.9      | Client cvar enforcement + Discord toggle |
 | File Checker  | [KTPFileChecker](https://github.com/afraznein/KTPFileChecker)   | 2.1      | File consistency + Discord     |
 | Admin Audit   | [KTPAdminAudit](https://github.com/afraznein/KTPAdminAudit)     | 2.6.0    | Menu-based kick/ban/changemap + audit |
 
@@ -2256,7 +2301,7 @@ discord_channel_id_audit_competitive=3333333333333333333
 |------------------|-------------------------------------------------------------------|---------|----------------------------|
 | Discord Relay    | [Discord Relay](https://github.com/afraznein/discord-relay)       | 1.0.1   | Cloud Run webhook proxy    |
 | HLStatsX         | [KTPHLStatsX](https://github.com/afraznein/KTPHLStatsX)           | 0.1.0   | Match-based stats tracking |
-| File Distributor | [KTPFileDistributor](https://github.com/afraznein/KTPFileDistributor) | 1.0.0 | SFTP file distribution     |
+| File Distributor | [KTPFileDistributor](https://github.com/afraznein/KTPFileDistributor) | 1.1.0 | SFTP file distribution + multi-channel Discord |
 | ~~HLTV Kicker~~  | [KTPHLTVKicker](https://github.com/afraznein/KTPHLTVKicker)       | 5.9     | DEFUNCT - replaced by systemd restarts |
 
 ### Upstream Projects
@@ -2307,6 +2352,6 @@ discord_channel_id_audit_competitive=3333333333333333333
 
 *Cross-platform: Windows + Linux*
 
-**Last Updated:** 2026-01-01
+**Last Updated:** 2026-01-10
 
 </div>
