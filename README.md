@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.30** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.46** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -16,9 +16,9 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **Season Control**: Password-protected season toggle - disable competitive matches off-season
 - **Match Password Protection**: Competitive matches require password entry
 - **Half Tracking**: Automatic 1st/2nd half detection with map rotation adjustment
-- **Overtime System**: Automatic OT when regulation ties - 5-min rounds, side swaps, break voting
+- **Overtime System**: Explicit OT via `.ktpOT`/`.draftOT` commands - 5-min rounds, password-protected
 - **Match Context Persistence**: Match ID, pause counts, tech budget, and OT state survive map changes via localinfo
-- **Unique Match IDs**: Format `KTP-{timestamp}-{mapname}` for stats correlation
+- **Unique Match IDs**: Format `KTP-{timestamp}-{map}-{hostname}` for stats correlation (1.3 Community 12mans use `1.3-{queueId}-{map}-{hostname}`)
 - **Captain System**: Team confirmation before ready-up phase
 - **Ready-Up System**: Configurable player count per team (default: 6)
 - **Auto-Config Execution**: Map-specific AND match-type-specific server settings
@@ -163,7 +163,7 @@ Map config auto-executes
 
 **Alternative Match Types (no password required):**
 - `.draft` - Draft match (always available, competitive config)
-- `.12man` - 12-man match (casual play)
+- `.12man` - 12-man match (select Standard or 1.3 Community Discord, then duration)
 - `.scrim` - Scrim match (practice)
 
 ### Pause System
@@ -211,7 +211,7 @@ Team 2: .go        ← Confirms (both teams must agree)
 ```
 .ktp <pw>               Initiate competitive match (password required)
 .draft                  Initiate draft match (no password, always available)
-.12man                  Initiate 12-man match (no password)
+.12man                  Initiate 12-man match (Standard or 1.3 Community)
 .scrim                  Initiate scrim match (no password)
 .confirm                Confirm team ready for start
 .notconfirm             Remove team confirmation
@@ -986,7 +986,7 @@ For support and questions, please open an issue on GitHub.
 ║  MATCH CONTROL                                             ║
 ║  .ktp <pw>      Start competitive match (password req)     ║
 ║  .draft         Start draft match (no password)            ║
-║  .12man         Start 12-man match (no password)           ║
+║  .12man         Start 12-man (Standard/1.3 Community)      ║
 ║  .scrim         Start scrim match (no password)            ║
 ║  .confirm       Confirm team ready                         ║
 ║  .ready         Mark yourself ready                        ║
@@ -1013,12 +1013,12 @@ For support and questions, please open an issue on GitHub.
 ║                                                            ║
 ║  MATCH TYPES                                               ║
 ║  COMPETITIVE    .ktp (password + season required)          ║
-║  DRAFT          .draft (always allowed, no Discord)        ║
-║  12MAN          .12man (always allowed, no Discord)        ║
-║  SCRIM          .scrim (always allowed, no Discord)        ║
+║  DRAFT          .draft (always allowed)                    ║
+║  12MAN          .12man (Standard or 1.3 Community)         ║
+║  SCRIM          .scrim (always allowed)                    ║
 ╚════════════════════════════════════════════════════════════╝
 ```
 
 ---
 
-**KTP Match Handler v0.10.30** - Making competitive Day of Defeat matches better, one pause at a time. ⏸️
+**KTP Match Handler v0.10.38** - Making competitive Day of Defeat matches better, one pause at a time.

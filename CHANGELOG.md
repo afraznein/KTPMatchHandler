@@ -6,6 +6,247 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.46] - 2026-01-10
+
+### Added
+- **Match type-specific ready requirements** - Different match types now require different player counts
+  - KTP and KTP OT: 6 players per team
+  - Scrim, 12man, Draft, Draft OT: 5 players per team
+- **Debug ready override** - `.override_ready_limits` command for testing (restricted to SteamID 0:1:25292511)
+  - Toggles requirement to 1 player per team for debug purposes
+  - Logs enable/disable events for audit trail
+
+---
+
+## [0.10.45] - 2026-01-10
+
+### Added
+- **Dynamic server hostname** - Server hostname now reflects match state in real-time
+  - Format: `{BaseHostname} - {MatchType} - {State}`
+  - Match types: KTP, SCRIM, 12MAN, DRAFT, KTP OT, DRAFT OT
+  - States: PENDING, PAUSED, LIVE - 1ST HALF, LIVE - 2ND HALF, LIVE - OT1, etc.
+  - Base hostname cached at plugin init from `servernamedefault.cfg` pattern
+  - Hostname resets to base when match ends or is cancelled
+  - Match ID generation uses only base hostname (excludes dynamic suffixes)
+
+### Changed
+- **ktpbasic.cfg** - No longer execs `servername.cfg`; hostname managed dynamically by plugin
+
+---
+
+## [0.10.44] - 2026-01-10
+
+### Fixed
+- **Intermission auto-DC pauses** - Players leaving during intermission (scoreboard after timelimit) no longer trigger auto tech pauses
+  - Added `g_inIntermission` flag set when changelevel hook detects second half end
+  - Added `is_in_intermission()` helper that checks if timelimit has expired in 2nd half
+  - Prevents spurious pause triggers when many players disconnect at match end
+
+---
+
+## [0.10.43] - 2026-01-10
+
+### Added
+- **Explicit overtime commands** - New `.ktpOT` and `.draftOT` commands for manually starting overtime rounds
+  - Overtime is no longer triggered automatically at end of tied 2nd halves
+  - Requires same password as `.ktp` (captains control OT initiation)
+  - New match types: `MATCH_TYPE_KTP_OT` and `MATCH_TYPE_DRAFT_OT`
+  - OT rounds use 5-minute timelimit with competitive.cfg
+  - Independent OT rounds - no regulation score carryover
+  - HLTV demos named `ktpOT_<matchid>.dem` or `draftOT_<matchid>.dem`
+
+### Changed
+- **Match flow simplified** - Regular matches are now h1 → h2 → done (no automatic OT detection)
+- **Tie announcement** - When match ends in tie, announces "Match tied X-X! Use .ktpOT or .draftOT for overtime."
+
+### Fixed
+- **Changelevel recursion bug** - Removing automatic OT triggering eliminates the root cause of the recursion issues
+
+---
+
+## [0.10.42] - 2026-01-10
+
+### Added
+- **Persistent player roster tracking** - Discord match reports now show all players who participated, even if they disconnected before match end
+  - Roster captured at match start and when players .ready mid-match
+  - Player data stored as "Name|SteamID" format in arrays
+  - Roster persists through map changes via localinfo
+  - Resolves "No players" issue in final match reports
+
+### Fixed
+- **Auto-DC technicals disabled after match ends** - Players leaving after match conclusion no longer trigger automatic DC technical timeouts
+  - New `g_matchEnded` flag set true in `end_match_cleanup()`
+  - Flag cleared when new match goes live
+  - Prevents spurious technical penalties during post-match departures
+
+---
+
+## [0.10.41] - 2026-01-09
+
+### Fixed
+- **Map config prefix matching bug** - Shorter map keys incorrectly matched before longer specific keys
+  - Example: `dod_railroad` config matched for `dod_railroad2_s9a` because it appeared first in INI
+  - Now sorts map keys by length descending after loading, so `dod_railroad2_s9a` matches before `dod_railroad`
+
+---
+
+## [0.10.40] - 2026-01-09
+
+### Fixed
+- **First half changelevel recursion bug** - Same issue as OT: guard flag was reset before hook returned, causing multiple firings
+- **All match types now stay on same map for 2nd half** - 12man, draft, scrim, and competitive all properly redirect changelevel to same map
+
+### Added
+- **Queue ID cancel option** - Type "cancel" or "abort" during Queue ID entry to cancel and restart with .12man
+- Cancel hint added to Queue ID prompts
+
+---
+
+## [0.10.39] - 2026-01-09
+
+### Fixed
+- **OT recursion bug** - Guard flag `g_changeLevelHandled` was being reset to `false` before returning `HC_CONTINUE` in the OT-still-tied path, allowing the hook to fire recursively
+- When `SetHookChainArg` modified the target map and hook returned, it fired again with the guard already reset and `g_otRound` already incremented
+
+### Changed
+- **`ktp_match_start` forward now fires on all halves/OT** - Previously only fired on 1st half
+- Forward signature updated to include 4th parameter `half` (1=1st half, 2=2nd half, 101+=OT rounds)
+
+### Technical
+- Plugins hooking `ktp_match_start` must handle new signature: `ktp_match_start(matchId[], map[], MatchType:type, half)`
+- KTPHLTVRecorder updated to v1.0.5 for new forward signature with idempotent recording
+
+---
+
+## [0.10.38] - 2026-01-07
+
+### Added
+- **1.3 Community Discord 12man support** - New option when starting 12man matches
+  - Initial menu asks: "Standard 12man" vs "1.3 Community Discord 12man"
+  - If 1.3 Community selected, captain enters Queue ID in chat
+  - Queue ID must be entered twice for confirmation (prevents typos)
+  - HUD displays "12man QUEUE ID: {id}" during input and after confirmation
+  - Match ID format changes from `KTP-{timestamp}` to `1.3-{queueId}`
+  - Example: `1.3-ABC123-dod_anzio-KTP_Atlanta_1`
+  - Length validation ensures match ID stays under 64 chars
+  - Input sanitized to alphanumeric, dash, underscore only
+
+### Technical
+- New globals: `g_is13CommunityMatch`, `g_13QueueId`, `g_13QueueIdFirst`, `g_13InputState`, `g_13CaptainId`
+- Chat input intercepted via `cmd_say_hook` when `g_13InputState > 0`
+- `generate_match_id()` checks `g_is13CommunityMatch` flag for format selection
+- `clear_match_id()` now also resets 1.3 Community state
+
+---
+
+## [0.10.37] - 2026-01-07
+
+### Changed
+- **Match ID now includes server hostname** - Format changed from `KTP-{timestamp}-{map}` to `KTP-{timestamp}-{map}-{hostname}`
+  - Allows differentiation between matches on different servers (e.g., Atlanta 1 vs New York 1)
+  - Example: `KTP-1736280000-dod_anzio-KTP_Atlanta_1`
+
+### Added
+- `sanitize_hostname_for_match_id()` function that:
+  - Strips dynamic suffixes: "- LIVE", "- PAUSED", "- Match in Progress", "- PRE-MATCH", "- WARMUP", "- OT", "- OVERTIME", "[LIVE]", "[PAUSED]", "[MATCH]"
+  - Replaces spaces and special characters with underscores
+  - Collapses consecutive underscores into one
+  - Trims leading/trailing underscores
+
+---
+
+## [0.10.36] - 2026-01-06
+
+### Added
+- **Discord support for 12man matches** - Sends to `discord_channel_id_12man` if configured
+- **Discord support for draft matches** - Sends to `discord_channel_id_draft` if configured
+- New config key `discord_channel_id_draft` in discord.ini
+
+### Changed
+- 12man/draft/scrim matches no longer fall back to default Discord channel
+  - They require explicit channel config; if not configured, Discord is silently skipped
+- Removed `g_disableDiscord = true` for 12man and draft match types
+
+---
+
+## [0.10.35] - 2026-01-06
+
+### Changed
+- **Tactical pauses disabled** - Only tech pauses (`.tech`) allowed; `.pause`/`.tac` now rejected
+  - Players see: "[KTP] Tactical pauses are disabled. Use .tech for technical issues."
+- **Pause extensions disabled** - `ktp_pause_max_extensions` default changed from 2 to 0
+  - Can be re-enabled via server cvar if needed
+- **Tech budget is per-match** - 5 minutes total for regulation (1st half + 2nd half), reset at overtime
+  - This was already the behavior; documenting for clarity
+
+### Notes
+- Tech pause budget stops counting when pause owner types `.resume` (not when game actually unpauses)
+- This freeze-on-resume behavior was already implemented in v0.10.x
+
+---
+
+## [0.10.34] - 2026-01-06
+
+### Fixed
+- **OT recursive loop crash (for real this time)** - Replaced `server_cmd` + guard flag with `SetHookChainArg`
+  - Root cause: `server_cmd("changelevel")` is **asynchronous** - queues command for later execution
+  - Guard flag fired for the **wrong map** (original target, not our redirect)
+  - After guard cleared, the queued changelevel triggered another hook call → infinite loop
+  - Solution: Use `SetHookChainArg(1, ATYPE_STRING, g_matchMap)` to modify the map **in-place**
+  - Then return `HC_CONTINUE` to let the changelevel proceed with modified target
+  - No recursive changelevel calls, no guard flags needed, clean single map change
+
+### Changed
+- Removed `g_otForcedChangelevel` guard flag variable (no longer needed)
+- `OT_FORCE_SAME_MAP` log event renamed to `OT_REDIRECT_CHANGELEVEL`
+
+---
+
+## [0.10.33] - 2026-01-06
+
+### Added
+- **Half captain tracking** - First `.ready` player per team becomes "half captain" for that half
+  - Tracks who actually readied up first (may differ from original captains)
+  - Logged in `MATCH_START` event as `half_captain1`/`half_captain2`
+  - Original captains preserved for Discord embed and chat announcements
+
+- **Original captain persistence** - Captains who started the match are preserved across map changes
+  - New `LOCALINFO_CAPTAINS` key stores `name1|sid1|name2|sid2`
+  - Restored on 2nd half and OT round continuation
+  - Ensures Discord always shows who initiated the match
+
+### Changed
+- `MATCH_START` log event now shows `half_captain1`/`half_captain2` instead of original captains
+- Chat announcement "All players ready. Captains: ..." still uses original captains
+
+---
+
+## [0.10.32] - 2026-01-05
+
+### Fixed
+- **OT recursive loop crash** - OT rounds no longer process in infinite loop when tied
+  - Root cause: `server_cmd("changelevel")` triggers `OnChangeLevel` hook **synchronously** before `HC_SUPERCEDE` returns
+  - Previous fix (v0.10.31) set `g_changeLevelHandled = false` before returning, allowing recursive calls
+  - Solution: New `g_otForcedChangelevel` guard flag checked FIRST in `OnChangeLevel()`
+  - Guard flag set before `server_cmd`, cleared when forced changelevel passes through
+  - Prevents runaway score accumulation and array index out of bounds crash at round 32
+
+- **OT Discord embed creates new message** - OT rounds now update existing embed instead of creating new
+  - Root cause: OT sets `g_currentHalf = 1` which triggered `send_match_embed_create()`
+  - Solution: Check `g_inOvertime` first and use `send_match_embed_update()` for OT rounds
+
+- **Abandoned match pending state** - Match state now properly cleared after abandoned match detection
+  - Root cause: `finalize_abandoned_match()` didn't reset state flags (g_matchPending, etc.)
+  - Solution: Reset all match state flags to ensure `ktp_is_match_active()` returns false
+  - Allows `.changemap` to work after match is abandoned
+
+### Changed
+- `process_ot_round_end_changelevel()` returns `bool` - true if OT continues (still tied)
+- `OnChangeLevel()` now checks `g_otForcedChangelevel` flag before any other processing
+- Guard flag pattern prevents hook re-entry during forced changelevel execution
+
+---
+
 ## [0.10.30] - 2026-01-01
 
 ### Added

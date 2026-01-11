@@ -1,9 +1,9 @@
-/* KTP Match Handler v0.10.21
+/* KTP Match Handler v0.10.44
  * Comprehensive match management system with ReAPI pause integration
  *
  * AUTHOR: Nein_
- * VERSION: 0.10.21
- * DATE: 2025-12-31
+ * VERSION: 0.10.44
+ * DATE: 2026-01-10
  *
  * ========== MAJOR FEATURES ==========
  * - ReAPI Pause Integration: Direct pause control via rh_set_server_pause()
@@ -65,6 +65,79 @@
  *   ktp_discord_ini "<configsdir>/discord.ini" - Discord config (auto-detected path)
  *
  * ========== CHANGELOG ==========
+ * v0.10.44 (2026-01-10) - Intermission Auto-DC Fix
+ *   + ADDED: g_inIntermission flag to disable auto-DC pauses when timelimit expires
+ *   + ADDED: is_in_intermission() helper checks timelimit vs gametime in 2nd half
+ *   * FIXED: Players leaving during intermission (scoreboard) no longer trigger auto tech pauses
+ *
+ * v0.10.43 (2026-01-10) - Explicit Overtime Commands
+ *   + ADDED: .ktpOT and .draftOT commands for manually starting overtime rounds
+ *   + ADDED: MATCH_TYPE_KTP_OT and MATCH_TYPE_DRAFT_OT match types
+ *   * CHANGED: Overtime no longer triggers automatically at end of tied 2nd halves
+ *   * CHANGED: Match flow simplified to h1 -> h2 -> done (captains control OT initiation)
+ *   * FIXED: Changelevel recursion bug eliminated by removing automatic OT triggering
+ *
+ * v0.10.42 (2026-01-10) - Roster Tracking + Match Ended Flag
+ *   + ADDED: Persistent player roster tracking for Discord match reports
+ *   + ADDED: g_matchEnded flag to disable auto-DC technicals after match ends
+ *   * FIXED: "No players" issue in final match reports (roster persists via localinfo)
+ *
+ * v0.10.41 (2026-01-09) - Map Config Prefix Match Fix
+ *   * FIXED: Map config lookup matched shorter keys first (e.g., dod_railroad before dod_railroad2_s9a)
+ *   * TECHNICAL: Now sorts map keys by length descending after loading INI, so longer keys match first
+ *
+ * v0.10.40 (2026-01-09) - First Half Changelevel Fix + Queue ID Cancel
+ *   * FIXED: First half changelevel recursion bug (same issue as OT - guard reset before return)
+ *   * FIXED: All match types now stay on same map for 2nd half (12man, draft, scrim, competitive)
+ *   + ADDED: Queue ID cancel option - type "cancel" or "abort" during entry to restart with .12man
+ *   + ADDED: Cancel hint in Queue ID prompts
+ *
+ * v0.10.39 (2026-01-09) - OT Recursion Fix + Forward Update
+ *   * FIXED: OT recursion bug - guard flag reset in still-tied path allowed hook re-entry
+ *   * CHANGED: ktp_match_start forward now fires on all halves/OT (not just 1st half)
+ *   * CHANGED: Forward signature adds 4th param: half (1=1st, 2=2nd, 101+=OT rounds)
+ *   * TECHNICAL: Plugins hooking ktp_match_start must handle new signature
+ *
+ * v0.10.38 (2026-01-07) - 1.3 Community 12man Queue ID
+ *   + ADDED: 1.3 Community Discord 12man support with Queue ID input
+ *   + ADDED: Queue ID double-entry confirmation to prevent typos
+ *   + ADDED: Match ID format "1.3-{queueId}-{map}-{hostname}" for 1.3 Community matches
+ *   + ADDED: HUD displays Queue ID during input and after confirmation
+ *   * TECHNICAL: New globals g_is13CommunityMatch, g_13QueueId, g_13InputState, g_13CaptainId
+ *
+ * v0.10.37 (2026-01-07) - Match ID Hostname
+ *   * CHANGED: Match ID format now includes hostname: KTP-{timestamp}-{map}-{hostname}
+ *   + ADDED: sanitize_hostname_for_match_id() strips dynamic suffixes, sanitizes chars
+ *
+ * v0.10.36 (2026-01-06) - Discord 12man/Draft Channels
+ *   + ADDED: Discord support for 12man matches (discord_channel_id_12man config key)
+ *   + ADDED: Discord support for draft matches (discord_channel_id_draft config key)
+ *   * CHANGED: 12man/draft require explicit channel config; no fallback to default
+ *
+ * v0.10.35 (2026-01-06) - Tactical Pauses Disabled
+ *   * CHANGED: Tactical pauses disabled - only .tech allowed, .pause/.tac rejected
+ *   * CHANGED: Pause extensions disabled by default (ktp_pause_max_extensions = 0)
+ *
+ * v0.10.34 (2026-01-06) - OT SetHookChainArg Fix
+ *   * FIXED: OT recursive loop - replaced server_cmd + guard with SetHookChainArg
+ *   * TECHNICAL: SetHookChainArg modifies map in-place, HC_CONTINUE proceeds cleanly
+ *   - REMOVED: g_otForcedChangelevel guard flag (no longer needed)
+ *
+ * v0.10.33 (2026-01-06) - Half Captain Tracking
+ *   + ADDED: Half captain tracking - first .ready player per team becomes "half captain"
+ *   + ADDED: Original captains preserved via localinfo for Discord/match record
+ *   + ADDED: LOCALINFO_CAPTAINS key stores original captain names/SteamIDs
+ *   * CHANGED: MATCH_START log now shows half_captain1/half_captain2 (actual ready players)
+ *   * CHANGED: Chat announcement still uses original captains (preserved identity)
+ *   * TECHNICAL: Half captains cleared on entering pending phase, set on first .ready
+ *
+ * v0.10.32 (2026-01-05) - OT Recursive Loop Fix
+ *   * FIXED: OT rounds processing in infinite loop when tied (rounds 1->32+ in same frame)
+ *   * FIXED: Array index out of bounds crash at OT round 32 (g_otScores only has 32 elements)
+ *   + ADDED: g_otForcedChangelevel guard flag to prevent recursive hook processing
+ *   * TECHNICAL: server_cmd("changelevel") triggers hook synchronously before HC_SUPERCEDE returns
+ *   * TECHNICAL: Guard flag checked FIRST in OnChangeLevel, allows forced changelevel to pass
+ *
  * v0.10.30 (2026-01-01) - Intermission Freeze Fix
  *   * FIXED: Server freeze during intermission when superseding changelevel
  *   * FIXED: Infinite score logging loop caused by HC_SUPERCEDE during intermission
@@ -439,7 +512,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.30"
+#define PLUGIN_VERSION "0.10.46"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -465,6 +538,7 @@ new g_discordRelayUrl[256];          // Discord relay endpoint URL
 new g_discordChannelId[64];          // Discord channel ID (competitive)
 new g_discordChannelId12man[64];     // Discord channel ID for 12man matches (optional)
 new g_discordChannelIdScrim[64];     // Discord channel ID for scrim matches (optional)
+new g_discordChannelIdDraft[64];     // Discord channel ID for draft matches (optional)
 new g_discordAuthSecret[128];        // X-Relay-Auth header value
 
 // ---------- Match Types ----------
@@ -472,7 +546,9 @@ enum MatchType {
     MATCH_TYPE_COMPETITIVE = 0,  // Regular competitive match (Discord enabled, competitive config) - blocked off-season
     MATCH_TYPE_SCRIM = 1,        // Scrim match (Discord disabled, scrim config) - always allowed
     MATCH_TYPE_12MAN = 2,        // 12-man match (Discord disabled, 12man config) - always allowed
-    MATCH_TYPE_DRAFT = 3         // Draft match (Discord disabled, competitive config) - always allowed
+    MATCH_TYPE_DRAFT = 3,        // Draft match (Discord disabled, competitive config) - always allowed
+    MATCH_TYPE_KTP_OT = 4,       // Explicit KTP overtime (requires password, 5-min rounds)
+    MATCH_TYPE_DRAFT_OT = 5      // Explicit Draft overtime (requires password, 5-min rounds)
 };
 
 // ---------- State ----------
@@ -480,10 +556,19 @@ new bool: g_isPaused = false;
 new bool: g_matchPending = false;
 new bool: g_countdownActive = false;
 new bool: g_matchLive = false;              // becomes true after first LIVE
+new bool: g_matchEnded = false;             // true after match ends - disables auto-DC technicals until new match
+new bool: g_inIntermission = false;         // true when timelimit expires - disables auto-DC during scoreboard
 new bool: g_disableDiscord = false;         // when true, skip all Discord notifications (legacy - use g_matchType instead)
 new bool: g_periodicSaveStarted = false;    // tracks if 30s repeating score save is running
 new MatchType: g_matchType = MATCH_TYPE_COMPETITIVE; // Current match type
 new g_12manDuration = 20; // 12man match duration in minutes (20 or 15)
+
+// ---------- 1.3 Community 12man Queue ID System ----------
+new bool: g_is13CommunityMatch = false;         // True if this is a 1.3 Community Discord 12man
+new g_13QueueId[32];                            // The queue ID entered by captain
+new g_13QueueIdFirst[32];                       // First entry (for confirmation comparison)
+new g_13InputState = 0;                         // 0=none, 1=waiting first input, 2=waiting confirm
+new g_13CaptainId = 0;                          // Player ID of captain entering queue ID
 new g_techBudget[3] = {0, 0, 0}; // [1]=Allies, [2]=Axis; set at half start to g_techBudgetSecs
 
 // ---------- Half Tracking ----------
@@ -505,16 +590,21 @@ new const LOCALINFO_TEAMNAME1[]    = "_ktp_t1n";      // Team 1 name (started as
 new const LOCALINFO_TEAMNAME2[]    = "_ktp_t2n";      // Team 2 name (started as Axis)
 new const LOCALINFO_DISCORD_MSG[]  = "_ktp_dmsg";     // Discord embed message ID
 new const LOCALINFO_DISCORD_CHAN[] = "_ktp_dch";      // Discord channel ID
+new const LOCALINFO_CAPTAINS[]     = "_ktp_caps";     // Original captains: "name1|sid1|name2|sid2"
 
 // OT-specific keys (only used during overtime)
 new const LOCALINFO_REG_SCORES[]   = "_ktp_reg";      // Regulation totals: "score1,score2"
 new const LOCALINFO_OT_SCORES[]    = "_ktp_ots";      // OT rounds: "t1,t2|t1,t2|..." per round
 new const LOCALINFO_OT_STATE[]     = "_ktp_otst";     // "techA,techX,side" (OT tech budgets + starting side)
 
+// Persistent roster keys (survives map changes)
+new const LOCALINFO_ROSTER1[]      = "_ktp_r1";       // Team 1 roster: "name|sid;name|sid;..."
+new const LOCALINFO_ROSTER2[]      = "_ktp_r2";       // Team 2 roster: "name|sid;name|sid;..."
+
 // ---------- Match ID System ----------
 new g_matchId[64];              // Unique match identifier (format: KTP-{timestamp}-{mapname})
 
-// ---------- Captains ----------
+// ---------- Captains (original - set during pre-start, persisted for Discord) ----------
 new g_captain1_name[64];
 new g_captain1_sid[44];
 new g_captain1_ip[32];
@@ -523,6 +613,12 @@ new g_captain2_name[64];
 new g_captain2_sid[44];
 new g_captain2_ip[32];
 new g_captain2_team; // 1=Allies, 2=Axis
+
+// ---------- Half Captains (per-half - first .ready player per team) ----------
+new g_halfCaptain1_name[64];  // First .ready on team 1 (Allies side this half)
+new g_halfCaptain1_sid[44];
+new g_halfCaptain2_name[64];  // First .ready on team 2 (Axis side this half)
+new g_halfCaptain2_sid[44];
 
 new g_taskCountdownId = 55601;
 new g_taskPendingHudId = 55602;
@@ -534,7 +630,7 @@ new g_taskUnreadyReminderId = 55607;  // Periodic reminder of unready players
 new g_taskUnpauseReminderId = 55608;  // Periodic reminder waiting for other team to confirmunpause
 
 // ---------- Forwards (for external plugins) ----------
-new g_fwdMatchStart;    // ktp_match_start(matchId[], map[], matchType)
+new g_fwdMatchStart;    // ktp_match_start(matchId[], map[], matchType, half) - half: 1,2,101+
 new g_fwdMatchEnd;      // ktp_match_end(matchId[], map[], matchType, team1Score, team2Score)
 
 // ---------- Team Names (customizable) ----------
@@ -571,7 +667,8 @@ new g_countdownSeconds = 5;    // unpause countdown
 new g_prePauseSeconds = 5;     // pre-pause countdown for live pauses
 new g_preMatchPauseSeconds = 5;  // OPTIMIZED: Cached from g_cvarPreMatchPauseSec (Phase 5 optimization)
 new g_techBudgetSecs = 300;    // 5 minutes tech budget per team per half
-new g_readyRequired   = 1;     // players needed per team to go live
+new g_readyRequired   = 1;     // players needed per team to go live (base value from cvar, see get_required_ready_count())
+new bool:g_readyOverride = false;  // Debug override: when true, only 1 player needed per team
 new g_countdownLeft = 0;
 new const DEFAULT_LOGFILE[] = "ktp_match.log";
 
@@ -580,6 +677,7 @@ new g_pauseExtensionSec = 120;     // cached from g_cvarPauseExtension
 new g_pauseMaxExtensions = 2;      // cached from g_cvarMaxExtensions
 new g_autoRequestSecs = 300;       // cached from g_cvarAutoReqSec
 new g_serverHostname[64];          // cached from "hostname" cvar
+new g_baseHostname[64];            // base hostname (without match state suffixes) for match ID and dynamic updates
 new Float:g_unreadyReminderSecs = 30.0;  // cached from g_cvarUnreadyReminderSec
 new Float:g_unpauseReminderSecs = 15.0;  // cached from g_cvarUnpauseReminderSec
 
@@ -627,6 +725,14 @@ new g_firstHalfRosterAllies[16][44]; // SteamIDs of players on Allies in 1st hal
 new g_firstHalfRosterAxis[16][44];   // SteamIDs of players on Axis in 1st half (max 16)
 new g_firstHalfRosterAlliesCount = 0;
 new g_firstHalfRosterAxisCount = 0;
+
+// Persistent match roster - stores all players who participated (survives disconnects/map changes)
+// Format: "name|steamid" for each entry, allows building roster even after players leave
+#define MAX_ROSTER_ENTRIES 24
+new g_matchRosterTeam1[MAX_ROSTER_ENTRIES][80]; // Team 1 players: "PlayerName|STEAM_X:X:XXXXX"
+new g_matchRosterTeam2[MAX_ROSTER_ENTRIES][80]; // Team 2 players
+new g_matchRosterTeam1Count = 0;
+new g_matchRosterTeam2Count = 0;
 // Unready player lists
 new g_unreadyAllies[512];
 new g_unreadyAxis[512];
@@ -828,23 +934,40 @@ public OnChangeLevel(const map[], const landmark[]) {
     g_gameEndEventCount = 0;
 
     // ========== FIRST HALF END ==========
-    // Just save state and allow changelevel to proceed immediately
+    // Save state and redirect changelevel to same map for 2nd half
     if (g_currentHalf == 1 && !g_inOvertime) {
-        log_ktp("event=CHANGELEVEL_FIRST_HALF map=%s matchId=%s", map, g_matchId);
+        log_ktp("event=CHANGELEVEL_FIRST_HALF map=%s matchId=%s redirect_to=%s", map, g_matchId, g_matchMap);
         handle_first_half_end();
-        g_changeLevelHandled = false;
+        // Redirect changelevel to same map for 2nd half (all match types stay on same map)
+        SetHookChainArg(1, ATYPE_STRING, g_matchMap);
+        // NOTE: Do NOT reset g_changeLevelHandled - it prevents recursion if hook fires again
+        // The guard will naturally reset on plugin reinit when map loads
         return HC_CONTINUE;
     }
 
     // ========== SECOND HALF END or OT ROUND END ==========
+    // Immediately disable auto-DC pauses (players will be leaving)
+    g_inIntermission = true;
+
     // Store target map for logging
     copy(g_pendingChangeMap, charsmax(g_pendingChangeMap), map);
 
     // Process match end logic (announcements, Discord, cleanup)
     if (g_inOvertime) {
         log_ktp("event=CHANGELEVEL_OT_ROUND map=%s otRound=%d matchId=%s", map, g_otRound, g_matchId);
-        process_ot_round_end_changelevel();
-        // OT round end always lets changelevel proceed
+        new bool:stillTied = process_ot_round_end_changelevel();
+
+        if (stillTied) {
+            // OT continues - REDIRECT changelevel to SAME map instead of next in rotation
+            // Use SetHookChainArg to modify the target map in-place (no recursive changelevel calls)
+            log_ktp("event=OT_REDIRECT_CHANGELEVEL original_target=%s redirecting_to=%s next_round=%d", map, g_matchMap, g_otRound);
+            SetHookChainArg(1, ATYPE_STRING, g_matchMap);
+            // NOTE: Do NOT reset g_changeLevelHandled here - it prevents recursion if hook fires again
+            // The guard will naturally reset on plugin reinit when map loads
+            return HC_CONTINUE;  // Let changelevel proceed with modified map
+        }
+
+        // OT match complete - let changelevel proceed
         g_changeLevelHandled = false;
         return HC_CONTINUE;
     } else {
@@ -852,12 +975,12 @@ public OnChangeLevel(const map[], const landmark[]) {
         new bool:otTriggered = process_second_half_end_changelevel();
 
         if (otTriggered) {
-            // OT was triggered - we need to stay on the SAME map, not go to next in rotation
-            // Force changelevel to current map and supersede the original changelevel
-            log_ktp("event=OT_FORCE_SAME_MAP original_target=%s staying_on=%s", map, g_matchMap);
-            server_cmd("changelevel %s", g_matchMap);
-            g_changeLevelHandled = false;
-            return HC_SUPERCEDE;  // Block original changelevel to wrong map
+            // OT was triggered - REDIRECT changelevel to SAME map instead of next in rotation
+            // Use SetHookChainArg to modify the target map in-place (no recursive changelevel calls)
+            log_ktp("event=OT_REDIRECT_CHANGELEVEL original_target=%s redirecting_to=%s", map, g_matchMap);
+            SetHookChainArg(1, ATYPE_STRING, g_matchMap);
+            g_changeLevelHandled = false;  // Reset for next map load
+            return HC_CONTINUE;  // Let changelevel proceed with modified map
         }
 
         // Match ended normally - let changelevel proceed
@@ -895,14 +1018,11 @@ stock bool:process_second_half_end_changelevel() {
             g_matchId, g_team1Name, team1Total, team2Total, g_team2Name,
             g_firstHalfScore[1], g_firstHalfScore[2], team1SecondHalf, team2SecondHalf);
 
-    // Check for tie - trigger overtime
+    // Check for tie - announce but do NOT auto-trigger OT
+    // (OT is now explicit via .ktpOT or .draftOT commands)
     if (team1Total == team2Total) {
-        if (g_matchType == MATCH_TYPE_COMPETITIVE && !g_disableDiscord) {
-            log_ktp("event=TIE_DETECTED triggering_ot=true score=%d-%d", team1Total, team2Total);
-            trigger_overtime(team1Total, team2Total);
-            save_ot_state_for_first_round();  // Save OT state so map reload restores it
-            return true;  // Tell caller to force changelevel to same map
-        }
+        log_ktp("event=TIE_DETECTED triggering_ot=false score=%d-%d (use .ktpOT or .draftOT)", team1Total, team2Total);
+        // Don't auto-trigger OT - fall through to normal match end
     }
 
     // Winner or non-competitive tie - announce result
@@ -957,8 +1077,9 @@ stock bool:process_second_half_end_changelevel() {
 }
 
 // Process OT round end with announcements
-// Returns: 0 = let changelevel proceed (match complete OR continuing to next OT map)
-stock process_ot_round_end_changelevel() {
+// Returns: true = OT continues (still tied, caller should force same map)
+//          false = match complete (caller should let changelevel proceed)
+stock bool:process_ot_round_end_changelevel() {
     // Get current scoreboard scores
     update_match_scores_from_dodx();
 
@@ -1048,7 +1169,7 @@ stock process_ot_round_end_changelevel() {
         clear_localinfo_match_context();
 
         log_ktp("event=OT_MATCH_COMPLETE_PROCESSED allowing_changelevel=true");
-        return 0;  // Let changelevel proceed - match is over
+        return false;  // Let changelevel proceed - match is over
     } else {
         // STILL TIED - Another OT round needed
         log_ktp("event=OT_STILL_TIED match_id=%s total=%d-%d next_round=%d", g_matchId, team1Total, team2Total, g_otRound + 1);
@@ -1075,8 +1196,8 @@ stock process_ot_round_end_changelevel() {
         // Next map load will detect OT context and restore the ready phase
         save_ot_state_for_next_round();
 
-        log_ktp("event=OT_NEXT_ROUND_PREPARED allowing_changelevel=true next_round=%d", g_otRound);
-        return 0;  // Let changelevel proceed - next map will restore OT context
+        log_ktp("event=OT_NEXT_ROUND_PREPARED next_round=%d forcing_same_map=true", g_otRound);
+        return true;  // Still tied - caller should force changelevel to same map
     }
 }
 
@@ -1161,9 +1282,12 @@ stock handle_first_half_end() {
     set_localinfo(LOCALINFO_DISCORD_MSG, g_discordMatchMsgId);
     set_localinfo(LOCALINFO_DISCORD_CHAN, g_discordMatchChannelId);
 
-    log_ktp("event=MATCH_CONTEXT_SAVED match_id=%s state=%s h1=%d,%d team1=%s team2=%s discord_msg=%s",
+    // Save persistent roster to localinfo
+    save_roster_to_localinfo();
+
+    log_ktp("event=MATCH_CONTEXT_SAVED match_id=%s state=%s h1=%d,%d team1=%s team2=%s discord_msg=%s roster1=%d roster2=%d",
             g_matchId, buf, g_firstHalfScore[1], g_firstHalfScore[2],
-            g_team1Name, g_team2Name, g_discordMatchMsgId);
+            g_team1Name, g_team2Name, g_discordMatchMsgId, g_matchRosterTeam1Count, g_matchRosterTeam2Count);
 
     // Update Discord embed with 1st half completion status
     #if defined HAS_CURL
@@ -1199,6 +1323,12 @@ stock save_ot_state_for_next_round() {
         pos += formatex(ot_scores[pos], charsmax(ot_scores) - pos, "%d,%d", g_otScores[r][1], g_otScores[r][2]);
     }
     set_localinfo(LOCALINFO_OT_SCORES, ot_scores);
+
+    // Save original captains (preserved across all OT rounds)
+    new captainsBuf[256];
+    formatex(captainsBuf, charsmax(captainsBuf), "%s|%s|%s|%s",
+        g_captain1_name, g_captain1_sid, g_captain2_name, g_captain2_sid);
+    set_localinfo(LOCALINFO_CAPTAINS, captainsBuf);
 
     log_ktp("event=OT_STATE_SAVED round=%d tech=%d,%d starting_side=%d reg=%d-%d",
             g_otRound, g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs,
@@ -1236,6 +1366,12 @@ stock save_ot_state_for_first_round() {
     // Save Discord message ID for updates
     set_localinfo(LOCALINFO_DISCORD_MSG, g_discordMatchMsgId);
     set_localinfo(LOCALINFO_DISCORD_CHAN, g_discordMatchChannelId);
+
+    // Save original captains
+    new captainsBuf[256];
+    formatex(captainsBuf, charsmax(captainsBuf), "%s|%s|%s|%s",
+        g_captain1_name, g_captain1_sid, g_captain2_name, g_captain2_sid);
+    set_localinfo(LOCALINFO_CAPTAINS, captainsBuf);
 
     // Clear OT scores (none yet for round 1)
     set_localinfo(LOCALINFO_OT_SCORES, "");
@@ -1469,6 +1605,10 @@ stock ktp_sync_config_from_cvars() {
 
     // OPTIMIZED: Cache server hostname (Phase 2 optimization)
     get_cvar_string("hostname", g_serverHostname, charsmax(g_serverHostname));
+
+    // Cache base hostname (strip any match state suffixes for use in match ID and dynamic updates)
+    extract_base_hostname(g_serverHostname, g_baseHostname, charsmax(g_baseHostname));
+    log_ktp("event=HOSTNAME_CACHED full='%s' base='%s'", g_serverHostname, g_baseHostname);
 
     // Cache reminder intervals
     if (g_cvarUnreadyReminderSec) {
@@ -1710,17 +1850,163 @@ stock generate_ot_scores_string(buf[], maxlen, scores[][3], numRounds) {
 
 // ---------- End Localinfo State Helpers ----------
 
-// Generate unique match ID (format: KTP-{timestamp}-{mapname})
-// Called at first half start; same matchID persists for second half
-stock generate_match_id() {
-    new timestamp = get_systime();
-    formatex(g_matchId, charsmax(g_matchId), "KTP-%d-%s", timestamp, g_currentMap);
-    log_ktp("event=MATCH_ID_GENERATED match_id=%s", g_matchId);
+// ---------- Dynamic Hostname System ----------
+// Base hostname is cached at plugin init, match state is appended dynamically
+
+// Extract base hostname by stripping match state suffixes
+// Input: "KTP - Atlanta 1 - KTP - LIVE - 1ST HALF" -> Output: "KTP - Atlanta 1"
+stock extract_base_hostname(const input[], output[], maxlen) {
+    copy(output, maxlen, input);
+
+    // Match state patterns to strip (order matters - check longer patterns first)
+    static const patterns[][] = {
+        " - KTP OT - LIVE - OT",      // OT rounds (partial, will match OT1, OT2, etc.)
+        " - KTP - LIVE - 1ST HALF",
+        " - KTP - LIVE - 2ND HALF",
+        " - KTP - PAUSED",
+        " - KTP - PENDING",
+        " - 12MAN - LIVE - 1ST HALF",
+        " - 12MAN - LIVE - 2ND HALF",
+        " - 12MAN - PAUSED",
+        " - 12MAN - PENDING",
+        " - SCRIM - LIVE - 1ST HALF",
+        " - SCRIM - LIVE - 2ND HALF",
+        " - SCRIM - PAUSED",
+        " - SCRIM - PENDING",
+        " - DRAFT - LIVE - 1ST HALF",
+        " - DRAFT - LIVE - 2ND HALF",
+        " - DRAFT - PAUSED",
+        " - DRAFT - PENDING",
+        " - DRAFT OT - LIVE - OT",
+        " - KTP Match In Progress",   // Legacy format
+        " - Match in Progress",
+        " - LIVE",
+        " - PAUSED",
+        " - PRE-MATCH",
+        " - WARMUP"
+    };
+
+    for (new i = 0; i < sizeof(patterns); i++) {
+        new pos = containi(output, patterns[i]);
+        if (pos != -1) {
+            output[pos] = EOS;
+            break;  // Only strip first match
+        }
+    }
+
+    // Trim trailing spaces
+    new len = strlen(output);
+    while (len > 0 && output[len - 1] == ' ') {
+        output[--len] = EOS;
+    }
 }
 
-// Clear match ID (called when match ends or is cancelled)
+// Update server hostname with current match state
+// Called at: match start, half change, pause, unpause, OT, match end
+stock update_server_hostname() {
+    new hostname[128];
+
+    // If no match active, reset to base hostname
+    if (!g_matchLive && !g_matchPending && !g_preStartPending) {
+        copy(hostname, charsmax(hostname), g_baseHostname);
+    } else {
+        // Build match type string
+        new typeStr[16];
+        switch (g_matchType) {
+            case MATCH_TYPE_COMPETITIVE: copy(typeStr, charsmax(typeStr), "KTP");
+            case MATCH_TYPE_SCRIM:       copy(typeStr, charsmax(typeStr), "SCRIM");
+            case MATCH_TYPE_12MAN:       copy(typeStr, charsmax(typeStr), "12MAN");
+            case MATCH_TYPE_DRAFT:       copy(typeStr, charsmax(typeStr), "DRAFT");
+            case MATCH_TYPE_KTP_OT:      copy(typeStr, charsmax(typeStr), "KTP OT");
+            case MATCH_TYPE_DRAFT_OT:    copy(typeStr, charsmax(typeStr), "DRAFT OT");
+            default:                     copy(typeStr, charsmax(typeStr), "MATCH");
+        }
+
+        // Build state string
+        new stateStr[32];
+        if (g_matchPending || g_preStartPending) {
+            copy(stateStr, charsmax(stateStr), "PENDING");
+        } else if (g_isPaused) {
+            copy(stateStr, charsmax(stateStr), "PAUSED");
+        } else if (g_inOvertime) {
+            formatex(stateStr, charsmax(stateStr), "LIVE - OT%d", g_otRound);
+        } else if (g_currentHalf == 1) {
+            copy(stateStr, charsmax(stateStr), "LIVE - 1ST HALF");
+        } else if (g_currentHalf == 2) {
+            copy(stateStr, charsmax(stateStr), "LIVE - 2ND HALF");
+        } else {
+            copy(stateStr, charsmax(stateStr), "LIVE");
+        }
+
+        formatex(hostname, charsmax(hostname), "%s - %s - %s", g_baseHostname, typeStr, stateStr);
+    }
+
+    server_cmd("hostname ^"%s^"", hostname);
+    server_exec();
+    log_ktp("event=HOSTNAME_UPDATE hostname='%s'", hostname);
+}
+
+// Sanitize hostname for use in match ID
+// Uses cached base hostname, replaces spaces with underscores, removes special chars
+stock sanitize_hostname_for_match_id(output[], maxlen) {
+    // Use cached base hostname (already stripped of suffixes)
+    new len = strlen(g_baseHostname);
+
+    // Sanitize: replace spaces/special chars with underscores, keep alphanumeric
+    new outPos = 0;
+    new bool:lastWasUnderscore = false;
+
+    for (new i = 0; i < len && outPos < maxlen - 1; i++) {
+        new ch = g_baseHostname[i];
+
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+            output[outPos++] = ch;
+            lastWasUnderscore = false;
+        } else if (!lastWasUnderscore && outPos > 0) {
+            // Replace spaces, hyphens, and other chars with single underscore
+            output[outPos++] = '_';
+            lastWasUnderscore = true;
+        }
+    }
+
+    // Trim trailing underscore
+    if (outPos > 0 && output[outPos - 1] == '_') {
+        outPos--;
+    }
+
+    output[outPos] = EOS;
+}
+
+// Generate unique match ID
+// Standard format: KTP-{timestamp}-{mapname}-{hostname}
+// 1.3 Community format: 1.3-{queueId}-{mapname}-{hostname}
+// Called at first half start; same matchID persists for second half
+stock generate_match_id() {
+    new sanitizedHostname[32];
+    sanitize_hostname_for_match_id(sanitizedHostname, charsmax(sanitizedHostname));
+
+    if (g_is13CommunityMatch && g_13QueueId[0]) {
+        // 1.3 Community format - use queue ID instead of timestamp
+        formatex(g_matchId, charsmax(g_matchId), "1.3-%s-%s-%s", g_13QueueId, g_currentMap, sanitizedHostname);
+        log_ktp("event=MATCH_ID_GENERATED match_id=%s type=13community queue_id=%s", g_matchId, g_13QueueId);
+    } else {
+        // Standard KTP format with timestamp
+        new timestamp = get_systime();
+        formatex(g_matchId, charsmax(g_matchId), "KTP-%d-%s-%s", timestamp, g_currentMap, sanitizedHostname);
+        log_ktp("event=MATCH_ID_GENERATED match_id=%s type=standard", g_matchId);
+    }
+}
+
+// Clear match ID and 1.3 Community state (called when match ends or is cancelled)
 stock clear_match_id() {
     g_matchId[0] = EOS;
+
+    // Reset 1.3 Community state
+    g_is13CommunityMatch = false;
+    g_13QueueId[0] = EOS;
+    g_13QueueIdFirst[0] = EOS;
+    g_13InputState = 0;
+    g_13CaptainId = 0;
 }
 
 stock pauses_left(teamId) {
@@ -1846,25 +2132,33 @@ stock safe_sid(const sid[]) {
 #if defined HAS_CURL
 stock get_discord_channel_id(channelId[], maxlen) {
     // Get the appropriate Discord channel ID based on match type
-    // Falls back to default channel if match-type-specific channel not configured
+    // 12man/draft/scrim do NOT fall back to default - they require explicit channel config
     channelId[0] = EOS;
 
     switch (g_matchType) {
         case MATCH_TYPE_12MAN: {
+            // 12man requires explicit channel - no fallback
             if (g_discordChannelId12man[0]) {
                 copy(channelId, maxlen, g_discordChannelId12man);
-            } else {
-                copy(channelId, maxlen, g_discordChannelId); // Fall back to default
             }
+            // If not configured, channelId stays empty → Discord will be skipped
         }
         case MATCH_TYPE_SCRIM: {
+            // Scrim requires explicit channel - no fallback
             if (g_discordChannelIdScrim[0]) {
                 copy(channelId, maxlen, g_discordChannelIdScrim);
-            } else {
-                copy(channelId, maxlen, g_discordChannelId); // Fall back to default
             }
+            // If not configured, channelId stays empty → Discord will be skipped
+        }
+        case MATCH_TYPE_DRAFT: {
+            // Draft requires explicit channel - no fallback
+            if (g_discordChannelIdDraft[0]) {
+                copy(channelId, maxlen, g_discordChannelIdDraft);
+            }
+            // If not configured, channelId stays empty → Discord will be skipped
         }
         default: {
+            // Competitive matches use default channel
             copy(channelId, maxlen, g_discordChannelId);
         }
     }
@@ -2240,6 +2534,211 @@ stock build_roster_with_tags(output[], maxlen, team, &count) {
     }
 }
 
+// ================= Persistent Match Roster =================
+// Tracks all players who participated in the match, even after they disconnect.
+// This ensures Discord reports show all players, not just those connected at match end.
+
+// Add a player to the persistent match roster (by team identity, not current side)
+// team: 1 = Team 1, 2 = Team 2 (based on team identity, not Allies/Axis side)
+// Returns true if added, false if already exists or roster full
+stock bool:add_to_match_roster(const name[], const authid[], team) {
+    // Build entry format: "name|steamid"
+    new entry[80];
+    formatex(entry, charsmax(entry), "%s|%s", name, authid);
+
+    if (team == 1) {
+        // Check if already in roster (by steamid)
+        for (new i = 0; i < g_matchRosterTeam1Count; i++) {
+            if (contain(g_matchRosterTeam1[i], authid) != -1) {
+                return false; // Already tracked
+            }
+        }
+        if (g_matchRosterTeam1Count >= MAX_ROSTER_ENTRIES) return false;
+        copy(g_matchRosterTeam1[g_matchRosterTeam1Count], charsmax(g_matchRosterTeam1[]), entry);
+        g_matchRosterTeam1Count++;
+        return true;
+    } else if (team == 2) {
+        for (new i = 0; i < g_matchRosterTeam2Count; i++) {
+            if (contain(g_matchRosterTeam2[i], authid) != -1) {
+                return false;
+            }
+        }
+        if (g_matchRosterTeam2Count >= MAX_ROSTER_ENTRIES) return false;
+        copy(g_matchRosterTeam2[g_matchRosterTeam2Count], charsmax(g_matchRosterTeam2[]), entry);
+        g_matchRosterTeam2Count++;
+        return true;
+    }
+    return false;
+}
+
+// Clear the persistent match roster (call on match end/reset)
+stock clear_match_roster() {
+    for (new i = 0; i < MAX_ROSTER_ENTRIES; i++) {
+        g_matchRosterTeam1[i][0] = EOS;
+        g_matchRosterTeam2[i][0] = EOS;
+    }
+    g_matchRosterTeam1Count = 0;
+    g_matchRosterTeam2Count = 0;
+}
+
+// Capture all current players to the persistent roster
+// Call this at match start to get initial roster
+stock capture_roster_snapshot() {
+    new players[MAX_PLAYERS], pnum;
+    get_players(players, pnum, "ch"); // connected, not HLTV
+
+    for (new i = 0; i < pnum; i++) {
+        new id = players[i];
+        new name[32], authid[44];
+        get_user_name(id, name, charsmax(name));
+        get_user_authid(id, authid, charsmax(authid));
+        new side = get_user_team(id); // 1=Allies, 2=Axis
+
+        // Convert current side to team identity
+        // In 1st half: Allies = Team 1, Axis = Team 2
+        // In 2nd half: Allies = Team 2, Axis = Team 1
+        new teamId;
+        if (g_currentHalf == 2) {
+            teamId = (side == 1) ? 2 : 1; // Swapped
+        } else {
+            teamId = side;
+        }
+
+        if (teamId == 1 || teamId == 2) {
+            add_to_match_roster(name, authid, teamId);
+        }
+    }
+    log_ktp("event=ROSTER_SNAPSHOT team1=%d team2=%d", g_matchRosterTeam1Count, g_matchRosterTeam2Count);
+}
+
+// Build roster string from stored data (not live players)
+// team: 1 = Team 1, 2 = Team 2
+stock build_roster_from_stored(output[], maxlen, team, &count) {
+    output[0] = EOS;
+    count = 0;
+
+    new roster[MAX_ROSTER_ENTRIES][80];
+    new rosterCount;
+
+    if (team == 1) {
+        rosterCount = g_matchRosterTeam1Count;
+        for (new i = 0; i < rosterCount; i++) {
+            copy(roster[i], charsmax(roster[]), g_matchRosterTeam1[i]);
+        }
+    } else {
+        rosterCount = g_matchRosterTeam2Count;
+        for (new i = 0; i < rosterCount; i++) {
+            copy(roster[i], charsmax(roster[]), g_matchRosterTeam2[i]);
+        }
+    }
+
+    for (new i = 0; i < rosterCount; i++) {
+        // Parse "name|steamid"
+        new name[32], authid[44];
+        new pipePos = contain(roster[i], "|");
+        if (pipePos > 0) {
+            copy(name, min(pipePos, charsmax(name)), roster[i]);
+            copy(authid, charsmax(authid), roster[i][pipePos + 1]);
+        } else {
+            continue;
+        }
+
+        new entry[96];
+        formatex(entry, charsmax(entry), "- %s (%s)", name, authid);
+
+        new currentLen = strlen(output);
+        new entryLen = strlen(entry);
+        new requiredSpace = entryLen + (count > 0 ? 1 : 0);
+
+        if (currentLen + requiredSpace < maxlen) {
+            if (count > 0) {
+                new sep[4];
+                formatex(sep, charsmax(sep), "%c", 10); // newline
+                add(output, maxlen, sep);
+            }
+            add(output, maxlen, entry);
+            count++;
+        }
+    }
+}
+
+// Save roster to localinfo (for map change persistence)
+// Format: "name|sid;name|sid;..." (semicolon separates entries)
+stock save_roster_to_localinfo() {
+    new buf[1024];
+
+    // Save Team 1 roster
+    buf[0] = EOS;
+    for (new i = 0; i < g_matchRosterTeam1Count; i++) {
+        if (i > 0) add(buf, charsmax(buf), ";");
+        add(buf, charsmax(buf), g_matchRosterTeam1[i]);
+    }
+    set_localinfo(LOCALINFO_ROSTER1, buf);
+
+    // Save Team 2 roster
+    buf[0] = EOS;
+    for (new i = 0; i < g_matchRosterTeam2Count; i++) {
+        if (i > 0) add(buf, charsmax(buf), ";");
+        add(buf, charsmax(buf), g_matchRosterTeam2[i]);
+    }
+    set_localinfo(LOCALINFO_ROSTER2, buf);
+
+    log_ktp("event=ROSTER_SAVED_LOCALINFO team1=%d team2=%d", g_matchRosterTeam1Count, g_matchRosterTeam2Count);
+}
+
+// Restore roster from localinfo (after map change)
+stock restore_roster_from_localinfo() {
+    new buf[1024];
+
+    // Restore Team 1 roster
+    get_localinfo(LOCALINFO_ROSTER1, buf, charsmax(buf));
+    if (buf[0]) {
+        g_matchRosterTeam1Count = 0;
+        new entry[80], pos = 0;
+        while (pos < strlen(buf) && g_matchRosterTeam1Count < MAX_ROSTER_ENTRIES) {
+            // Find next semicolon or end of string
+            new endPos = pos;
+            while (buf[endPos] && buf[endPos] != ';') endPos++;
+
+            // Extract entry
+            new len = endPos - pos;
+            if (len > 0 && len < sizeof(entry)) {
+                copy(entry, len, buf[pos]);
+                entry[len] = EOS;
+                copy(g_matchRosterTeam1[g_matchRosterTeam1Count], charsmax(g_matchRosterTeam1[]), entry);
+                g_matchRosterTeam1Count++;
+            }
+
+            pos = endPos + 1;
+            if (!buf[endPos]) break;
+        }
+    }
+
+    // Restore Team 2 roster
+    get_localinfo(LOCALINFO_ROSTER2, buf, charsmax(buf));
+    if (buf[0]) {
+        g_matchRosterTeam2Count = 0;
+        new entry[80], pos = 0;
+        while (pos < strlen(buf) && g_matchRosterTeam2Count < MAX_ROSTER_ENTRIES) {
+            new endPos = pos;
+            while (buf[endPos] && buf[endPos] != ';') endPos++;
+
+            new len = endPos - pos;
+            if (len > 0 && len < sizeof(entry)) {
+                copy(entry, len, buf[pos]);
+                entry[len] = EOS;
+                copy(g_matchRosterTeam2[g_matchRosterTeam2Count], charsmax(g_matchRosterTeam2[]), entry);
+                g_matchRosterTeam2Count++;
+            }
+
+            pos = endPos + 1;
+            if (!buf[endPos]) break;
+        }
+    }
+
+    log_ktp("event=ROSTER_RESTORED_LOCALINFO team1=%d team2=%d", g_matchRosterTeam1Count, g_matchRosterTeam2Count);
+}
+
 // Build the scores section for the embed
 new g_embedScoresField[256];
 stock build_scores_field() {
@@ -2449,10 +2948,22 @@ stock send_match_embed_update(const status[]) {
 
     if (!g_discordRelayUrl[0] || !channelId[0] || !g_discordAuthSecret[0]) return;
 
-    // Build rosters with [2nd] tags for new players
-    new alliesCount = 0, axisCount = 0;
-    build_roster_with_tags(g_rosterAllies, charsmax(g_rosterAllies), 1, alliesCount);
-    build_roster_with_tags(g_rosterAxis, charsmax(g_rosterAxis), 2, axisCount);
+    // Build rosters - prefer stored roster (survives disconnects), fall back to live players
+    new team1Count = 0, team2Count = 0;
+
+    // Try stored roster first (by team identity)
+    build_roster_from_stored(g_rosterAllies, charsmax(g_rosterAllies), 1, team1Count);
+    build_roster_from_stored(g_rosterAxis, charsmax(g_rosterAxis), 2, team2Count);
+
+    // Fall back to live players if stored roster is empty
+    if (team1Count == 0 && team2Count == 0) {
+        // No stored roster, use live players with [2nd] tags
+        new alliesCount = 0, axisCount = 0;
+        build_roster_with_tags(g_rosterAllies, charsmax(g_rosterAllies), 1, alliesCount);
+        build_roster_with_tags(g_rosterAxis, charsmax(g_rosterAxis), 2, axisCount);
+        team1Count = alliesCount;
+        team2Count = axisCount;
+    }
 
     escape_for_json(g_rosterAllies[0] ? g_rosterAllies : "No players", g_rosterAlliesEscaped, charsmax(g_rosterAlliesEscaped));
     escape_for_json(g_rosterAxis[0] ? g_rosterAxis : "No players", g_rosterAxisEscaped, charsmax(g_rosterAxisEscaped));
@@ -2486,8 +2997,8 @@ stock send_match_embed_update(const status[]) {
         channelId,
         g_discordMatchMsgId,
         embedTitleEscaped,
-        g_team1Name, alliesCount, g_rosterAlliesEscaped,
-        g_team2Name, axisCount, g_rosterAxisEscaped,
+        g_team1Name, team1Count, g_rosterAlliesEscaped,
+        g_team2Name, team2Count, g_rosterAxisEscaped,
         scoresEscaped,
         statusEscaped,
         g_matchId, g_serverHostnameEscaped);
@@ -2562,6 +3073,7 @@ stock load_discord_config() {
     g_discordChannelId[0] = EOS;
     g_discordChannelId12man[0] = EOS;
     g_discordChannelIdScrim[0] = EOS;
+    g_discordChannelIdDraft[0] = EOS;
     g_discordAuthSecret[0] = EOS;
 
     new path[192];
@@ -2611,6 +3123,9 @@ stock load_discord_config() {
             loaded++;
         } else if (equal(key, "discord_channel_id_scrim")) {
             copy(g_discordChannelIdScrim, charsmax(g_discordChannelIdScrim), val);
+            loaded++;
+        } else if (equal(key, "discord_channel_id_draft")) {
+            copy(g_discordChannelIdDraft, charsmax(g_discordChannelIdDraft), val);
             loaded++;
         } else if (equal(key, "discord_auth_secret")) {
             copy(g_discordAuthSecret, charsmax(g_discordAuthSecret), val);
@@ -2736,6 +3251,26 @@ stock load_map_mappings() {
     fclose(fp);
 
     g_mapRows = added;
+
+    // Sort by key length descending so longer (more specific) keys match first
+    // This prevents "dod_railroad" from matching before "dod_railroad2_s9a"
+    for (new i = 0; i < g_mapRows - 1; i++) {
+        for (new j = i + 1; j < g_mapRows; j++) {
+            if (strlen(g_mapKeys[j]) > strlen(g_mapKeys[i])) {
+                // Swap keys
+                new tmpKey[64];
+                copy(tmpKey, charsmax(tmpKey), g_mapKeys[i]);
+                copy(g_mapKeys[i], charsmax(g_mapKeys[]), g_mapKeys[j]);
+                copy(g_mapKeys[j], charsmax(g_mapKeys[]), tmpKey);
+                // Swap configs
+                new tmpCfg[128];
+                copy(tmpCfg, charsmax(tmpCfg), g_mapCfgs[i]);
+                copy(g_mapCfgs[i], charsmax(g_mapCfgs[]), g_mapCfgs[j]);
+                copy(g_mapCfgs[j], charsmax(g_mapCfgs[]), tmpCfg);
+            }
+        }
+    }
+
     log_ktp("event=MAPS_LOAD status=ok count=%d path=\'%s\'", g_mapRows, path);
 }
 
@@ -2834,6 +3369,8 @@ stock exec_map_config() {
         case MATCH_TYPE_12MAN: copy(match_type_str, charsmax(match_type_str), "12man");
         case MATCH_TYPE_SCRIM: copy(match_type_str, charsmax(match_type_str), "scrim");
         case MATCH_TYPE_DRAFT: copy(match_type_str, charsmax(match_type_str), "draft");
+        case MATCH_TYPE_KTP_OT: copy(match_type_str, charsmax(match_type_str), "ktpOT");
+        case MATCH_TYPE_DRAFT_OT: copy(match_type_str, charsmax(match_type_str), "draftOT");
         default: copy(match_type_str, charsmax(match_type_str), "competitive");
     }
 
@@ -2856,6 +3393,8 @@ stock get_match_type_label(output[], maxlen) {
         case MATCH_TYPE_SCRIM: copy(output, maxlen, "Scrim");
         case MATCH_TYPE_12MAN: copy(output, maxlen, "12man");
         case MATCH_TYPE_DRAFT: copy(output, maxlen, "Draft");
+        case MATCH_TYPE_KTP_OT: copy(output, maxlen, "KTP OT");
+        case MATCH_TYPE_DRAFT_OT: copy(output, maxlen, "Draft OT");
         default: copy(output, maxlen, "Match");
     }
 }
@@ -2868,6 +3407,7 @@ stock ktp_pause_now(const reason[]) {
         g_isPaused = true;
         log_ktp("event=PAUSE_TOGGLE reason='%s'", reason);
         client_print(0, print_chat, "[KTP] Game paused (reason: %s)", reason);
+        update_server_hostname();  // Update hostname to show PAUSED
     }
 }
 
@@ -2879,6 +3419,7 @@ stock ktp_unpause_now(const reason[]) {
         g_isPaused = false;
         log_ktp("event=UNPAUSE_TOGGLE reason='%s'", reason);
         client_print(0, print_chat, "[KTP] Game unpaused (reason: %s)", reason);
+        update_server_hostname();  // Update hostname to show LIVE
     }
 }
 
@@ -3406,7 +3947,7 @@ public pending_hud_tick() {
 
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
-    new need = g_readyRequired;
+    new need = get_required_ready_count();
 
     // Calculate pause status message
     new pauseInfo[64] = "";
@@ -3448,7 +3989,7 @@ public pending_hud_tick() {
 stock show_pending_hud_during_pause() {
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
-    new need = g_readyRequired;
+    new need = get_required_ready_count();
 
     // Calculate pause time remaining using real-time clock
     new pauseInfo[64] = "";
@@ -3587,7 +4128,8 @@ public plugin_init() {
     register_plugin(PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR);
 
     // Register forwards for external plugins (KTPHLTVRecorder, etc.)
-    g_fwdMatchStart = CreateMultiForward("ktp_match_start", ET_IGNORE, FP_STRING, FP_STRING, FP_CELL);
+    // ktp_match_start(matchId[], map[], matchType, half) - half: 1=1st, 2=2nd, 101+=OT round
+    g_fwdMatchStart = CreateMultiForward("ktp_match_start", ET_IGNORE, FP_STRING, FP_STRING, FP_CELL, FP_CELL);
     g_fwdMatchEnd = CreateMultiForward("ktp_match_end", ET_IGNORE, FP_STRING, FP_STRING, FP_CELL, FP_CELL, FP_CELL);
 
     new tmpCnt[8];
@@ -3619,8 +4161,8 @@ public plugin_init() {
     g_cvarAutoReqSec     = register_cvar("ktp_unpause_autorequest_secs", "300");
     g_cvarDiscordIniPath = register_cvar("ktp_discord_ini", discordIniPath);
     g_cvarPauseDuration  = register_cvar("ktp_pause_duration", "300");       // 5 minutes
-    g_cvarPauseExtension = register_cvar("ktp_pause_extension", "120");      // 2 minutes
-    g_cvarMaxExtensions  = register_cvar("ktp_pause_max_extensions", "2");   // max 2 extensions
+    g_cvarPauseExtension = register_cvar("ktp_pause_extension", "120");      // 2 minutes per extension
+    g_cvarMaxExtensions  = register_cvar("ktp_pause_max_extensions", "0");   // 0 = extensions disabled
     g_cvarUnreadyReminderSec = register_cvar("ktp_unready_reminder_secs", "30");  // unready reminder interval
     g_cvarUnpauseReminderSec = register_cvar("ktp_unpause_reminder_secs", "15");  // unpause reminder interval
 
@@ -3687,6 +4229,28 @@ public plugin_init() {
     register_clcmd("say_team /draft",      "cmd_start_draft");
     register_clcmd("say .draft",           "cmd_start_draft");
     register_clcmd("say_team .draft",      "cmd_start_draft");
+
+    // Explicit Overtime (requires password, 5-min rounds)
+    register_clcmd("say /ktpOT",           "cmd_start_ktp_ot");
+    register_clcmd("say_team /ktpOT",      "cmd_start_ktp_ot");
+    register_clcmd("say .ktpOT",           "cmd_start_ktp_ot");
+    register_clcmd("say_team .ktpOT",      "cmd_start_ktp_ot");
+    register_clcmd("say /ktpot",           "cmd_start_ktp_ot");
+    register_clcmd("say_team /ktpot",      "cmd_start_ktp_ot");
+    register_clcmd("say .ktpot",           "cmd_start_ktp_ot");
+    register_clcmd("say_team .ktpot",      "cmd_start_ktp_ot");
+    register_clcmd("say /draftOT",         "cmd_start_draft_ot");
+    register_clcmd("say_team /draftOT",    "cmd_start_draft_ot");
+    register_clcmd("say .draftOT",         "cmd_start_draft_ot");
+    register_clcmd("say_team .draftOT",    "cmd_start_draft_ot");
+    register_clcmd("say /draftot",         "cmd_start_draft_ot");
+    register_clcmd("say_team /draftot",    "cmd_start_draft_ot");
+    register_clcmd("say .draftot",         "cmd_start_draft_ot");
+    register_clcmd("say_team .draftot",    "cmd_start_draft_ot");
+
+    // Debug override for ready requirements (restricted to specific SteamID)
+    register_clcmd("say .override_ready_limits", "cmd_override_ready_limits");
+    register_clcmd("say_team .override_ready_limits", "cmd_override_ready_limits");
 
     // Scrim / 12-man (no Discord notifications)
     register_clcmd("say /scrim",           "cmd_start_scrim");
@@ -3975,6 +4539,25 @@ stock restore_match_context_from_localinfo() {
         log_ktp("event=DISCORD_MSG_ID_RESTORED id=%s channel=%s", g_discordMatchMsgId, g_discordMatchChannelId);
     }
 
+    // Restore original captains (for Discord/match record)
+    new captainsBuf[256];
+    get_localinfo(LOCALINFO_CAPTAINS, captainsBuf, charsmax(captainsBuf));
+    if (captainsBuf[0]) {
+        // Parse "name1|sid1|name2|sid2"
+        new parts[4][64];
+        new count = explode_string(captainsBuf, "|", parts, 4, 63);
+        if (count >= 1) copy(g_captain1_name, charsmax(g_captain1_name), parts[0]);
+        if (count >= 2) copy(g_captain1_sid, charsmax(g_captain1_sid), parts[1]);
+        if (count >= 3) copy(g_captain2_name, charsmax(g_captain2_name), parts[2]);
+        if (count >= 4) copy(g_captain2_sid, charsmax(g_captain2_sid), parts[3]);
+        log_ktp("event=CAPTAINS_RESTORED captain1='%s' sid1=%s captain2='%s' sid2=%s",
+                g_captain1_name, g_captain1_sid, g_captain2_name, g_captain2_sid);
+    }
+
+    // Clear half captains - they will be set by first .ready player per team
+    g_halfCaptain1_name[0] = g_halfCaptain1_sid[0] = EOS;
+    g_halfCaptain2_name[0] = g_halfCaptain2_sid[0] = EOS;
+
     if (isSecondHalf) {
         // ========== 2nd Half Restoration ==========
         g_secondHalfPending = true;
@@ -3993,13 +4576,17 @@ stock restore_match_context_from_localinfo() {
         copy(g_teamName[1], charsmax(g_teamName[]), g_team2Name);  // Current Allies = Team 2
         copy(g_teamName[2], charsmax(g_teamName[]), g_team1Name);  // Current Axis = Team 1
 
-        log_ktp("event=MATCH_CONTEXT_RESTORED mode=h2 match_id=%s map=%s state=%s h1=%d,%d team1=%s team2=%s matchPending=1",
-                g_matchId, g_matchMap, stateBuf, g_firstHalfScore[1], g_firstHalfScore[2], g_team1Name, g_team2Name);
+        // Restore persistent roster from localinfo
+        restore_roster_from_localinfo();
+
+        log_ktp("event=MATCH_CONTEXT_RESTORED mode=h2 match_id=%s map=%s state=%s h1=%d,%d team1=%s team2=%s matchPending=1 roster1=%d roster2=%d",
+                g_matchId, g_matchMap, stateBuf, g_firstHalfScore[1], g_firstHalfScore[2], g_team1Name, g_team2Name,
+                g_matchRosterTeam1Count, g_matchRosterTeam2Count);
 
         // Announce 2nd half continuation
         announce_all("=== 2nd HALF - Match ID: %s ===", g_matchId);
         announce_all("1st Half: %s %d - %d %s", g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
-        announce_all("Tactical pauses used: %s %d/1, %s %d/1", g_team1Name, g_pauseCountTeam[1], g_team2Name, g_pauseCountTeam[2]);
+        announce_all("Tactical pauses used: %s %d/1, %s %d/1", g_teamName[1], g_pauseCountTeam[1], g_teamName[2], g_pauseCountTeam[2]);
         announce_all(">>> Type .ready to start 2nd half <<<");
         announce_all("[HLTV] Verify HLTV is still connected before resuming.");
 
@@ -4526,7 +5113,11 @@ stock end_match_cleanup() {
     g_secondHalfPending = false;
     g_matchMap[0] = 0;
     g_matchLive = false;
+    g_matchEnded = true;  // Disable auto-DC technicals until new match starts
     clear_match_id();
+
+    // Clear persistent roster (match is over)
+    clear_match_roster();
 
     // Reset match type and Discord flag for next match
     g_matchType = MATCH_TYPE_COMPETITIVE;
@@ -4548,6 +5139,9 @@ stock end_match_cleanup() {
 
     // Clear persisted match context (match is over)
     clear_localinfo_match_context();
+
+    // Reset hostname to base (no match suffix)
+    update_server_hostname();
 }
 
 // Finalize a match that was abandoned (plugin_end never ran, detected on next map load)
@@ -4632,6 +5226,16 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
         new ret;
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, savedMap, _:MATCH_TYPE_COMPETITIVE, firstHalf1, firstHalf2);
     }
+
+    // Reset all match state variables to ensure clean state after abandoned match
+    // This is critical because ktp_is_match_active() checks these flags
+    g_matchLive = false;
+    g_matchPending = false;
+    g_preStartPending = false;
+    g_secondHalfPending = false;
+    g_inOvertime = false;
+    g_otRound = 0;
+    g_currentHalf = 0;
 }
 
 // Finalize a completed 2nd half (detected when map cycled back to same map with _ktp_live="1")
@@ -4682,17 +5286,11 @@ stock finalize_completed_second_half() {
         copy(g_discordMatchChannelId, charsmax(g_discordMatchChannelId), discordChannelId);
     }
 
-    // Check for tie - trigger overtime
+    // Check for tie - announce but do NOT auto-trigger OT
+    // (OT is now explicit via .ktpOT or .draftOT commands)
     if (team1Total == team2Total) {
-        log_ktp("event=TIE_DETECTED triggering overtime team1=%d team2=%d", team1Total, team2Total);
-
-        // Set regulation scores for OT
-        g_regulationScore[1] = team1Total;
-        g_regulationScore[2] = team2Total;
-
-        // Trigger overtime (this will set up OT state and NOT clear localinfo)
-        trigger_overtime(team1Total, team2Total);
-        return;  // Don't clear state - OT is handling it
+        log_ktp("event=TIE_DETECTED triggering_ot=false score=%d-%d (use .ktpOT or .draftOT)", team1Total, team2Total);
+        // Don't auto-trigger OT - fall through to normal match end with tie announcement
     }
 
     // Not a tie - finalize the match
@@ -4780,6 +5378,12 @@ stock save_match_context_for_second_half() {
     set_localinfo(LOCALINFO_DISCORD_MSG, g_discordMatchMsgId);
     set_localinfo(LOCALINFO_DISCORD_CHAN, g_discordMatchChannelId);
 
+    // Original captains (for Discord/match record)
+    new captainsBuf[256];
+    formatex(captainsBuf, charsmax(captainsBuf), "%s|%s|%s|%s",
+        g_captain1_name, g_captain1_sid, g_captain2_name, g_captain2_sid);
+    set_localinfo(LOCALINFO_CAPTAINS, captainsBuf);
+
     // Note: Scores are saved via save_first_half_scores() when half actually ends
 }
 
@@ -4792,13 +5396,35 @@ stock save_state_to_localinfo() {
     set_localinfo(LOCALINFO_STATE, buf);
 }
 
+// Check if game is in intermission (timelimit expired, scoreboard showing)
+// Used to prevent auto-DC pauses when players leave at end of match
+stock bool:is_in_intermission() {
+    // If explicitly set (by changelevel hook), use that
+    if (g_inIntermission) return true;
+
+    // Check if we're in second half and timelimit has expired
+    if (g_currentHalf == 2 && g_matchLive) {
+        new Float:timelimit = get_cvar_float("mp_timelimit");
+        if (timelimit > 0.0) {
+            new Float:elapsed = get_gametime() / 60.0;  // Convert to minutes
+            if (elapsed >= timelimit) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 // Shared handler
 stock on_client_left(id) {
     if (id >= 1 && id <= MAX_PLAYERS) {
         g_ready[id] = false;
 
         // Auto tech-pause on disconnect during live match
-        if (g_matchLive && !g_isPaused) {
+        // Skip if match has ended (players leaving after final score)
+        // Skip if in intermission (timelimit expired, scoreboard showing)
+        if (g_matchLive && !g_isPaused && !g_matchEnded && !is_in_intermission()) {
             new tid = get_user_team_id(id);
             // Only trigger for players on actual teams (not spectators)
             if (tid >= 1 && tid <= 2) {
@@ -4887,6 +5513,21 @@ stock get_ready_counts(&alliesPlayers, &axisPlayers, &alliesReady, &axisReady) {
     }
 }
 
+// Returns the number of players required per team to start match
+// - Override mode: 1 player (debug)
+// - KTP/KTP OT: 6 players
+// - All others (scrim, 12man, draft, draft OT): 5 players
+stock get_required_ready_count() {
+    if (g_readyOverride)
+        return 1;
+
+    switch (g_matchType) {
+        case MATCH_TYPE_COMPETITIVE, MATCH_TYPE_KTP_OT:
+            return 6;
+    }
+    return 5;  // Default for scrim, 12man, draft, draft OT
+}
+
 // ========== MAINTENANCE COMMANDS ==========
 
 // ===== Map reload =====
@@ -4933,6 +5574,11 @@ stock handle_countdown_cancel(id) {
 }
 
 stock handle_pause_request(id, const name[], const sid[], const ip[], const team[], const map[], teamId) {
+    // Tactical pauses are currently disabled - only tech pauses (.tech) allowed
+    client_print(id, print_chat, "[KTP] Tactical pauses are disabled. Use .tech for technical issues.");
+    log_ktp("event=TACTICAL_PAUSE_DENIED player='%s' steamid=%s reason=disabled", name, safe_sid(sid));
+    return PLUGIN_HANDLED;
+
     // Enforce per-team pause limits only AFTER the match is live
     if (g_matchLive) {
         if (teamId != 1 && teamId != 2) {
@@ -5574,7 +6220,9 @@ public cmd_commands(id) {
     client_print(id, print_console, "");
     client_print(id, print_console, "--- Match Setup (Captains) ---");
     client_print(id, print_console, "  .ktp <password>  - Start competitive match (requires password)");
+    client_print(id, print_console, "  .ktpOT <pass>    - Start KTP overtime round (requires password)");
     client_print(id, print_console, "  .draft           - Start draft/pickup match");
+    client_print(id, print_console, "  .draftOT         - Start draft overtime round");
     client_print(id, print_console, "  .scrim           - Start scrim match");
     client_print(id, print_console, "  .12man           - Start 12-man match");
     client_print(id, print_console, "  .confirm         - Confirm match start (pre-start phase)");
@@ -5590,11 +6238,11 @@ public cmd_commands(id) {
     // Pause System
     client_print(id, print_console, "");
     client_print(id, print_console, "--- Pause System ---");
-    client_print(id, print_console, "  .pause / .tac    - Request tactical pause");
+    client_print(id, print_console, "  .pause / .tac    - Request tactical pause (DISABLED)");
     client_print(id, print_console, "  .tech            - Request technical pause");
     client_print(id, print_console, "  .resume          - Request unpause (pause owner)");
     client_print(id, print_console, "  .go              - Confirm unpause (other team)");
-    client_print(id, print_console, "  .extend / .ext   - Extend current pause");
+    client_print(id, print_console, "  .extend / .ext   - Extend current pause (DISABLED)");
     client_print(id, print_console, "  .nodc / .stopdc  - Cancel disconnect auto-pause");
 
     // Overtime
@@ -5616,8 +6264,10 @@ public cmd_commands(id) {
     client_print(id, print_console, "--- Status & Info ---");
     client_print(id, print_console, "  .status          - Show match status");
     client_print(id, print_console, "  .prestatus       - Show pre-start status");
+    client_print(id, print_console, "  .whoneedsready   - Show unready players");
     client_print(id, print_console, "  .score           - Show current match score");
     client_print(id, print_console, "  .cfg             - Show match configuration");
+    client_print(id, print_console, "  .changemap       - Map selection menu (when no match active)");
     client_print(id, print_console, "  .commands / .cmds - Show this command list");
 
     client_print(id, print_console, "");
@@ -5656,6 +6306,11 @@ public cmd_say_hook(id) {
     read_args(args, charsmax(args));
     remove_quotes(args);
     trim(args);
+
+    // Intercept 1.3 Community Queue ID input
+    if (g_13InputState > 0 && id == g_13CaptainId && args[0]) {
+        return handle_13_queue_id_input(id, args);
+    }
 
     // Check for /ktp or .ktp commands (with potential password argument)
     if (equali(args, "/ktp", 4) || equali(args, ".ktp", 4)) {
@@ -5717,9 +6372,9 @@ public cmd_match_start(id) {
         return PLUGIN_HANDLED;
     }
 
-    // Password check - only applies to competitive matches (/start, /ktp)
+    // Password check - applies to competitive and OT matches
     // Draft, scrim, and 12man modes bypass this check via their own handlers
-    if (g_matchType == MATCH_TYPE_COMPETITIVE) {
+    if (g_matchType == MATCH_TYPE_COMPETITIVE || g_matchType == MATCH_TYPE_KTP_OT || g_matchType == MATCH_TYPE_DRAFT_OT) {
         new args[64], password[64];
         read_args(args, charsmax(args));
         remove_quotes(args);
@@ -5742,7 +6397,13 @@ public cmd_match_start(id) {
         }
 
         if (!password[0]) {
-            client_print(id, print_chat, "[KTP] Usage: .ktp <password>");
+            if (g_matchType == MATCH_TYPE_KTP_OT) {
+                client_print(id, print_chat, "[KTP] Usage: .ktpOT <password>");
+            } else if (g_matchType == MATCH_TYPE_DRAFT_OT) {
+                client_print(id, print_chat, "[KTP] Usage: .draftOT <password>");
+            } else {
+                client_print(id, print_chat, "[KTP] Usage: .ktp <password>");
+            }
             client_print(id, print_chat, "[KTP] Contact a KTP admin for the match password.");
             return PLUGIN_HANDLED;
         }
@@ -5787,6 +6448,9 @@ public cmd_match_start(id) {
     g_confirmAlliesBy[0] = EOS;
     g_confirmAxisBy[0] = EOS;
 
+    // Update hostname to show PENDING state
+    update_server_hostname();
+
     // Reset pause limits only for NEW matches (1st half), not 2nd half continuation
     // Pause counts persist across halves (per-match limit, not per-half)
     if (!g_secondHalfPending) {
@@ -5809,6 +6473,8 @@ public cmd_match_start(id) {
         case MATCH_TYPE_SCRIM: copy(matchTypeStr, charsmax(matchTypeStr), "Scrim");
         case MATCH_TYPE_12MAN: copy(matchTypeStr, charsmax(matchTypeStr), "12man");
         case MATCH_TYPE_DRAFT: copy(matchTypeStr, charsmax(matchTypeStr), "Draft");
+        case MATCH_TYPE_KTP_OT: copy(matchTypeStr, charsmax(matchTypeStr), "KTP OT");
+        case MATCH_TYPE_DRAFT_OT: copy(matchTypeStr, charsmax(matchTypeStr), "Draft OT");
         default: copy(matchTypeStr, charsmax(matchTypeStr), "Match");
     }
     announce_all("Pre-Start (%s) by %s on %s", matchTypeStr, name, map);
@@ -5851,13 +6517,165 @@ public cmd_start_12man(id) {
         client_print(id, print_chat, "[KTP] Cannot start - match already in progress or pending.");
         return PLUGIN_HANDLED;
     }
-    // Show duration selection menu
+
+    // Reset 1.3 Community state
+    g_is13CommunityMatch = false;
+    g_13QueueId[0] = EOS;
+    g_13QueueIdFirst[0] = EOS;
+    g_13InputState = 0;
+    g_13CaptainId = 0;
+
+    // First ask if this is a 1.3 Community match
+    new menu = menu_create("12man Match Type", "menu_12man_type_handler");
+    menu_additem(menu, "Standard 12man", "standard");
+    menu_additem(menu, "1.3 Community Discord 12man", "13community");
+    menu_setprop(menu, MPROP_EXIT, MEXIT_ALL);
+    menu_display(id, menu, 0);
+    return PLUGIN_HANDLED;
+}
+
+// Handler for 12man type selection (standard vs 1.3 Community)
+public menu_12man_type_handler(id, menu, item) {
+    if (item == MENU_EXIT) {
+        menu_destroy(menu);
+        return PLUGIN_HANDLED;
+    }
+
+    new data[16], name[32], access, callback;
+    menu_item_getinfo(menu, item, access, data, charsmax(data), name, charsmax(name), callback);
+    menu_destroy(menu);
+
+    if (equal(data, "13community")) {
+        // Start the queue ID input flow
+        g_is13CommunityMatch = true;
+        g_13CaptainId = id;
+        g_13InputState = 1; // Waiting for first input
+
+        client_print(id, print_chat, "[KTP] Enter the 1.3 Community Queue ID in chat (type 'cancel' to abort):");
+        client_print(id, print_console, "[KTP] Type the Queue ID in chat (say or say_team). Type 'cancel' to abort.");
+
+        // Show HUD prompt
+        set_hudmessage(255, 255, 0, -1.0, 0.3, 0, 0.0, 30.0, 0.0, 0.0, 1);
+        show_hudmessage(0, "12man QUEUE ID: (waiting for input...)");
+
+        log_ktp("event=13COMMUNITY_QUEUE_ID_PROMPT captain_id=%d", id);
+    } else {
+        // Standard 12man - go directly to duration menu
+        g_is13CommunityMatch = false;
+        show_12man_duration_menu(id);
+    }
+
+    return PLUGIN_HANDLED;
+}
+
+// Show the duration selection menu (called after type selection)
+stock show_12man_duration_menu(id) {
     new menu = menu_create("12man Match Duration", "menu_12man_duration_handler");
     menu_additem(menu, "20 minutes (standard)", "20");
     menu_additem(menu, "15 minutes", "15");
     menu_setprop(menu, MPROP_EXIT, MEXIT_ALL);
     menu_display(id, menu, 0);
-    return PLUGIN_HANDLED;
+}
+
+// Handle 1.3 Community Queue ID input from chat
+stock handle_13_queue_id_input(id, const input[]) {
+    // Check for cancel command
+    if (equali(input, "cancel") || equali(input, "abort") || equali(input, ".cancel")) {
+        g_13InputState = 0;
+        g_13QueueIdFirst[0] = EOS;
+        g_13QueueId[0] = EOS;
+        g_is13CommunityMatch = false;
+
+        set_hudmessage(255, 165, 0, -1.0, 0.3, 0, 0.0, 5.0, 0.0, 0.0, 1);
+        show_hudmessage(0, "12man QUEUE ID: CANCELLED");
+
+        client_print(id, print_chat, "[KTP] Queue ID entry cancelled. Type .12man to start over.");
+        log_ktp("event=13COMMUNITY_QUEUE_ID_CANCELLED captain_id=%d", id);
+
+        return PLUGIN_HANDLED;
+    }
+
+    // Sanitize input - only allow alphanumeric, dash, underscore
+    new sanitized[32];
+    new outPos = 0;
+    for (new i = 0; input[i] && outPos < charsmax(sanitized); i++) {
+        new ch = input[i];
+        if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+            (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+            sanitized[outPos++] = ch;
+        }
+    }
+    sanitized[outPos] = EOS;
+
+    if (!sanitized[0]) {
+        client_print(id, print_chat, "[KTP] Invalid input. Use only letters, numbers, dash, underscore.");
+        return PLUGIN_HANDLED;
+    }
+
+    if (g_13InputState == 1) {
+        // First input - store and ask for confirmation
+        copy(g_13QueueIdFirst, charsmax(g_13QueueIdFirst), sanitized);
+
+        // Calculate expected match ID length to validate
+        // Format: 1.3-{queueId}-{map}-{hostname}
+        // "1.3-" = 4 chars, separators = 2 chars
+        new hostname[32];
+        sanitize_hostname_for_match_id(hostname, charsmax(hostname));
+        new expectedLen = 4 + strlen(sanitized) + 1 + strlen(g_currentMap) + 1 + strlen(hostname);
+
+        if (expectedLen > 63) {
+            client_print(id, print_chat, "[KTP] Queue ID too long! Max %d chars. You entered %d.", 63 - 4 - 1 - strlen(g_currentMap) - 1 - strlen(hostname), strlen(sanitized));
+            g_13QueueIdFirst[0] = EOS;
+            return PLUGIN_HANDLED;
+        }
+
+        // Show HUD with entered value
+        set_hudmessage(0, 255, 0, -1.0, 0.3, 0, 0.0, 30.0, 0.0, 0.0, 1);
+        show_hudmessage(0, "12man QUEUE ID: %s^n^n(Awaiting confirmation...)", sanitized);
+
+        client_print(id, print_chat, "[KTP] Queue ID received: %s", sanitized);
+        client_print(id, print_chat, "[KTP] Type it again to confirm:");
+
+        g_13InputState = 2; // Move to confirmation state
+
+        log_ktp("event=13COMMUNITY_QUEUE_ID_FIRST input=%s captain_id=%d", sanitized, id);
+
+    } else if (g_13InputState == 2) {
+        // Confirmation input - compare with first
+        if (equal(sanitized, g_13QueueIdFirst)) {
+            // Match! Store the queue ID and proceed
+            copy(g_13QueueId, charsmax(g_13QueueId), sanitized);
+            g_13InputState = 0;
+
+            // Show confirmed HUD
+            set_hudmessage(0, 255, 0, -1.0, 0.3, 0, 0.0, 10.0, 0.0, 0.0, 1);
+            show_hudmessage(0, "12man QUEUE ID: %s^n^nCONFIRMED!", sanitized);
+
+            client_print(id, print_chat, "[KTP] Queue ID confirmed: %s", sanitized);
+            announce_all("1.3 Community 12man - Queue ID: %s", sanitized);
+
+            log_ktp("event=13COMMUNITY_QUEUE_ID_CONFIRMED queue_id=%s captain_id=%d", sanitized, id);
+
+            // Proceed to duration menu
+            show_12man_duration_menu(id);
+
+        } else {
+            // Mismatch - reset to first input
+            client_print(id, print_chat, "[KTP] Queue IDs don't match! '%s' vs '%s'", g_13QueueIdFirst, sanitized);
+            client_print(id, print_chat, "[KTP] Enter the Queue ID again:");
+
+            g_13QueueIdFirst[0] = EOS;
+            g_13InputState = 1;
+
+            set_hudmessage(255, 0, 0, -1.0, 0.3, 0, 0.0, 5.0, 0.0, 0.0, 1);
+            show_hudmessage(0, "12man QUEUE ID: MISMATCH - Try again");
+
+            log_ktp("event=13COMMUNITY_QUEUE_ID_MISMATCH first=%s second=%s captain_id=%d",
+                    g_13QueueIdFirst, sanitized, id);
+        }
+    }
+
+    return PLUGIN_HANDLED; // Block the chat message from showing
 }
 
 public menu_12man_duration_handler(id, menu, item) {
@@ -5874,7 +6692,7 @@ public menu_12man_duration_handler(id, menu, item) {
 
     // Now start the 12man match
     g_matchType = MATCH_TYPE_12MAN;
-    g_disableDiscord = true; // Legacy flag for compatibility
+    g_disableDiscord = false; // Discord enabled if discord_channel_id_12man configured
 
     // Announce to everyone what duration was selected
     new captainName[32];
@@ -5885,7 +6703,7 @@ public menu_12man_duration_handler(id, menu, item) {
     return PLUGIN_HANDLED;
 }
 
-// Draft mode - no Discord notifications, uses competitive config, always allowed
+// Draft mode - Discord to draft channel if configured, uses competitive config, always allowed
 public cmd_start_draft(id) {
     // Block if match already in progress
     if (g_matchLive || g_preStartPending || g_matchPending) {
@@ -5893,8 +6711,62 @@ public cmd_start_draft(id) {
         return PLUGIN_HANDLED;
     }
     g_matchType = MATCH_TYPE_DRAFT;
-    g_disableDiscord = true; // No Discord for drafts
+    g_disableDiscord = false; // Discord enabled if discord_channel_id_draft configured
     cmd_match_start(id);
+    return PLUGIN_HANDLED;
+}
+
+// KTP Overtime - explicit OT for competitive matches, requires password, 5-min rounds
+public cmd_start_ktp_ot(id) {
+    // Block if match already in progress
+    if (g_matchLive || g_preStartPending || g_matchPending) {
+        client_print(id, print_chat, "[KTP] Cannot start - match already in progress or pending.");
+        return PLUGIN_HANDLED;
+    }
+    g_matchType = MATCH_TYPE_KTP_OT;
+    g_disableDiscord = false; // Discord enabled
+    cmd_match_start(id); // Password validated inside
+    return PLUGIN_HANDLED;
+}
+
+// Draft Overtime - explicit OT for draft matches, requires password, 5-min rounds
+public cmd_start_draft_ot(id) {
+    // Block if match already in progress
+    if (g_matchLive || g_preStartPending || g_matchPending) {
+        client_print(id, print_chat, "[KTP] Cannot start - match already in progress or pending.");
+        return PLUGIN_HANDLED;
+    }
+    g_matchType = MATCH_TYPE_DRAFT_OT;
+    g_disableDiscord = false; // Discord enabled
+    cmd_match_start(id); // Password validated inside
+    return PLUGIN_HANDLED;
+}
+
+// Debug override for ready limits - restricted to specific SteamID for testing
+public cmd_override_ready_limits(id) {
+    new sid[44];
+    get_user_authid(id, sid, charsmax(sid));
+
+    // Only allow specific SteamID (nein_)
+    if (!equal(sid, "STEAM_0:1:25292511")) {
+        client_print(id, print_chat, "[KTP] You are not authorized to use this command.");
+        return PLUGIN_HANDLED;
+    }
+
+    // Toggle the override
+    g_readyOverride = !g_readyOverride;
+
+    new name[32];
+    get_user_name(id, name, charsmax(name));
+
+    if (g_readyOverride) {
+        announce_all("DEBUG: Ready limit override ENABLED by %s - only 1 player per team required", name);
+        log_ktp("event=READY_OVERRIDE_ENABLED admin=%s steamid=%s", name, sid);
+    } else {
+        announce_all("DEBUG: Ready limit override DISABLED by %s - normal limits restored", name);
+        log_ktp("event=READY_OVERRIDE_DISABLED admin=%s steamid=%s", name, sid);
+    }
+
     return PLUGIN_HANDLED;
 }
 
@@ -5983,13 +6855,13 @@ public cmd_pre_confirm(id) {
                 g_captain1_name, g_captain1_sid[0]?g_captain1_sid:"NA", g_captain1_team,
                 g_captain2_name, g_captain2_sid[0]?g_captain2_sid:"NA", g_captain2_team);
 
-        log_ktp("event=PENDING_BEGIN map=%s need=%d", g_currentMap, g_readyRequired);
+        log_ktp("event=PENDING_BEGIN map=%s need=%d", g_currentMap, get_required_ready_count());
 
         // Single entry point: sets g_matchPending, clears ready[], starts HUD, logs state
         enter_pending_phase(g_captain2_name[0] ? g_captain2_name : g_captain1_name);
 
         // RCON visibility
-        console_print(0, "[KTP] Pending: need=%d (%s/%s).", g_readyRequired, g_teamName[1], g_teamName[2]);
+        console_print(0, "[KTP] Pending: need=%d (%s/%s).", get_required_ready_count(), g_teamName[1], g_teamName[2]);
     }
 
     return PLUGIN_HANDLED;
@@ -6027,6 +6899,7 @@ public cmd_cancel(id) {
         announce_all("Pre-Start cancelled by %s.", name);
         g_matchType = MATCH_TYPE_COMPETITIVE; // Reset to competitive for next match
         g_disableDiscord = false; // Re-enable Discord for next match (legacy)
+        update_server_hostname();  // Reset hostname to base
         return PLUGIN_HANDLED;
     }
 
@@ -6063,6 +6936,7 @@ public cmd_cancel(id) {
         ktp_unpause_now("pending_cancel");
     }
 
+    update_server_hostname();  // Reset hostname to base
     return PLUGIN_HANDLED;
 }
 
@@ -6089,17 +6963,44 @@ public cmd_ready(id) {
     get_full_identity(id, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team), map, charsmax(map));
     log_ktp("event=READY player='%s' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
 
+    // Track half captain (first .ready per team this half)
+    new tid = get_user_team(id);
+    if (tid == 1 && !g_halfCaptain1_name[0]) {
+        copy(g_halfCaptain1_name, charsmax(g_halfCaptain1_name), name);
+        copy(g_halfCaptain1_sid, charsmax(g_halfCaptain1_sid), sid);
+        log_ktp("event=HALF_CAPTAIN_SET team=1 player='%s' steamid=%s", name, safe_sid(sid));
+    } else if (tid == 2 && !g_halfCaptain2_name[0]) {
+        copy(g_halfCaptain2_name, charsmax(g_halfCaptain2_name), name);
+        copy(g_halfCaptain2_sid, charsmax(g_halfCaptain2_sid), sid);
+        log_ktp("event=HALF_CAPTAIN_SET team=2 player='%s' steamid=%s", name, safe_sid(sid));
+    }
+
+    // Add player to persistent match roster (tracks all participants)
+    // Convert current side to team identity
+    new teamId;
+    if (g_currentHalf == 2) {
+        teamId = (tid == 1) ? 2 : 1; // Swapped in 2nd half
+    } else {
+        teamId = tid;
+    }
+    if (teamId == 1 || teamId == 2) {
+        if (add_to_match_roster(name, sid, teamId)) {
+            log_ktp("event=ROSTER_PLAYER_ADDED player='%s' steamid=%s team=%d", name, safe_sid(sid), teamId);
+        }
+    }
+
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
-    announce_all("%s [%s] is READY. %s %d/%d | %s %d/%d (need %d each).", name, sid, g_teamName[1], alliesReady, alliesPlayers, g_teamName[2], axisReady, axisPlayers, g_readyRequired);
+    new need = get_required_ready_count();
+    announce_all("%s [%s] is READY. %s %d/%d | %s %d/%d (need %d each).", name, sid, g_teamName[1], alliesReady, alliesPlayers, g_teamName[2], axisReady, axisPlayers, need);
 
     // Debug log for match start condition
     log_ktp("event=READY_CHECK allies_ready=%d axis_ready=%d need=%d will_start=%d",
-            alliesReady, axisReady, g_readyRequired,
-            (alliesReady >= g_readyRequired && axisReady >= g_readyRequired) ? 1 : 0);
+            alliesReady, axisReady, need,
+            (alliesReady >= need && axisReady >= need) ? 1 : 0);
 
     // Start match when both teams have enough ready players
-    if (alliesReady >= g_readyRequired && axisReady >= g_readyRequired) {
+    if (alliesReady >= need && axisReady >= need) {
         // Exec map-specific config first (may or may not find config)
         exec_map_config();
 
@@ -6108,6 +7009,23 @@ public cmd_ready(id) {
             server_cmd("mp_timelimit %d", g_12manDuration);
             server_exec();
             log_ktp("event=12MAN_TIMELIMIT duration=%d", g_12manDuration);
+        }
+
+        // Initialize OT state for explicit OT match types (.ktpOT, .draftOT)
+        if (g_matchType == MATCH_TYPE_KTP_OT || g_matchType == MATCH_TYPE_DRAFT_OT) {
+            g_inOvertime = true;
+            g_otRound = 1;
+            g_secondHalfPending = false;  // Fresh OT match, not awaiting 2nd half
+            g_regulationScore[1] = 0;     // Independent OT - no regulation scores
+            g_regulationScore[2] = 0;
+            g_otTeam1StartsAs = 1;        // Team 1 starts as Allies
+            // Clear any previous OT scores (2D array)
+            for (new r = 0; r < sizeof g_otScores; r++) {
+                g_otScores[r][0] = 0;
+                g_otScores[r][1] = 0;
+                g_otScores[r][2] = 0;
+            }
+            log_ktp("event=EXPLICIT_OT_INIT match_type=%d ot_round=1", _:g_matchType);
         }
 
         // ALWAYS execute restart round - even if no map config was found
@@ -6274,8 +7192,14 @@ public cmd_ready(id) {
             copy(halfText, charsmax(halfText), "1st half");
         }
 
-        log_ktp("event=MATCH_START map=%s allies_ready=%d axis_ready=%d captain1='%s' c1_team=%d captain2='%s' c2_team=%d half=%s match_id=%s",
-                map, alliesReady, axisReady, c1n, c1t, c2n, c2t, halfText, g_matchId);
+        // Half captains for logging (first .ready per team this half)
+        // Falls back to original captains if not set (1st half scenario)
+        new hc1n[64], hc2n[64];
+        copy(hc1n, charsmax(hc1n), g_halfCaptain1_name[0] ? g_halfCaptain1_name : c1n);
+        copy(hc2n, charsmax(hc2n), g_halfCaptain2_name[0] ? g_halfCaptain2_name : c2n);
+
+        log_ktp("event=MATCH_START map=%s allies_ready=%d axis_ready=%d half_captain1='%s' half_captain2='%s' half=%s match_id=%s",
+                map, alliesReady, axisReady, hc1n, hc2n, halfText, g_matchId);
 
         // Use team names instead of generic "t1/t2" in captain display
         // g_teamName[1] = current Allies team name, g_teamName[2] = current Axis team name
@@ -6283,14 +7207,20 @@ public cmd_ready(id) {
         new c1TeamName[32], c2TeamName[32];
         copy(c1TeamName, charsmax(c1TeamName), (c1t >= 1 && c1t <= 2) ? g_teamName[c1t] : "?");
         copy(c2TeamName, charsmax(c2TeamName), (c2t >= 1 && c2t <= 2) ? g_teamName[c2t] : "?");
+        // Chat announcement uses original captains (preserved for Discord/match record)
         announce_all("All players ready. Captains: %s (%s) vs %s (%s)", c1n, c1TeamName, c2n, c2TeamName);
 
         // Discord notification - consolidated match embed
         // 1st half: Create new embed with rosters and capture message ID
-        // 2nd half: Update existing embed with roster changes and scores
+        // 2nd half/OT: Update existing embed with roster changes and scores
         #if defined HAS_CURL
         if (!g_disableDiscord) {
-            if (g_currentHalf == 1) {
+            if (g_inOvertime) {
+                // OT rounds update existing embed (message ID restored from localinfo)
+                new status[64];
+                formatex(status, charsmax(status), "OVERTIME ROUND %d - Match Live", g_otRound);
+                send_match_embed_update(status);
+            } else if (g_currentHalf == 1) {
                 send_match_embed_create();
             } else if (g_currentHalf == 2) {
                 // Embed will be updated - message ID was restored from localinfo
@@ -6308,6 +7238,8 @@ public cmd_ready(id) {
 
         // First LIVE of this half → mark match live
         g_matchLive       = true;
+        g_matchEnded      = false;  // Clear match-ended flag for new match
+        g_inIntermission  = false;  // Clear intermission flag for new match
         set_localinfo(LOCALINFO_LIVE, "1");  // Persist live state for abandoned match detection
 
         // Reset tech budgets only for NEW matches (1st half), not 2nd half continuation
@@ -6317,6 +7249,12 @@ public cmd_ready(id) {
             g_techBudget[2]   = g_techBudgetSecs;
             // Reset match scores for new match (1st half only)
             reset_match_scores();
+            // Clear and capture initial roster for 1st half
+            clear_match_roster();
+            capture_roster_snapshot();
+        } else {
+            // 2nd half: capture any new players (roster persisted from 1st half via localinfo)
+            capture_roster_snapshot();
         }
         safe_remove_task(g_taskAutoUnpauseReqId);
         safe_remove_task(g_taskPauseHudId);
@@ -6359,10 +7297,16 @@ public cmd_ready(id) {
         announce_all("=== MATCH IS LIVE! ===");
         log_ktp("event=LIVE map=%s match_id=%s half=%s", g_currentMap, g_matchId, halfText);
 
-        // Fire ktp_match_start forward on 1st half only (external plugins like KTPHLTVRecorder)
-        if (g_currentHalf == 1 && !g_inOvertime) {
+        // Update server hostname with match state
+        update_server_hostname();
+
+        // Fire ktp_match_start forward for ALL half/OT starts (KTPHLTVRecorder, etc.)
+        // half parameter: 1=1st half, 2=2nd half, 101+=OT round (101, 102, 103...)
+        {
             new ret;
-            ExecuteForward(g_fwdMatchStart, ret, g_matchId, g_currentMap, g_matchType);
+            new half = g_inOvertime ? (100 + g_otRound) : g_currentHalf;
+            ExecuteForward(g_fwdMatchStart, ret, g_matchId, g_currentMap, g_matchType, half);
+            log_ktp("event=FWD_MATCH_START match_id=%s map=%s type=%d half=%d", g_matchId, g_currentMap, g_matchType, half);
         }
 
         // HUD announcement for competitive half/OT start
@@ -6425,7 +7369,7 @@ public cmd_notready(id) {
 
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
-    new need = g_readyRequired;
+    new need = get_required_ready_count();
     announce_all("%s [%s] is NOT READY. %s %d/%d | %s %d/%d (need %d each).", name, sid, g_teamName[1], alliesReady, alliesPlayers, g_teamName[2], axisReady, axisPlayers, need);
     return PLUGIN_HANDLED;
 }
@@ -6438,7 +7382,7 @@ public cmd_status(id) {
 
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
-    new need = g_readyRequired;
+    new need = get_required_ready_count();
 
     client_print(id, print_chat, "[KTP] ===== MATCH STATUS =====");
     client_print(id, print_chat, "[KTP] %s: %d/%d ready (need %d)", g_teamName[1], alliesReady, alliesPlayers, need);
@@ -6619,6 +7563,10 @@ stock enter_pending_phase(const initiator[]) {
     // clear any previous ready states
     for (new i = 1; i <= MAX_PLAYERS; i++) g_ready[i] = false;
 
+    // Clear half captains (will be set by first .ready per team)
+    g_halfCaptain1_name[0] = g_halfCaptain1_sid[0] = EOS;
+    g_halfCaptain2_name[0] = g_halfCaptain2_sid[0] = EOS;
+
     // start/refresh the pending HUD
     safe_remove_task(g_taskPendingHudId);
     set_task(1.0, "pending_hud_tick", g_taskPendingHudId, _, _, "b");
@@ -6632,7 +7580,7 @@ stock enter_pending_phase(const initiator[]) {
             initiator, g_currentMap, g_isPaused, g_matchPending, g_matchLive);
 
     announce_all("KTP: Pending phase. Type .rdy when your team is ready (need %d each).",
-                 g_readyRequired);
+                 get_required_ready_count());
 
     // Reminder about HLTV for auto-recording (only for 1st half - not 2nd half or OT continuation)
     if (!g_secondHalfPending && !g_inOvertime) {
@@ -6673,6 +7621,9 @@ stock reset_captains() {
     g_captain1_name[0] = g_captain1_sid[0] = g_captain1_ip[0] = EOS;
     g_captain2_name[0] = g_captain2_sid[0] = g_captain2_ip[0] = EOS;
     g_captain1_team = g_captain2_team = 0;
+    // Also clear half captains
+    g_halfCaptain1_name[0] = g_halfCaptain1_sid[0] = EOS;
+    g_halfCaptain2_name[0] = g_halfCaptain2_sid[0] = EOS;
 }
 
 // ========== ADMIN/DEBUG COMMANDS ==========
@@ -6684,12 +7635,13 @@ public cmd_ktpconfig(id) {
     new cfg[128]; new found = lookup_cfg_for_map(g_currentMap, cfg, charsmax(cfg));
     new techA = g_techBudget[1], techX = g_techBudget[2];
 
+    new need = get_required_ready_count();
     client_print(id, print_chat,
         "[KTP] need=%d | tech_budget=%d | %s %d/%d (tech:%ds), %s %d/%d (tech:%ds) | map=%s cfg=%s (%s)",
-        g_readyRequired, g_techBudgetSecs, g_teamName[1], alliesReady, alliesPlayers, techA, g_teamName[2], axisReady, axisPlayers, techX, g_currentMap, found?cfg:"-", found?"found":"MISS");
+        need, g_techBudgetSecs, g_teamName[1], alliesReady, alliesPlayers, techA, g_teamName[2], axisReady, axisPlayers, techX, g_currentMap, found?cfg:"-", found?"found":"MISS");
     client_print(id, print_console,
         "[KTP] need=%d | tech_budget=%d | %s %d/%d (tech:%ds), %s %d/%d (tech:%ds) | map=%s cfg=%s (%s)",
-        g_readyRequired, g_techBudgetSecs, g_teamName[1], alliesReady, alliesPlayers, techA, g_teamName[2], axisReady, axisPlayers, techX, g_currentMap, found?cfg:"-", found?"found":"MISS");
+        need, g_techBudgetSecs, g_teamName[1], alliesReady, alliesPlayers, techA, g_teamName[2], axisReady, axisPlayers, techX, g_currentMap, found?cfg:"-", found?"found":"MISS");
     return PLUGIN_HANDLED;
 }
 
