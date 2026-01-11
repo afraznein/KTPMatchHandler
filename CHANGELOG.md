@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.48] - 2026-01-11
+
+### Removed
+- **Dead code cleanup** - Removed ~190 lines of unreachable/unused code
+  - Old OT round handler (`handle_ot_round_end_OLD`) wrapped in `#if 0`
+  - Unreachable tactical pause logic (disabled but code remained after early return)
+  - Unused legacy variables (`g_gameEndEventCount`, `g_gameEndTaskId`)
+  - Orphaned task removal code referencing deleted variables
+
+### Fixed
+- **Compiler warnings** - All warnings resolved
+  - Added `#pragma unused` for intentionally unused parameters
+  - Removed unreachable code blocks
+
+### Added
+- **Admin Commands in .commands** - `.forcereset` now appears in `.commands` output under "Admin Commands (RCON flag)" section
+
+---
+
 ## [0.10.47] - 2026-01-10
 
 ### Added

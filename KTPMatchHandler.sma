@@ -65,6 +65,12 @@
  *   ktp_discord_ini "<configsdir>/discord.ini" - Discord config (auto-detected path)
  *
  * ========== CHANGELOG ==========
+ * v0.10.48 (2026-01-11) - Code Cleanup
+ *   - REMOVED: ~190 lines of dead code (old OT handler, unreachable tactical pause logic)
+ *   - REMOVED: Unused legacy variables (g_gameEndEventCount, g_gameEndTaskId)
+ *   * FIXED: All compiler warnings resolved
+ *   + ADDED: .forcereset to .commands output (Admin Commands section)
+ *
  * v0.10.47 (2026-01-10) - Force Reset Admin Command
  *   + ADDED: .forcereset command for admins to recover abandoned servers
  *   + ADDED: Requires ADMIN_RCON flag and confirmation step (type twice within 10s)
@@ -518,7 +524,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.47"
+#define PLUGIN_VERSION "0.10.48"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -910,10 +916,6 @@ public msg_TeamScore() {
 // before they happen, allowing proper match state finalization.
 // See: OnChangeLevel(), process_second_half_end_changelevel(), process_ot_round_end_changelevel()
 
-// Legacy variables kept for reference (no longer used)
-new g_gameEndEventCount = 0;
-new g_gameEndTaskId = 9876;
-
 // ================= CHANGELEVEL HOOK (KTP-ReHLDS) =================
 // Intercepts ALL map changes before they happen, allowing us to properly
 // finalize match state. This is more reliable than logevents which fire
@@ -938,10 +940,6 @@ public OnChangeLevel(const map[], const landmark[]) {
 
     // Mark as handled to prevent re-entry
     g_changeLevelHandled = true;
-
-    // Cancel any pending game end tasks since we're handling it now
-    remove_task(g_gameEndTaskId);
-    g_gameEndEventCount = 0;
 
     // ========== FIRST HALF END ==========
     // Save state and redirect changelevel to same map for 2nd half
@@ -4975,153 +4973,6 @@ stock save_ot_context() {
             buf, g_otTeam1StartsAs);
 }
 
-// NOTE: handle_ot_round_end() has been replaced by process_ot_round_end_changelevel()
-// which is called from the OnChangeLevel() hook for proper changelevel superseding.
-// The old function is kept commented out for reference.
-
-#if 0  // Old handle_ot_round_end - replaced by changelevel hook
-stock handle_ot_round_end_OLD() {
-    // Get current scoreboard scores
-    update_match_scores_from_dodx();
-
-    // Determine this round's scores based on which side team1 is on
-    // g_matchScore[1] = Allies score, g_matchScore[2] = Axis score
-    new team1RoundScore, team2RoundScore;
-    if (g_otTeam1StartsAs == 1) {
-        // Team 1 is Allies, Team 2 is Axis
-        team1RoundScore = g_matchScore[1];
-        team2RoundScore = g_matchScore[2];
-    } else {
-        // Team 1 is Axis, Team 2 is Allies
-        team1RoundScore = g_matchScore[2];
-        team2RoundScore = g_matchScore[1];
-    }
-
-    // Record this round's scores
-    g_otScores[g_otRound][1] = team1RoundScore;
-    g_otScores[g_otRound][2] = team2RoundScore;
-
-    // Calculate total scores (regulation + all OT rounds)
-    new team1Total = g_regulationScore[1];
-    new team2Total = g_regulationScore[2];
-    for (new r = 1; r <= g_otRound; r++) {
-        team1Total += g_otScores[r][1];
-        team2Total += g_otScores[r][2];
-    }
-
-    log_ktp("event=OT_ROUND_END match_id=%s round=%d round_score=%d-%d total=%d-%d team1=%s team2=%s",
-            g_matchId, g_otRound, team1RoundScore, team2RoundScore,
-            team1Total, team2Total, g_team1Name, g_team2Name);
-
-    // Announce OT round result
-    announce_all("========================================");
-    announce_all("  OT ROUND %d COMPLETE", g_otRound);
-    announce_all("  Round Score: %s %d - %d %s", g_team1Name, team1RoundScore, team2RoundScore, g_team2Name);
-    announce_all("  Total Score: %s %d - %d %s", g_team1Name, team1Total, team2Total, g_team2Name);
-    announce_all("========================================");
-
-    // Check if tie is broken
-    if (team1Total != team2Total) {
-        // WINNER DETERMINED!
-        new winner[64], loser[64];
-        new winScore, loseScore;
-        if (team1Total > team2Total) {
-            copy(winner, charsmax(winner), g_team1Name);
-            copy(loser, charsmax(loser), g_team2Name);
-            winScore = team1Total;
-            loseScore = team2Total;
-        } else {
-            copy(winner, charsmax(winner), g_team2Name);
-            copy(loser, charsmax(loser), g_team1Name);
-            winScore = team2Total;
-            loseScore = team1Total;
-        }
-
-        announce_all("========================================");
-        announce_all("  %s WINS!", winner);
-        announce_all("  Final Score: %d - %d", winScore, loseScore);
-        announce_all("  (Regulation: %d-%d + OT: %d-%d)",
-                    g_regulationScore[1], g_regulationScore[2],
-                    team1Total - g_regulationScore[1], team2Total - g_regulationScore[2]);
-        announce_all("========================================");
-
-        // Note: OT scoreboard only shows current round scores
-        // Direct dodx_set_team_score() at map end causes crashes
-        // HUD displays the correct grand totals instead
-
-        // Winner HUD announcement
-        set_hudmessage(0, 255, 0, -1.0, 0.3, 0, 0.0, 10.0, 0.5, 0.5, -1);  // Green, centered, 10 sec
-        show_hudmessage(0, "=== MATCH COMPLETE ===^n^n%s WINS!^n^n%d - %d^n^n(Regulation: %d-%d | OT: %d-%d)",
-            winner, winScore, loseScore,
-            g_regulationScore[1], g_regulationScore[2],
-            team1Total - g_regulationScore[1], team2Total - g_regulationScore[2]);
-
-        log_ktp("event=MATCH_END_OT match_id=%s winner=%s final=%d-%d reg=%d-%d ot_rounds=%d",
-                g_matchId, winner, winScore, loseScore,
-                g_regulationScore[1], g_regulationScore[2], g_otRound);
-
-        // Update Discord with final result
-        #if defined HAS_CURL
-        if (!g_disableDiscord) {
-            new finalStatus[128];
-            formatex(finalStatus, charsmax(finalStatus), "MATCH COMPLETE (OT%d) - %s wins %d-%d",
-                    g_otRound, winner, winScore, loseScore);
-            send_match_embed_update(finalStatus);
-        }
-        #endif
-
-        // Flush final stats
-        #if defined HAS_DODX
-        if (g_hasDodxStatsNatives) {
-            new flushed = dodx_flush_all_stats();
-            log_ktp("event=STATS_FLUSH type=ot_match_end players=%d match_id=%s", flushed, g_matchId);
-            log_amx("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (result ^"ot%d^")", g_matchId, g_matchMap, g_otRound);
-            dodx_set_match_id("");
-        }
-        #endif
-
-        // Fire ktp_match_end forward (external plugins like KTPHLTVRecorder)
-        {
-            new ret;
-            ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_matchMap, g_matchType, team1Total, team2Total);
-        }
-
-        // Clean up match state
-        end_match_cleanup();
-    } else {
-        // STILL TIED - need another OT round
-        announce_all("STILL TIED! Preparing Overtime Round %d...", g_otRound + 1);
-
-        // HUD for next OT round
-        set_hudmessage(255, 255, 0, -1.0, 0.3, 0, 0.0, 8.0, 0.5, 0.5, -1);  // Yellow, 8 sec
-        show_hudmessage(0, "=== STILL TIED ===^n^n%s %d - %d %s^n^nPreparing OT Round %d...",
-            g_team1Name, team1Total, team2Total, g_team2Name, g_otRound + 1);
-
-        // Swap sides for next round
-        g_otTeam1StartsAs = (g_otTeam1StartsAs == 1) ? 2 : 1;
-
-        // Increment OT round
-        g_otRound++;
-
-        log_ktp("event=OT_NEXT_ROUND match_id=%s next_round=%d team1_side=%s",
-                g_matchId, g_otRound, g_otTeam1StartsAs == 1 ? "Allies" : "Axis");
-
-        // Update Discord
-        #if defined HAS_CURL
-        if (!g_disableDiscord) {
-            new status[64];
-            formatex(status, charsmax(status), "OT%d TIED %d-%d - Next: OT%d",
-                    g_otRound - 1, team1Total, team2Total, g_otRound);
-            send_match_embed_update(status);
-        }
-        #endif
-
-        // Start next OT round (will changelevel and save context)
-        start_overtime_round();
-    }
-}
-#endif  // End of old handle_ot_round_end
-
 // ========== END OVERTIME SYSTEM ==========
 
 // Clean up match state after match ends (regulation or OT)
@@ -5592,59 +5443,10 @@ stock handle_countdown_cancel(id) {
 
 stock handle_pause_request(id, const name[], const sid[], const ip[], const team[], const map[], teamId) {
     // Tactical pauses are currently disabled - only tech pauses (.tech) allowed
+    // To re-enable tactical pauses, restore the logic from git history
+    #pragma unused ip, team, map, teamId
     client_print(id, print_chat, "[KTP] Tactical pauses are disabled. Use .tech for technical issues.");
     log_ktp("event=TACTICAL_PAUSE_DENIED player='%s' steamid=%s reason=disabled", name, safe_sid(sid));
-    return PLUGIN_HANDLED;
-
-    // Enforce per-team pause limits only AFTER the match is live
-    if (g_matchLive) {
-        if (teamId != 1 && teamId != 2) {
-            client_print(id, print_chat, "[KTP] Spectators cannot pause.");
-            return PLUGIN_HANDLED;
-        }
-        if (g_pauseCountTeam[teamId] >= 1) {
-            log_ktp("event=PAUSE_DENY_LIMIT team=%d player=\'%s\' steamid=%s", teamId, name, safe_sid(sid));
-            client_print(id, print_chat, "[KTP] Your team has already used its pause.");
-            return PLUGIN_HANDLED;
-        }
-
-        // Set ownership and state BEFORE triggering countdown
-        g_pauseCountTeam[teamId]++;           // consume the team pause
-        g_pauseOwnerTeam = teamId;            // set ownership
-        g_unpauseRequested = false;
-        g_unpauseConfirmedOther = false;
-        g_isTechPause = false;                // Mark as tactical pause
-
-        // schedule auto-unpause request if owner forgets to /resume
-        setup_auto_unpause_request();
-
-        log_ktp("event=PAUSE_AUTOREQ_ARM team=%d seconds=%d", g_pauseOwnerTeam, g_autoReqLeft);
-        log_ktp("event=PAUSE_BY_CHAT player=\'%s\' steamid=%s ip=%s team=%s map=%s live=%d team_pause_used=%d/%d",
-                name, safe_sid(sid), ip[0]?ip:"NA", team, map, g_matchLive ? 1 : 0,
-                g_pauseCountTeam[teamId], 1);
-
-        client_print(id, print_chat, "[KTP] Your team pauses left after this: %d.", pauses_left(teamId));
-
-        // Trigger pre-pause countdown with live match countdown (false = use ktp_prepause_seconds)
-        trigger_pause_countdown(name, "chat_tactical", false, id);
-    } else {
-        // This is the pre-start/pending pause (doesn't count) - immediate pause
-        g_pauseOwnerTeam = 0;
-        g_isTechPause = false;
-        safe_remove_task(g_taskAutoUnpauseReqId);
-        g_autoReqLeft = 0;
-
-        // For pre-live pauses, use pre-match countdown
-        trigger_pause_countdown(name, "tactical_pause_prelive", true, id); // true = pre-match countdown
-
-        log_ktp("event=PAUSE_BY_CHAT player=\'%s\' steamid=%s ip=%s team=%s map=%s live=0",
-                name, safe_sid(sid), ip[0]?ip:"NA", team, map);
-    }
-
-    if (!g_matchLive) {
-        announce_all("Match paused by %s. (pre-start/pending phase; does not count)", name);
-    }
-
     return PLUGIN_HANDLED;
 }
 
@@ -6286,6 +6088,11 @@ public cmd_commands(id) {
     client_print(id, print_console, "  .cfg             - Show match configuration");
     client_print(id, print_console, "  .changemap       - Map selection menu (when no match active)");
     client_print(id, print_console, "  .commands / .cmds - Show this command list");
+
+    // Admin Commands
+    client_print(id, print_console, "");
+    client_print(id, print_console, "--- Admin Commands (RCON flag) ---");
+    client_print(id, print_console, "  .forcereset      - Force reset all match state (requires confirmation)");
 
     client_print(id, print_console, "");
     client_print(id, print_console, "========================================");
@@ -7014,6 +6821,7 @@ public cmd_forcereset(id) {
 }
 
 stock execute_force_reset(id, const name[], const sid[], const ip[]) {
+    #pragma unused id
     new stateDesc[64];
     if (g_matchLive) formatex(stateDesc, charsmax(stateDesc), "live_h%d", g_currentHalf);
     else if (g_matchPending) copy(stateDesc, charsmax(stateDesc), "pending");
