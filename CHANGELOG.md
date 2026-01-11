@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.47] - 2026-01-10
+
+### Added
+- **Force reset admin command** - `.forcereset` command for recovering abandoned servers
+  - Requires ADMIN_RCON flag (highest admin level)
+  - Confirmation step required: type command twice within 10 seconds
+  - Clears ALL match state: live, pending, prestart, pause, scores, rosters, localinfo
+  - Sends Discord notification when executed
+  - Logs all reset attempts and executions for audit trail
+
+---
+
 ## [0.10.46] - 2026-01-10
 
 ### Added

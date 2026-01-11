@@ -1,8 +1,8 @@
-/* KTP Match Handler v0.10.44
+/* KTP Match Handler v0.10.47
  * Comprehensive match management system with ReAPI pause integration
  *
  * AUTHOR: Nein_
- * VERSION: 0.10.44
+ * VERSION: 0.10.47
  * DATE: 2026-01-10
  *
  * ========== MAJOR FEATURES ==========
@@ -65,6 +65,12 @@
  *   ktp_discord_ini "<configsdir>/discord.ini" - Discord config (auto-detected path)
  *
  * ========== CHANGELOG ==========
+ * v0.10.47 (2026-01-10) - Force Reset Admin Command
+ *   + ADDED: .forcereset command for admins to recover abandoned servers
+ *   + ADDED: Requires ADMIN_RCON flag and confirmation step (type twice within 10s)
+ *   + ADDED: Clears ALL match state: live, pending, prestart, pause, scores, rosters, localinfo
+ *   + ADDED: Discord notification when force reset is executed
+ *
  * v0.10.44 (2026-01-10) - Intermission Auto-DC Fix
  *   + ADDED: g_inIntermission flag to disable auto-DC pauses when timelimit expires
  *   + ADDED: is_in_intermission() helper checks timelimit vs gametime in 2nd half
@@ -512,7 +518,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.46"
+#define PLUGIN_VERSION "0.10.47"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -569,6 +575,10 @@ new g_13QueueId[32];                            // The queue ID entered by capta
 new g_13QueueIdFirst[32];                       // First entry (for confirmation comparison)
 new g_13InputState = 0;                         // 0=none, 1=waiting first input, 2=waiting confirm
 new g_13CaptainId = 0;                          // Player ID of captain entering queue ID
+
+// ---------- Force Reset Confirmation ----------
+new g_forceResetPending = 0;                    // Player ID who initiated force reset (0 = none)
+new Float:g_forceResetTime = 0.0;               // Time when force reset was initiated (expires after 10s)
 new g_techBudget[3] = {0, 0, 0}; // [1]=Allies, [2]=Axis; set at half start to g_techBudgetSecs
 
 // ---------- Half Tracking ----------
@@ -4359,6 +4369,13 @@ public plugin_init() {
     // Custom pause command for server/admin use (avoids conflict with built-in "pause")
     register_concmd("ktp_pause", "cmd_rcon_pause", ADMIN_RCON, "- Trigger KTP tactical pause");
 
+    // Force reset command for abandoned server recovery (admin only, requires confirmation)
+    register_concmd("ktp_forcereset", "cmd_forcereset", ADMIN_RCON, "- Force reset all match state (requires confirmation)");
+    register_clcmd("say .forcereset", "cmd_forcereset");
+    register_clcmd("say /forcereset", "cmd_forcereset");
+    register_clcmd("say_team .forcereset", "cmd_forcereset");
+    register_clcmd("say_team /forcereset", "cmd_forcereset");
+
     // Register TeamScore message hook for match score tracking (DoD: byte TeamID, short Score)
     new msgTeamScore = get_user_msgid("TeamScore");
     if (msgTeamScore > 0) {
@@ -6938,6 +6955,200 @@ public cmd_cancel(id) {
 
     update_server_hostname();  // Reset hostname to base
     return PLUGIN_HANDLED;
+}
+
+// ========== FORCE RESET COMMAND (Admin) ==========
+// Forcibly resets ALL match state - for recovering abandoned servers
+// Requires ADMIN_RCON flag and confirmation step
+
+public cmd_forcereset(id) {
+    // Check admin permission
+    if (!(get_user_flags(id) & ADMIN_RCON)) {
+        client_print(id, print_chat, "[KTP] Access denied. Requires RCON admin.");
+        return PLUGIN_HANDLED;
+    }
+
+    new name[32], sid[44], ip[32];
+    get_user_name(id, name, charsmax(name));
+    get_user_authid(id, sid, charsmax(sid));
+    get_user_ip(id, ip, charsmax(ip), 1);
+
+    // Check if there's anything to reset
+    if (!g_matchLive && !g_matchPending && !g_preStartPending && !g_secondHalfPending) {
+        client_print(id, print_chat, "[KTP] No active match state to reset.");
+        return PLUGIN_HANDLED;
+    }
+
+    // Check for confirmation (must be within 10 seconds and same player)
+    new Float:now = get_gametime();
+    if (g_forceResetPending == id && (now - g_forceResetTime) < 10.0) {
+        // Confirmed - execute full reset
+        execute_force_reset(id, name, sid, ip);
+        g_forceResetPending = 0;
+        g_forceResetTime = 0.0;
+        return PLUGIN_HANDLED;
+    }
+
+    // First request - require confirmation
+    g_forceResetPending = id;
+    g_forceResetTime = now;
+
+    new stateDesc[128];
+    if (g_matchLive) {
+        formatex(stateDesc, charsmax(stateDesc), "LIVE match (half %d)", g_currentHalf);
+    } else if (g_matchPending) {
+        copy(stateDesc, charsmax(stateDesc), "PENDING match");
+    } else if (g_preStartPending) {
+        copy(stateDesc, charsmax(stateDesc), "PRE-START");
+    } else if (g_secondHalfPending) {
+        copy(stateDesc, charsmax(stateDesc), "2ND HALF pending");
+    }
+
+    announce_all("*** FORCE RESET requested by %s ***", name);
+    announce_all("Current state: %s", stateDesc);
+    announce_all("Type .forcereset again within 10 seconds to confirm.");
+    client_print(id, print_chat, "[KTP] Type .forcereset again to confirm full state reset.");
+
+    log_ktp("event=FORCERESET_REQUESTED by='%s' steamid=%s ip=%s state='%s'", name, safe_sid(sid), ip, stateDesc);
+    return PLUGIN_HANDLED;
+}
+
+stock execute_force_reset(id, const name[], const sid[], const ip[]) {
+    new stateDesc[64];
+    if (g_matchLive) formatex(stateDesc, charsmax(stateDesc), "live_h%d", g_currentHalf);
+    else if (g_matchPending) copy(stateDesc, charsmax(stateDesc), "pending");
+    else if (g_preStartPending) copy(stateDesc, charsmax(stateDesc), "prestart");
+    else if (g_secondHalfPending) copy(stateDesc, charsmax(stateDesc), "h2pending");
+
+    // Log before reset
+    log_ktp("event=FORCERESET_EXECUTED by='%s' steamid=%s ip=%s prev_state='%s' match_id='%s' map=%s",
+            name, safe_sid(sid), ip, stateDesc, g_matchId, g_currentMap);
+
+    // === FULL STATE RESET ===
+
+    // Unpause first if paused
+    if (g_isPaused) {
+        ktp_unpause_now("forcereset");
+    }
+
+    // Cancel any pending disconnect countdown
+    if (g_disconnectCountdown > 0) {
+        safe_remove_task(g_taskDisconnectCountdownId);
+        g_disconnectCountdown = 0;
+        g_disconnectedPlayerName[0] = EOS;
+        g_disconnectedPlayerTeam = 0;
+        g_disconnectedPlayerSteamId[0] = EOS;
+    }
+
+    // Clear pre-start state
+    g_preStartPending = false;
+    g_preConfirmAllies = false;
+    g_preConfirmAxis = false;
+    g_confirmAlliesBy[0] = EOS;
+    g_confirmAxisBy[0] = EOS;
+    safe_remove_task(g_taskPrestartHudId);
+
+    // Clear pending match state
+    g_matchPending = false;
+    arrayset(g_ready, 0, sizeof g_ready);
+    safe_remove_task(g_taskPendingHudId);
+    safe_remove_task(g_taskUnreadyReminderId);
+
+    // Clear live match state
+    g_matchLive = false;
+    g_matchEnded = false;
+    g_inIntermission = false;
+    g_currentHalf = 0;
+    g_secondHalfPending = false;
+
+    // Clear pause state
+    g_isPaused = false;
+    g_isTechPause = false;
+    g_pauseOwnerTeam = 0;
+    g_pauseStartTime = 0;
+    g_pauseCountTeam[1] = 0;
+    g_pauseCountTeam[2] = 0;
+    g_pauseExtensions = 0;
+    g_prePauseCountdown = false;
+    g_prePauseLeft = 0;
+    safe_remove_task(g_taskPrePauseId);
+
+    // Clear tech pause state
+    g_techBudget[1] = 0;
+    g_techBudget[2] = 0;
+    g_techPauseStartTime = 0;
+    g_techPauseFrozenTime = 0;
+
+    // Clear unpause state
+    g_unpauseRequested = false;
+    g_countdownActive = false;
+    g_countdownLeft = 0;
+    g_autoConfirmLeft = 0;
+    safe_remove_task(g_taskAutoConfirmId);
+    safe_remove_task(g_taskCountdownId);
+
+    // Clear match identity
+    g_matchId[0] = EOS;
+    g_matchMap[0] = EOS;
+
+    // Reset match type
+    g_matchType = MATCH_TYPE_COMPETITIVE;
+    g_disableDiscord = false;
+
+    // Clear team names
+    copy(g_team1Name, charsmax(g_team1Name), "Allies");
+    copy(g_team2Name, charsmax(g_team2Name), "Axis");
+
+    // Clear captain tracking
+    g_halfCaptain1_name[0] = EOS;
+    g_halfCaptain1_sid[0] = EOS;
+    g_halfCaptain2_name[0] = EOS;
+    g_halfCaptain2_sid[0] = EOS;
+
+    // Clear 1.3 Community queue state
+    g_is13CommunityMatch = false;
+    g_13QueueId[0] = EOS;
+    g_13QueueIdFirst[0] = EOS;
+    g_13InputState = 0;
+    g_13CaptainId = 0;
+
+    // Clear scores
+    reset_match_scores();
+    g_inOvertime = false;
+    g_otRound = 0;
+    g_regulationScore[1] = 0;
+    g_regulationScore[2] = 0;
+
+    // Clear roster
+    clear_match_roster();
+
+    // Clear periodic save task
+    if (g_periodicSaveStarted) {
+        safe_remove_task(g_taskScoreSaveId);
+        g_periodicSaveStarted = false;
+    }
+
+    // Clear all localinfo keys
+    clear_localinfo_match_context();
+    set_localinfo(LOCALINFO_ROSTER1, "");
+    set_localinfo(LOCALINFO_ROSTER2, "");
+    set_localinfo(LOCALINFO_CAPTAINS, "");
+
+    // Reset hostname
+    update_server_hostname();
+
+    // Announce completion
+    announce_all("*** SERVER STATE RESET by %s ***", name);
+    announce_all("All match state cleared. Server ready for new match.");
+
+    // Send Discord notification
+    if (g_discordRelayUrl[0]) {
+        new discordMsg[256];
+        formatex(discordMsg, charsmax(discordMsg),
+            ":warning: **FORCE RESET** executed by **%s** on **%s**",
+            name, g_currentMap);
+        send_discord_with_hostname(discordMsg);
+    }
 }
 
 // ========== READY/LIVE COMMANDS ==========
