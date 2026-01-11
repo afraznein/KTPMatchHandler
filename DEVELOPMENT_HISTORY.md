@@ -112,7 +112,7 @@ December represented the most intensive development period, pushing all major co
 
 January focused on production stability, fixing edge cases discovered during real matches, and adding administrative tools. The explicit overtime command system was a significant rework based on player feedback.
 
-- **KTPMatchHandler v0.10.30-0.10.47**: v0.10.27-0.10.28 integrated changelevel hooks (`RH_PF_changelevel_I`) for reliable match state finalization - the previous logevent-based detection was unreliable because events fire at the exact moment of map change. v0.10.30 added `.commands` help listing, HLTV connection reminders at key match phases, and 2nd half pending HUD. v0.10.32-0.10.34 fixed a critical OT recursive loop crash that occurred when overtime rounds ended in ties - required multiple iterations to fully resolve due to the asynchronous nature of `server_cmd("changelevel")`. v0.10.35 disabled tactical pauses (tech-only policy per planned KTP ruling). v0.10.36 added Discord channel routing for 12man and draft matches. v0.10.37 added server hostname to match IDs for multi-server differentiation. **v0.10.38 added 1.3 Community Discord 12man integration** with Queue ID entry for cross-platform match tracking. v0.10.41 fixed map config prefix matching (longer keys now match first). **v0.10.43 replaced automatic overtime with explicit `.ktpOT` and `.draftOT` commands** - players now manually trigger OT rounds, simplifying the match flow and eliminating recursion edge cases. v0.10.44 fixed spurious auto-pauses during intermission. v0.10.45 added dynamic server hostname that reflects match state in real-time. v0.10.46 added match-type-specific ready requirements (6v6 for KTP, 5v5 for others, 1v1 for scrims). **v0.10.47 added `.forcereset` admin command** for recovering abandoned servers with full state cleanup.
+- **KTPMatchHandler v0.10.30-0.10.48**: v0.10.27-0.10.28 integrated changelevel hooks (`RH_PF_changelevel_I`) for reliable match state finalization - the previous logevent-based detection was unreliable because events fire at the exact moment of map change. v0.10.30 added `.commands` help listing, HLTV connection reminders at key match phases, and 2nd half pending HUD. v0.10.32-0.10.34 fixed a critical OT recursive loop crash that occurred when overtime rounds ended in ties - required multiple iterations to fully resolve due to the asynchronous nature of `server_cmd("changelevel")`. v0.10.35 disabled tactical pauses (tech-only policy per planned KTP ruling). v0.10.36 added Discord channel routing for 12man and draft matches. v0.10.37 added server hostname to match IDs for multi-server differentiation. **v0.10.38 added 1.3 Community Discord 12man integration** with Queue ID entry for cross-platform match tracking. v0.10.41 fixed map config prefix matching (longer keys now match first). **v0.10.43 replaced automatic overtime with explicit `.ktpOT` and `.draftOT` commands** - players now manually trigger OT rounds, simplifying the match flow and eliminating recursion edge cases. v0.10.44 fixed spurious auto-pauses during intermission. v0.10.45 added dynamic server hostname that reflects match state in real-time. v0.10.46 added match-type-specific ready requirements (6v6 for KTP, 5v5 for others, 1v1 for scrims). **v0.10.47 added `.forcereset` admin command** for recovering abandoned servers with full state cleanup. v0.10.48 cleaned up ~190 lines of dead code and fixed all compiler warnings.
 
 - **KTPAMXX v2.6.2-2.6.3**: v2.6.2 added DODX score broadcasting native (`dodx_broadcast_team_score`) and changelevel hooks. v2.6.3 updated `ktp_discord.inc` to v1.2.0 with draft channel support.
 
@@ -147,6 +147,22 @@ The following is a granular breakdown of January 2026 changes, organized by feat
 - Default buffer size 212992 (208KB) too small for 5 game servers
 - Fix: Increased to 26214400 (25MB) via `/etc/sysctl.conf`
 - Documented in `KTP_GameServer_Setup.md` and `CLAUDE.md` for future servers
+
+### KTPMatchHandler v0.10.48
+- **Dead code cleanup** - Removed ~190 lines of unreachable/unused code
+  - Old OT handler (`handle_ot_round_end_OLD`) wrapped in `#if 0` block
+  - Unreachable tactical pause logic after early return
+  - Unused legacy variables (`g_gameEndEventCount`, `g_gameEndTaskId`)
+- **Compiler warnings fixed** - All warnings resolved with `#pragma unused`
+- **Admin Commands in .commands** - `.forcereset` now shown in command list
+
+### KTPMatchHandler v0.10.47
+- **Force reset admin command** - `.forcereset` for recovering abandoned servers
+  - Requires ADMIN_RCON flag (highest admin level)
+  - Confirmation step: type command twice within 10 seconds
+  - Clears ALL match state: live, pending, prestart, pause, scores, rosters, localinfo
+  - Sends Discord notification when executed
+- Updated users.ini and MOTD.txt with `.forcereset` documentation
 
 ### KTPMatchHandler v0.10.46
 - **Match type-specific ready requirements**

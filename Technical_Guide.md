@@ -13,7 +13,7 @@
 
 **No Metamod Required** - Runs on Linux and Windows via ReHLDS Extension Mode
 
-**Last Updated:** 2026-01-10
+**Last Updated:** 2026-01-11
 
 [Architecture](#-six-layer-architecture) • [Components](#-component-documentation) • [Installation](#-complete-installation-guide) • [Repositories](#-github-repositories)
 
@@ -28,7 +28,7 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 6: Application Plugins (AMX Plugins)                                  │
-│  KTPMatchHandler v0.10.46 - Match workflow, pause, OT system, HLStatsX       │
+│  KTPMatchHandler v0.10.48 - Match workflow, pause, OT system, HLStatsX       │
 │  KTPHLTVRecorder v1.1.1   - Auto HLTV recording via HTTP API + FIFO pipes    │
 │  KTPCvarChecker v7.9      - Real-time cvar enforcement + Discord toggle      │
 │  KTPFileChecker v2.1      - File consistency validation + Discord            │
@@ -2352,6 +2352,6 @@ discord_channel_id_audit_competitive=5555555555555555555
 
 *Cross-platform: Windows + Linux*
 
-**Last Updated:** 2026-01-10
+**Last Updated:** 2026-01-11
 
 </div>
