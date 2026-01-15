@@ -1,23 +1,28 @@
 # KTP Development History
 
 > Development timeline for the KTP (Keep the Practice) competitive Day of Defeat server infrastructure.
->
-> **Project Duration:** October 2025 - Present
-> **Total Repositories:** 14
-> **Estimated Development Hours:** 720-900
+
+| Metric | Value |
+|--------|-------|
+| **Project Duration** | October 2025 - Present |
+| **Total Repositories** | 14 |
+| **Estimated Development Hours** | 720-900 |
+| **Last Updated** | 2026-01-13 |
+
+---
 
 ## Table of Contents
 
-- [Scope Summary](#monthly-scope-summary-for-man-hour-estimation)
-- [October 2025](#october-2025-summary) - Foundation
-- [November 2025](#november-2025-summary) - Platform Development
-- [December 2025](#december-2025-summary) - Feature Complete
-- [January 2026](#january-2026-summary) - Stability & Polish
+- [Monthly Scope Summary](#monthly-scope-summary)
+- [October 2025](#october-2025---foundation) - Foundation
+- [November 2025](#november-2025---platform-development) - Platform Development
+- [December 2025](#december-2025---feature-complete) - Feature Complete
+- [January 2026](#january-2026---stability--polish) - Stability & Polish
 - [Detailed Changelog](#detailed-january-2026-changelog)
 
 ---
 
-## Monthly Scope Summary (for man-hour estimation)
+## Monthly Scope Summary
 
 | Month | Est. Hours | Focus Areas |
 |-------|-----------|-------------|
@@ -38,7 +43,7 @@
 
 ---
 
-## October 2025 Summary
+## October 2025 - Foundation
 
 **Initial Project Setup & Foundation**
 
@@ -58,9 +63,9 @@ This month established the core infrastructure for the KTP competitive server st
 
 ---
 
-## November 2025 Summary
+## November 2025 - Platform Development
 
-**Major Platform Development - C++ Engine Work**
+**Focus: C++ Engine Work**
 
 This month involved significant C++ development work on the core engine components. The focus was building custom forks of ReAPI and AMX Mod X to support features not available in upstream versions, particularly around the pause system and real-time cvar detection.
 
@@ -78,9 +83,9 @@ This month involved significant C++ development work on the core engine componen
 
 ---
 
-## December 2025 Summary
+## December 2025 - Feature Complete
 
-**Feature-Complete Release Push - Largest Development Month**
+**Focus: Feature-Complete Release Push (Largest Development Month)**
 
 December represented the most intensive development period, pushing all major components to feature-complete status. The crown achievement was the complete overtime system in KTPMatchHandler along with the "extension mode" architecture that allows KTPAMXX to run without Metamod.
 
@@ -106,19 +111,57 @@ December represented the most intensive development period, pushing all major co
 
 ---
 
-## January 2026 Summary
+## January 2026 - Stability & Polish
 
-**Stability, Polish & Production Hardening**
+**Focus: Production Hardening & Administrative Tools**
 
 January focused on production stability, fixing edge cases discovered during real matches, and adding administrative tools. The explicit overtime command system was a significant rework based on player feedback.
 
-- **KTPMatchHandler v0.10.30-0.10.48**: v0.10.27-0.10.28 integrated changelevel hooks (`RH_PF_changelevel_I`) for reliable match state finalization - the previous logevent-based detection was unreliable because events fire at the exact moment of map change. v0.10.30 added `.commands` help listing, HLTV connection reminders at key match phases, and 2nd half pending HUD. v0.10.32-0.10.34 fixed a critical OT recursive loop crash that occurred when overtime rounds ended in ties - required multiple iterations to fully resolve due to the asynchronous nature of `server_cmd("changelevel")`. v0.10.35 disabled tactical pauses (tech-only policy per planned KTP ruling). v0.10.36 added Discord channel routing for 12man and draft matches. v0.10.37 added server hostname to match IDs for multi-server differentiation. **v0.10.38 added 1.3 Community Discord 12man integration** with Queue ID entry for cross-platform match tracking. v0.10.41 fixed map config prefix matching (longer keys now match first). **v0.10.43 replaced automatic overtime with explicit `.ktpOT` and `.draftOT` commands** - players now manually trigger OT rounds, simplifying the match flow and eliminating recursion edge cases. v0.10.44 fixed spurious auto-pauses during intermission. v0.10.45 added dynamic server hostname that reflects match state in real-time. v0.10.46 added match-type-specific ready requirements (6v6 for KTP, 5v5 for others, 1v1 for scrims). **v0.10.47 added `.forcereset` admin command** for recovering abandoned servers with full state cleanup. v0.10.48 cleaned up ~190 lines of dead code and fixed all compiler warnings.
+### KTPMatchHandler v0.10.30-0.10.59
 
-- **KTPAMXX v2.6.2-2.6.3**: v2.6.2 added DODX score broadcasting native (`dodx_broadcast_team_score`) and changelevel hooks. v2.6.3 updated `ktp_discord.inc` to v1.2.0 with draft channel support.
+| Version Range | Key Changes |
+|---------------|-------------|
+| v0.10.27-28 | Changelevel hooks (`RH_PF_changelevel_I`) for reliable match state finalization |
+| v0.10.30 | `.commands` help listing, HLTV reminders, 2nd half pending HUD |
+| v0.10.32-34 | Critical OT recursive loop crash fix |
+| v0.10.35 | Tactical pauses disabled (tech-only policy) |
+| v0.10.36 | Discord channel routing for 12man/draft matches |
+| v0.10.37 | Server hostname in match IDs |
+| **v0.10.38** | **1.3 Community Discord 12man integration** with Queue ID |
+| v0.10.41 | Map config prefix matching fix (longer keys first) |
+| **v0.10.43** | **Explicit `.ktpOT` and `.draftOT` commands** (replaces automatic OT) |
+| v0.10.44 | Intermission auto-DC fix |
+| v0.10.45 | Dynamic server hostname reflecting match state |
+| v0.10.46 | Match-type-specific ready requirements (6v6 KTP, 5v5 others) |
+| **v0.10.47** | **`.forcereset` admin command** for recovering abandoned servers |
+| v0.10.48 | ~190 lines dead code cleanup, compiler warnings fixed |
+| v0.10.49 | Standard AMXX logging for daily rotation |
+| v0.10.50-52 | Roster and ready counter bugs after halftime |
+| **v0.10.53** | **Auto-DC tuning** (30s delay, competitive-only) |
+| v0.10.54 | Experimental pause overlay disable (`showpause 0`) |
+| **v0.10.55** | **`.cancel` during 2nd half pending**, Discord embed uniformity |
+| **v0.10.59** | **Simplified match IDs** (`{timestamp}-{shortHostname}`), hostname timing fix |
 
-- **KTPReAPI v5.29.0.362**: Added map change interception hooks (`RH_PF_changelevel_I`, `RH_Host_Changelevel_f`) that fire before the map actually changes, enabling reliable match state finalization.
+### Other Component Updates
 
-- **KTPHLTVRecorder v1.0.4-1.1.1**: v1.0.4 fixed config parsing and improved logging. **v1.1.0-1.1.1 was a major architectural change** - replaced unreliable UDP RCON with HTTP API communication. Commands now sent to data server API (port 8087) which injects them to HLTV via FIFO pipes. This was necessary because GoldSrc HLTV doesn't properly support standard UDP RCON protocol. Added explicit OT match type support for demo naming.
+| Component | Version | Key Changes |
+|-----------|---------|-------------|
+| **KTPAMXX** | v2.6.2-2.6.3 | DODX score broadcasting native, changelevel hooks, ktp_discord.inc v1.2.0 |
+| **KTPReAPI** | v5.29.0.362 | Map change interception hooks (`RH_PF_changelevel_I`, `RH_Host_Changelevel_f`) |
+| **KTPCvarChecker** | v7.8-7.10 | Debug cleanup, Discord toggle cvar, KTP emoji branding |
+| **KTPAdminAudit** | v2.6.0-2.7.1 | Map change auditing, RCON quit/exit blocking, changelevel countdown |
+| **KTPAmxxCurl** | v1.2.0-ktp | Use-after-free fix, handle allocation fix, socket map cleanup |
+| **KTPFileDistributor** | v1.1.0 | Multi-channel Discord support |
+
+### KTPHLTVRecorder v1.0.4-1.2.2
+
+| Version | Changes |
+|---------|---------|
+| v1.0.4 | Config parsing fix, improved logging |
+| **v1.1.0-1.1.1** | **Major rewrite: HTTP API** replaces UDP RCON via FIFO pipes |
+| v1.2.0 | Match type support for all KTPMatchHandler types |
+| **v1.2.1** | **`.hltvrestart` admin command** with Discord audit notification |
+| **v1.2.2** | Orphaned recording cleanup on plugin startup/shutdown |
 
 - **KTPCvarChecker v7.8-7.9**: v7.8 cleaned up debug logging. v7.9 added Discord toggle cvar for enabling/disabling notifications.
 
@@ -128,13 +171,66 @@ January focused on production stability, fixing edge cases discovered during rea
 
 - **KTPFileDistributor v1.1.0**: Added multi-channel Discord support via `AdditionalChannelIds` configuration.
 
-- **Server Infrastructure**: Deployed Atlanta 2-5 server cluster (ports 27016-27019) with full LinuxGSM configuration, HLStatsX integration, and KTPFileDistributor setup. Configured HLTV instances 27021-27024 with systemd services and scheduled restart timers. Diagnosed and fixed UDP buffer exhaustion issue (47k+ RcvbufErrors) by increasing kernel buffer sizes from 208KB to 25MB. Documented server setup procedures for future deployments.
+- **Server Infrastructure**: Deployed Atlanta 2-5 server cluster (ports 27016-27019) with full LinuxGSM configuration, HLStatsX integration, and KTPFileDistributor setup. Configured HLTV instances 27021-27024 with systemd services and scheduled restart timers. Diagnosed and fixed UDP buffer exhaustion issue (47k+ RcvbufErrors) by increasing kernel buffer sizes from 208KB to 25MB. Documented server setup procedures for future deployments. **Deployed Dallas game server cluster** (74.91.114.178, ports 27015-27019) with identical configuration. **Added nightly scheduled restarts** at 3 AM ET for both Atlanta and Dallas game servers with Discord embed notifications (live-updating: shows "In Progress" then edits to "Complete"). Fixed LinuxGSM "old type tmux session" bug that caused spurious server restarts by patching `command_monitor.sh` on all instances.
 
 ---
 
 ## Detailed January 2026 Changelog
 
 The following is a granular breakdown of January 2026 changes, organized by feature/fix.
+
+---
+
+### KTPMatchHandler v0.10.59 (2026-01-13)
+
+**Hostname Timing Fix & Simplified Match IDs**
+
+- **Demo filenames** - Fixed showing "Half_Life" instead of server hostname
+- **Root cause** - Hostname cached in `plugin_cfg()` before `dodserver.cfg` executed
+- **Fix** - Re-fetch hostname cvar in `generate_match_id()` to ensure current value
+- **Match ID format simplified** - Shorter demo filenames
+  - Old: `KTP-{timestamp}-{map}-{hostname}` (e.g., `KTP-1768174986-dod_armory-KTP_Atlanta_2`)
+  - New: `{timestamp}-{shortHostname}` (e.g., `1768174986-ATL2`)
+- **Short hostname codes** - `get_short_hostname_code()` converts hostname to city code (ATL, DAL, etc.)
+
+---
+
+### KTPHLTVRecorder v1.2.2 (2026-01-13)
+
+**Orphaned Recording Cleanup**
+
+- Sends `stoprecording` on plugin startup to cleanup any orphaned session from previous server crash
+- Sends `stoprecording` on `plugin_end()` to finalize demo even if match didn't end cleanly
+
+### KTPHLTVRecorder v1.2.1 (2026-01-13)
+
+**Admin HLTV Restart Command**
+
+- **`.hltvrestart`** - Restart paired HLTV instance from game server
+- Requires `ADMIN_RCON` flag
+- Sends Discord audit notification to audit channels
+- Useful when HLTV disconnects or gets stuck
+
+---
+
+### Scheduled Server Restarts
+- **Nightly game server restarts** - All Atlanta and Dallas game servers restart at 3:00 AM ET daily
+  - Script: `ktp-scheduled-restart.sh` deployed to both server clusters
+  - Uses LinuxGSM graceful stop with pkill fallback
+  - Pauses monitor cron during restart to prevent race conditions
+  - Discord notification with live-updating embed (orange "In Progress" → green "Complete")
+  - Posts to both KTP Discord and 1.3 Discord channels
+  - Uses `<:ktp:>` emoji in embed title matching KTPMatchHandler style
+- **HLTV restart script updated** - `/usr/local/bin/hltv-restart-all.sh` now uses same embed format
+  - Runs at 3:00 AM and 11:00 AM ET via systemd timer
+  - Color-coded status: green (success), orange (partial), red (failure)
+
+### LinuxGSM Tmux Session Bug Fix
+- **"Old type tmux session" false positive** - Monitor cron incorrectly detecting new-style sessions as old
+  - Symptoms: Random server restarts during matches, `quit` commands with no RCON source
+  - Root cause: `pgrep -f` substring matching in `command_monitor.sh` lines 203-212
+  - Fix: Commented out old-type detection block on all 10 instances (Atlanta + Dallas)
+  - Note: Patch must be reapplied after `./dodserver update-lgsm`
 
 ### HLTV RTC Timing Fix
 - **System::RunFrame time difference warnings** - HLTV spamming timing warnings in logs
@@ -147,6 +243,43 @@ The following is a granular breakdown of January 2026 changes, organized by feat
 - Default buffer size 212992 (208KB) too small for 5 game servers
 - Fix: Increased to 26214400 (25MB) via `/etc/sysctl.conf`
 - Documented in `KTP_GameServer_Setup.md` and `CLAUDE.md` for future servers
+
+### KTPMatchHandler v0.10.55
+- **Cancel command expansion** - `.cancel` now works during second half pending
+  - Immediate cancel (no confirmation) - clears all match state
+  - Announces first half score when cancelled
+- **Discord embed uniformity** - All status notifications now use rich embeds
+  - Matches `ktp_discord.inc` format for consistency with AdminAudit/CvarChecker
+  - Color-coded: RED for cancellations, ORANGE for warnings/resets
+  - Includes server hostname and map in footer
+
+### KTPMatchHandler v0.10.54
+- **Pause overlay disable (experimental)** - Sends `showpause 0` to hide pause screen overlay
+  - Sends `showpause 1` on unpause to restore
+  - Note: Client may reject if command is protected
+
+### KTPMatchHandler v0.10.53
+- **Auto-DC tuning** - Countdown increased from 10 to 30 seconds
+- **Match-type filtering** - Auto-DC only triggers for competitive modes (.ktp, .ktpOT, .draft, .draftOT)
+- **Password simplification** - Only .ktp and .ktpOT require password (not .draftOT)
+
+### KTPMatchHandler v0.10.52
+- **Changelevel guard flag fix** - First half end processing no longer skipped
+  - Root cause: `g_changeLevelHandled` flag stuck when admin `.changemap` blocked changelevel
+  - Fix: Reset flag when match goes live
+
+### KTPMatchHandler v0.10.51
+- **Roster cross-team duplicate fix** - Players no longer appear in both team rosters
+  - `add_to_match_roster()` now checks BOTH rosters before adding
+
+### KTPMatchHandler v0.10.50
+- **2nd half ready counter fix** - `.rdy` counter now shows correct team names
+  - Uses roster-based SteamID lookup for team identity during 2nd half pending
+
+### KTPMatchHandler v0.10.49
+- **Standard AMXX logging** - `log_ktp()` now uses `log_amx()` with [KTP] prefix
+  - Logs auto-rotate daily via standard AMXX log rotation
+  - Removed `ktp_match_logfile` cvar (no longer needed)
 
 ### KTPMatchHandler v0.10.48
 - **Dead code cleanup** - Removed ~190 lines of unreachable/unused code
@@ -302,4 +435,4 @@ The following is a granular breakdown of January 2026 changes, organized by feat
 
 ---
 
-*Last updated: 2026-01-11*
+*Last updated: 2026-01-13*

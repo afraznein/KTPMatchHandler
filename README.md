@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.48** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.59** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -50,7 +50,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **Pause Extensions**: Up to 2× 2-minute extensions (9 minutes max)
 - **Auto-Warnings**: 30-second and 10-second countdown alerts
 - **Two-Team Unpause**: Both teams must confirm to resume
-- **Disconnect Protection**: Auto-pause with 10-second cancellable countdown
+- **Disconnect Protection**: Auto-pause with 30-second cancellable countdown
 
 ### Logging & Notifications
 - **Triple Logging**: AMX log + KTP match log + Discord webhooks
@@ -201,7 +201,7 @@ Team 2: .go        ← Confirms (both teams must agree)
 - `.ext` - Add 2 minutes (max 2× = 4 minutes total)
 - Auto-warnings at 30s and 10s remaining
 - Auto-unpause when timer expires
-- `.nodc` - Cancel disconnect auto-pause (10-sec window)
+- `.nodc` - Cancel disconnect auto-pause (30-sec window)
 
 ### All Commands
 
@@ -612,6 +612,83 @@ static bool:warned_10sec = false;
 
 ## 📝 Changelog
 
+### v0.10.59 (2026-01-13) - Hostname Timing Fix & Simplified Match IDs
+
+**Fixed:**
+- 🔧 **Hostname in demo filenames** - Was showing "Half_Life" due to early caching; now re-fetches at match start
+- 🔧 **Match ID format** - Simplified to `{timestamp}-{shortHostname}` (e.g., `1768174986-ATL2`)
+
+**Added:**
+- ✅ **Short hostname codes** - ATL, DAL, etc. for cleaner demo filenames
+
+---
+
+### v0.10.55 (2026-01-13) - Cancel Command Expansion
+
+**Added:**
+- ✅ **`.cancel` during 2nd half pending** - Immediate cancel without confirmation
+- ✅ **Discord embed uniformity** - All cancel/reset notifications use rich embeds
+
+**Changed:**
+- 🔧 **`.cancel` during live match** - Now suggests `.forcereset` for abandoned servers
+
+---
+
+### v0.10.53 (2026-01-12) - Auto-DC Tuning
+
+**Changed:**
+- 🔧 **Auto-DC countdown** - Increased from 10 to 30 seconds
+- 🔧 **Auto-DC scope** - Only triggers for competitive modes (`.ktp`, `.ktpOT`, `.draft`, `.draftOT`)
+- 🔧 **`.draftOT` password** - No longer requires password (only `.ktp` and `.ktpOT` require it)
+
+---
+
+### v0.10.47 (2026-01-10) - Force Reset Admin Command
+
+**Added:**
+- ✅ **`.forcereset` command** - Admins can recover abandoned servers
+- ✅ **Requires ADMIN_RCON flag** - And confirmation step (type twice within 10s)
+- ✅ **Clears ALL state** - Live, pending, prestart, pause, scores, rosters, localinfo
+
+---
+
+### v0.10.43 (2026-01-10) - Explicit Overtime Commands
+
+**Added:**
+- ✅ **`.ktpOT` and `.draftOT` commands** - Manually start overtime rounds
+- ✅ **MATCH_TYPE_KTP_OT and MATCH_TYPE_DRAFT_OT** - New match types for explicit OT
+
+**Changed:**
+- 🔧 **No automatic OT** - Match flow simplified to h1 → h2 → done; captains control OT initiation
+
+---
+
+### v0.10.38 (2026-01-07) - 1.3 Community 12man Support
+
+**Added:**
+- ✅ **1.3 Community Discord 12man** - Queue ID input system for Discord integration
+- ✅ **Queue ID confirmation** - Double-entry to prevent typos
+- ✅ **Match ID format** - `1.3-{queueId}-{map}-{hostname}` for 1.3 Community matches
+- ✅ **Queue ID cancel** - Type "cancel" or "abort" during entry to restart
+
+---
+
+### v0.10.36 (2026-01-06) - Discord 12man/Draft Channels
+
+**Added:**
+- ✅ **Discord channel for 12man** - `discord_channel_id_12man` config key
+- ✅ **Discord channel for draft** - `discord_channel_id_draft` config key
+
+---
+
+### v0.10.35 (2026-01-06) - Tactical Pauses Disabled
+
+**Changed:**
+- 🔧 **Tactical pauses disabled** - Only `.tech` allowed; `.pause`/`.tac` rejected
+- 🔧 **Pause extensions** - Disabled by default (`ktp_pause_max_extensions = 0`)
+
+---
+
 ### v0.10.30 (January 2026) - Bug Fixes & Help Command
 
 **Added:**
@@ -968,7 +1045,7 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.10.47
+- **Current Version**: v0.10.59
 - **Status**: Stable (Score persistence and Discord embeds verified on VPS)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.6
 - **Last Updated**: January 2026
@@ -980,7 +1057,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.47                     ║
+║             KTP MATCH HANDLER v0.10.59                     ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1021,4 +1098,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.38** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.59** - Making competitive Day of Defeat matches better, one pause at a time.

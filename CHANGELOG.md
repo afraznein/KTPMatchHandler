@@ -6,6 +6,152 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.60] - 2026-01-13
+
+### Added
+- **Expanded `.commands` output** - Added missing commands to help listing
+  - Admin Commands: `.restarthalf`, `.hltvrestart`
+  - New "Other KTP Plugin Commands" section: `.kick`, `.ban`, `.restart`, `.quit` (from KTPAdminAudit)
+
+---
+
+## [0.10.59] - 2026-01-13
+
+### Changed
+- **Version sync** - Aligned header comment with PLUGIN_VERSION define
+
+---
+
+## [0.10.58] - 2026-01-13
+
+### Changed
+- **Discord embed titles now include `:ktp:` emoji** - Consistent branding across all Discord notifications
+  - Match Cancelled, Match Setup Cancelled, Server Force Reset embeds updated
+
+---
+
+## [0.10.57] - 2026-01-13
+
+### Changed
+- **`.tech` cancels active auto-DC countdown** - Manual `.tech` pause now supersedes auto-DC countdown
+  - If a player disconnects and auto-DC countdown is active, calling `.tech` immediately cancels it
+  - Logs cancellation event with previous countdown value and disconnected player info
+  - Prevents confusing state where both manual tech pause and auto-DC countdown are running
+- **Reduced auto-DC countdown reminder spam** - Messages now appear at key intervals only
+  - Every 5 seconds when countdown > 10 (30, 25, 20, 15)
+  - Every second for last 10 seconds (10, 9, 8, 7, 6, 5, 4, 3, 2, 1)
+  - Reduces total messages from 30 to 14
+
+---
+
+## [0.10.56] - 2026-01-13
+
+### Added
+- **`.restarthalf` admin command** - Restart live 2nd half to 0-0 while preserving 1st half scores
+  - Requires ADMIN_RCON permission
+  - Two-step confirmation (type twice within 10 seconds)
+  - Only works during live 2nd half (not OT)
+  - Aliases: `.h2restart`, `/restarthalf`, `/h2restart`
+  - Flushes and resets DODX stats for clean 2nd half
+  - Sends Discord notification with score information
+
+### Changed
+- **`.cancel` blocked for `.ktp` matches during 2nd half pending** - Competitive matches can no longer be cancelled after 1st half
+  - Players see helpful message directing them to `.forcereset`
+  - Other match types (`.scrim`, `.draft`, `.12man`) can still use `.cancel`
+  - Protects competitive match integrity after significant time investment
+
+---
+
+## [0.10.55] - 2026-01-13
+
+### Added
+- **`.cancel` now works during second half pending** - Players can cancel a match after first half ends but before second half starts
+  - Immediate cancel (no confirmation required) - use `.forcereset` if confirmation is desired
+  - Clears all match state including scores, team names, rosters, and localinfo persistence
+  - Sends Discord embed notification with first half score
+- **Uniform Discord embed format** - All status notifications now use rich embeds matching `ktp_discord.inc` format
+  - Match cancelled (second half): Red embed with first half score
+  - Match setup cancelled (pending): Orange embed
+  - Server force reset: Orange embed
+  - Includes server hostname and map in footer for consistency with AdminAudit/CvarChecker
+
+### Changed
+- **`.cancel` blocked during live match** - Players attempting to cancel during live match now receive helpful message pointing to `.forcereset` for admins
+- **Match start commands improved** - `.ktp`/`.scrim`/`.12man`/`.draft` during live match now correctly points to `.forcereset` instead of `.cancel`
+
+---
+
+## [0.10.54] - 2026-01-12
+
+### Added (Experimental)
+- **Pause overlay disable** - Server now sends `showpause 0` to clients when pause activates
+  - Attempts to hide the pause screen overlay that blocks players' view during pause
+  - Sends `showpause 1` on unpause to restore default behavior
+  - Note: This is experimental - clients may reject the command if it's protected
+
+---
+
+## [0.10.53] - 2026-01-12
+
+### Changed
+- **Auto-DC countdown increased to 30 seconds** - Players now have 30 seconds to reconnect before auto tech pause (was 10 seconds)
+- **Auto-DC only for competitive match types** - Auto-DC pauses now only trigger for `.ktp`, `.ktpOT`, `.draft`, and `.draftOT` matches
+  - Scrims (`.scrim`) and 12mans (`.12man`) no longer trigger auto-DC pauses on disconnect
+  - Manual tech pauses (`.tech`) still available for all match types
+- **`.draftOT` no longer requires password** - Only `.ktp` and `.ktpOT` require the KTP match password
+
+### Added
+- `is_auto_dc_enabled()` helper function for match-type-based auto-DC filtering
+
+---
+
+## [0.10.52] - 2026-01-12
+
+### Fixed
+- **Changelevel guard flag stuck bug** - First half end processing no longer skipped due to stale guard flag
+  - Root cause: `g_changeLevelHandled` flag was not reset between matches
+  - When KTPAdminAudit's `.changemap` blocked a changelevel with HC_SUPERCEDE during a match, KTPMatchHandler's hook still fired and set the flag, but the map never changed (plugin never reinit), leaving the flag stuck
+  - On the next match's first half end, the changelevel hook saw the stale flag and skipped processing
+  - Fix: Reset `g_changeLevelHandled = false` when match goes live
+  - Reference: Atlanta 4 scrim bug 01/11/2026 - KTP-1768187394-dod_harrington
+
+---
+
+## [0.10.51] - 2026-01-12
+
+### Fixed
+- **Roster cross-team duplicate bug** - Players no longer appear in both team rosters on Discord
+  - Issue: After halftime map change, players who hadn't switched game teams were added to the wrong roster
+  - `add_to_match_roster()` now checks BOTH rosters before adding a player
+  - Prevents the same SteamID from appearing under both Team 1 and Team 2 in Discord embeds
+
+---
+
+## [0.10.50] - 2026-01-11
+
+### Fixed
+- **2nd half ready counter bug** - `.rdy` command now correctly counts players by team identity
+  - Previously, players who hadn't switched game teams after map change were counted under wrong team name
+  - Now uses roster-based SteamID lookup to determine team identity during 2nd half pending
+  - Added `get_player_roster_team()` helper for roster-based team lookup
+  - Half captain tracking also uses roster-based identity in 2nd half
+  - Roster addition for new players correctly handles side swap during 2nd half pending
+
+---
+
+## [0.10.49] - 2026-01-11
+
+### Changed
+- **Standard AMXX logging** - `log_ktp()` now uses `log_amx()` with [KTP] prefix
+  - Logs now auto-rotate daily via standard AMXX log rotation
+  - No more single large `ktp_match.log` file
+
+### Removed
+- **ktp_match_logfile cvar** - No longer needed with standard AMXX logging
+
+---
+
 ## [0.10.48] - 2026-01-11
 
 ### Removed
