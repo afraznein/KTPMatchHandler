@@ -1,9 +1,9 @@
-/* KTP Match Handler v0.10.60
+/* KTP Match Handler v0.10.62
  * Comprehensive match management system with ReAPI pause integration
  *
  * AUTHOR: Nein_
- * VERSION: 0.10.60
- * DATE: 2026-01-13
+ * VERSION: 0.10.62
+ * DATE: 2026-01-22
  *
  * ========== MAJOR FEATURES ==========
  * - ReAPI Pause Integration: Direct pause control via rh_set_server_pause()
@@ -65,6 +65,17 @@
  *   ktp_discord_ini "<configsdir>/discord.ini" - Discord config (auto-detected path)
  *
  * ========== CHANGELOG ==========
+ * v0.10.62 (2026-01-22) - Draft Match Duration
+ *   + ADDED: Draft matches (.draft) now use 15-minute halves instead of 20 minutes
+ *   * TECHNICAL: Sets mp_timelimit 15 after map config exec (same pattern as 12man duration)
+ *
+ * v0.10.61 (2026-01-20) - Ready Team Label Fix
+ *   * FIXED: .ready message showed wrong team label in 2nd half (displayed team identity name instead of side name)
+ *   * EXAMPLE: Player on Allies side in 2nd half saw "Axis 1/6" instead of "Allies 1/6"
+ *   * CHANGED: Ready count labels now always show "Allies" / "Axis" (current side) instead of team identity names
+ *   * AFFECTED: .ready, .unready, .status, and all pending HUD displays
+ *   * REPORTED: acetamino, January 20 2026
+ *
  * v0.10.60 (2026-01-13) - Commands List Update
  *   + ADDED: .restarthalf and .hltvrestart to .commands output (Admin Commands section)
  *   + ADDED: "Other KTP Plugin Commands" section showing .kick, .ban, .restart, .quit
@@ -579,7 +590,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.60"
+#define PLUGIN_VERSION "0.10.62"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -1056,7 +1067,7 @@ stock bool:process_second_half_end_changelevel() {
     if (g_hasDodxStatsNatives) {
         new flushed = dodx_flush_all_stats();
         log_ktp("event=STATS_FLUSH type=match_end players=%d match_id=%s", flushed, g_matchId);
-        log_amx("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^")", g_matchId, g_matchMap);
+        log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^")", g_matchId, g_matchMap);
         dodx_set_match_id("");
     }
     #endif
@@ -2533,14 +2544,14 @@ stock send_player_roster_to_discord() {
     escape_for_json(embedTitle, embedTitleEscaped, charsmax(embedTitleEscaped));
 
     // Build Discord embed JSON payload
-    // Embed with two inline fields (teams side by side), match ID and server in footer
+    // Embed with two inline fields (teams side by side), match ID, map, and server in footer
     formatex(g_rosterEmbedPayload, charsmax(g_rosterEmbedPayload),
-        "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":3447003,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true}],^"footer^":{^"text^":^"Match: %s | Server: %s^"}}]}",
+        "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":3447003,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true}],^"footer^":{^"text^":^"Match: %s | Map: %s | Server: %s^"}}]}",
         g_discordChannelIdBuf,
         embedTitleEscaped,
         g_teamName[1], alliesCount, g_rosterAlliesEscaped,
         g_teamName[2], axisCount, g_rosterAxisEscaped,
-        g_matchId, g_serverHostnameEscaped);
+        g_matchId, g_matchMap, g_serverHostnameEscaped);
 
     // Send embed via curl (similar to send_discord_message but with embed payload)
     send_discord_embed_raw(g_rosterEmbedPayload);
@@ -3054,12 +3065,12 @@ stock send_match_embed_create() {
 
     // Build embed JSON - initial version at match start
     formatex(g_rosterEmbedPayload, charsmax(g_rosterEmbedPayload),
-        "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":3447003,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Status^",^"value^":^"1st Half - Match Live^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Server: %s^"}}]}",
+        "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":3447003,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Status^",^"value^":^"1st Half - Match Live^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Map: %s | Server: %s^"}}]}",
         g_discordChannelIdBuf,
         embedTitleEscaped,
         g_team1Name, alliesCount, g_rosterAlliesEscaped,
         g_team2Name, axisCount, g_rosterAxisEscaped,
-        g_matchId, g_serverHostnameEscaped);
+        g_matchId, g_matchMap, g_serverHostnameEscaped);
 
     // Set up temp file for response capture (use data dir for reliable path)
     new dataDir[128];
@@ -3164,7 +3175,7 @@ stock send_match_embed_update(const status[]) {
 
     // Build edit payload with messageId
     formatex(g_rosterEmbedPayload, charsmax(g_rosterEmbedPayload),
-        "{^"channelId^":^"%s^",^"messageId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":3447003,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Scores^",^"value^":^"%s^",^"inline^":false},{^"name^":^"Status^",^"value^":^"%s^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Server: %s^"}}]}",
+        "{^"channelId^":^"%s^",^"messageId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":3447003,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Scores^",^"value^":^"%s^",^"inline^":false},{^"name^":^"Status^",^"value^":^"%s^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Map: %s | Server: %s^"}}]}",
         channelId,
         g_discordMatchMsgId,
         embedTitleEscaped,
@@ -3172,7 +3183,7 @@ stock send_match_embed_update(const status[]) {
         g_team2Name, team2Count, g_rosterAxisEscaped,
         scoresEscaped,
         statusEscaped,
-        g_matchId, g_serverHostnameEscaped);
+        g_matchId, g_matchMap, g_serverHostnameEscaped);
 
     // Send edit request
     new CURL:curl = curl_easy_init();
@@ -3217,11 +3228,11 @@ stock send_discord_disconnect_embed(const playerName[], const playerId[], team) 
 
     // Orange color for warning
     formatex(g_rosterEmbedPayload, charsmax(g_rosterEmbedPayload),
-        "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"⚠️ Player Disconnected^",^"color^":15105570,^"fields^":[{^"name^":^"Player^",^"value^":^"%s (%s)^",^"inline^":true},{^"name^":^"Team^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Status^",^"value^":^"Auto Tech Pause - Awaiting reconnect^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Server: %s^"}}]}",
+        "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"⚠️ Player Disconnected^",^"color^":15105570,^"fields^":[{^"name^":^"Player^",^"value^":^"%s (%s)^",^"inline^":true},{^"name^":^"Team^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Status^",^"value^":^"Auto Tech Pause - Awaiting reconnect^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Map: %s | Server: %s^"}}]}",
         g_discordChannelIdBuf,
         playerNameEscaped, playerId,
         teamNameEscaped,
-        g_matchId, g_serverHostnameEscaped);
+        g_matchId, g_matchMap, g_serverHostnameEscaped);
 
     send_discord_embed_raw(g_rosterEmbedPayload);
     log_ktp("event=DISCORD_DISCONNECT_EMBED player='%s' team=%d", playerName, team);
@@ -4164,8 +4175,8 @@ public pending_hud_tick() {
     set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 1.2, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "KTP %s Pending%s^n%s: %d/%d ready (tech:%ds)^n%s: %d/%d ready (tech:%ds)^nNeed %d/team - Type .rdy when ready.",
-        matchLabel, pauseInfo, g_teamName[1], alliesReady, alliesPlayers, techA, g_teamName[2], axisReady, axisPlayers, techX, need);
+        "KTP %s Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type .rdy when ready.",
+        matchLabel, pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need);
 }
 
 // Show pending HUD during pause (called from OnPausedHUDUpdate hook)
@@ -4202,8 +4213,8 @@ stock show_pending_hud_during_pause() {
     set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 0.1, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "KTP %s Pending%s^n%s: %d/%d ready (tech:%ds)^n%s: %d/%d ready (tech:%ds)^nNeed %d/team - Type .rdy when ready.",
-        matchLabel, pauseInfo, g_teamName[1], alliesReady, alliesPlayers, techA, g_teamName[2], axisReady, axisPlayers, techX, need);
+        "KTP %s Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type .rdy when ready.",
+        matchLabel, pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need);
 }
 
 // Show continuation HUD for 2nd half or OT pending (1.2s hold time for task tick)
@@ -4240,10 +4251,9 @@ stock show_continuation_pending_hud_internal(alliesReady, alliesPlayers, axisRea
                 g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
     }
 
-    // Ready status line
-    formatex(readyLine, charsmax(readyLine), "%s: %d/%d | %s: %d/%d (need %d)",
-            g_teamName[1], alliesReady, alliesPlayers,
-            g_teamName[2], axisReady, axisPlayers, need);
+    // Ready status line (use side names Allies/Axis, not team identity names)
+    formatex(readyLine, charsmax(readyLine), "Allies: %d/%d | Axis: %d/%d (need %d)",
+            alliesReady, alliesPlayers, axisReady, axisPlayers, need);
 
     // Yellow color for continuation pending, centered
     set_hudmessage(255, 255, 0, -1.0, 0.15, 0, 0.0, holdTime, 0.0, 0.0, -1);
@@ -5229,7 +5239,7 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
                 g_matchId, mode, savedMap, firstHalf1, firstHalf2, team1Name, team2Name);
 
         // Log KTP_MATCH_END for HLStatsX (partial data)
-        log_amx("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"abandoned_2nd_half^")",
+        log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"abandoned_2nd_half^")",
                 g_matchId, savedMap);
 
         // Update Discord embed if we have the message ID
@@ -5259,7 +5269,7 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
         log_ktp("event=MATCH_ABANDONED_DETECTED match_id=%s mode=%s map=%s reg=%d-%d ot_round=%d team1=%s team2=%s",
                 g_matchId, mode, savedMap, regScore1, regScore2, otRound, team1Name, team2Name);
 
-        log_amx("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"abandoned_ot%d^")",
+        log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"abandoned_ot%d^")",
                 g_matchId, savedMap, otRound);
 
         #if defined HAS_CURL
@@ -5361,7 +5371,7 @@ stock finalize_completed_second_half() {
             g_matchId, g_team1Name, team1Total, team2Total, g_team2Name,
             firstHalf1, firstHalf2, team1SecondHalf, team2SecondHalf);
 
-    log_amx("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^")", g_matchId, g_currentMap);
+    log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^")", g_matchId, g_currentMap);
 
     // HUD announcement
     set_hudmessage(0, 255, 0, -1.0, 0.3, 0, 0.0, 10.0, 0.5, 0.5, -1);
@@ -7532,7 +7542,7 @@ public cmd_ready(id) {
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
     new need = get_required_ready_count();
-    announce_all("%s [%s] is READY. %s %d/%d | %s %d/%d (need %d each).", name, sid, g_teamName[1], alliesReady, alliesPlayers, g_teamName[2], axisReady, axisPlayers, need);
+    announce_all("%s [%s] is READY. Allies %d/%d | Axis %d/%d (need %d each).", name, sid, alliesReady, alliesPlayers, axisReady, axisPlayers, need);
 
     // Debug log for match start condition
     log_ktp("event=READY_CHECK allies_ready=%d axis_ready=%d need=%d will_start=%d",
@@ -7549,6 +7559,13 @@ public cmd_ready(id) {
             server_cmd("mp_timelimit %d", g_12manDuration);
             server_exec();
             log_ktp("event=12MAN_TIMELIMIT duration=%d", g_12manDuration);
+        }
+
+        // Draft duration override - 15 minute halves (vs 20 min standard)
+        if (g_matchType == MATCH_TYPE_DRAFT) {
+            server_cmd("mp_timelimit 15");
+            server_exec();
+            log_ktp("event=DRAFT_TIMELIMIT duration=15");
         }
 
         // Initialize OT state for explicit OT match types (.ktpOT, .draftOT)
@@ -7718,7 +7735,7 @@ public cmd_ready(id) {
                 // Previous match was abandoned after 1st half - flush and close it
                 new flushed = dodx_flush_all_stats();
                 log_ktp("event=STATS_FLUSH type=match_abandoned players=%d match_id=%s", flushed, g_matchId);
-                log_amx("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (reason ^"abandoned^")", g_matchId, g_matchMap);
+                log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (reason ^"abandoned^")", g_matchId, g_matchMap);
                 dodx_set_match_id("");
                 log_ktp("event=MATCH_ABANDONED previous_map=%s new_map=%s match_id=%s", g_matchMap, map, g_matchId);
             }
@@ -7819,7 +7836,7 @@ public cmd_ready(id) {
 
             // 4. Log KTP_MATCH_START marker for HLStatsX parsing
             // Format: KTP_MATCH_START (matchid "xxx") (map "xxx") (half "x")
-            log_amx("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")", g_matchId, map, halfText);
+            log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")", g_matchId, map, halfText);
         }
         #endif
         // ===============================================================
@@ -7911,7 +7928,7 @@ public cmd_notready(id) {
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
     new need = get_required_ready_count();
-    announce_all("%s [%s] is NOT READY. %s %d/%d | %s %d/%d (need %d each).", name, sid, g_teamName[1], alliesReady, alliesPlayers, g_teamName[2], axisReady, axisPlayers, need);
+    announce_all("%s [%s] is NOT READY. Allies %d/%d | Axis %d/%d (need %d each).", name, sid, alliesReady, alliesPlayers, axisReady, axisPlayers, need);
     return PLUGIN_HANDLED;
 }
 
@@ -7926,8 +7943,8 @@ public cmd_status(id) {
     new need = get_required_ready_count();
 
     client_print(id, print_chat, "[KTP] ===== MATCH STATUS =====");
-    client_print(id, print_chat, "[KTP] %s: %d/%d ready (need %d)", g_teamName[1], alliesReady, alliesPlayers, need);
-    client_print(id, print_chat, "[KTP] %s: %d/%d ready (need %d)", g_teamName[2], axisReady, axisPlayers, need);
+    client_print(id, print_chat, "[KTP] Allies: %d/%d ready (need %d)", alliesReady, alliesPlayers, need);
+    client_print(id, print_chat, "[KTP] Axis: %d/%d ready (need %d)", axisReady, axisPlayers, need);
 
     // Show ready players
     // OPTIMIZED: Use index-based formatex instead of add() for 30-40% faster string building (Phase 5)

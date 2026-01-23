@@ -5,9 +5,9 @@
 | Metric | Value |
 |--------|-------|
 | **Project Duration** | October 2025 - Present |
-| **Total Repositories** | 14 |
-| **Estimated Development Hours** | 720-900 |
-| **Last Updated** | 2026-01-13 |
+| **Total Repositories** | 16 |
+| **Estimated Development Hours** | 750-950 |
+| **Last Updated** | 2026-01-22 |
 
 ---
 
@@ -37,7 +37,7 @@
 | Category | Count | Projects |
 |----------|-------|----------|
 | Core Engine (C++) | 4 | KTPReHLDS, KTPAMXX, KTPReAPI, KTPAmxxCurl |
-| Game Plugins (Pawn) | 5 | KTPMatchHandler, KTPCvarChecker, KTPFileChecker, KTPAdminAudit, KTPHLTVRecorder |
+| Game Plugins (Pawn) | 7 | KTPMatchHandler, KTPCvarChecker, KTPFileChecker, KTPAdminAudit, KTPHLTVRecorder, KTPGrenadeLoadout, KTPPracticeMode |
 | Backend Services | 3 | Discord Relay, KTPFileDistributor, KTPHLStatsX |
 | Discord Bots | 2 | KTPScoreBot-ScoreParser, KTPScoreBot-WeeklyMatches |
 
@@ -117,7 +117,7 @@ December represented the most intensive development period, pushing all major co
 
 January focused on production stability, fixing edge cases discovered during real matches, and adding administrative tools. The explicit overtime command system was a significant rework based on player feedback.
 
-### KTPMatchHandler v0.10.30-0.10.59
+### KTPMatchHandler v0.10.30-0.10.62
 
 | Version Range | Key Changes |
 |---------------|-------------|
@@ -141,19 +141,31 @@ January focused on production stability, fixing edge cases discovered during rea
 | v0.10.54 | Experimental pause overlay disable (`showpause 0`) |
 | **v0.10.55** | **`.cancel` during 2nd half pending**, Discord embed uniformity |
 | **v0.10.59** | **Simplified match IDs** (`{timestamp}-{shortHostname}`), hostname timing fix |
+| v0.10.60 | Expanded `.commands` output with admin/other plugin commands |
+| **v0.10.61** | **Ready team label fix** - shows "Allies"/"Axis" not team identity in 2nd half |
+| **v0.10.62** | **Draft match duration** - 15-minute halves (was 20 minutes) |
 
 ### Other Component Updates
 
 | Component | Version | Key Changes |
 |-----------|---------|-------------|
-| **KTPAMXX** | v2.6.2-2.6.3 | DODX score broadcasting native, changelevel hooks, ktp_discord.inc v1.2.0 |
+| **KTPAMXX** | v2.6.2-2.6.4 | DODX score broadcasting native, changelevel hooks, ktp_discord.inc v1.2.0, grenade ammo natives |
 | **KTPReAPI** | v5.29.0.362 | Map change interception hooks (`RH_PF_changelevel_I`, `RH_Host_Changelevel_f`) |
-| **KTPCvarChecker** | v7.8-7.10 | Debug cleanup, Discord toggle cvar, KTP emoji branding |
-| **KTPAdminAudit** | v2.6.0-2.7.1 | Map change auditing, RCON quit/exit blocking, changelevel countdown |
+| **KTPCvarChecker** | v7.8-7.11 | Debug cleanup, Discord toggle cvar, KTP emoji branding, notification grouping |
+| **KTPFileChecker** | v2.2-2.3 | Discord notification grouping, fc_checkmodels cvar |
+| **KTPAdminAudit** | v2.6.0-2.7.2 | Map change auditing, RCON quit/exit blocking, changelevel countdown, concurrent changemap fix |
 | **KTPAmxxCurl** | v1.2.0-ktp | Use-after-free fix, handle allocation fix, socket map cleanup |
 | **KTPFileDistributor** | v1.1.0 | Multi-channel Discord support |
+| **KTPHLStatsX** | v0.1.0-0.2.1 | Player tracking, stats aggregation, half detection regex fix |
 
-### KTPHLTVRecorder v1.0.4-1.2.2
+### New Plugins (January 2026)
+
+| Component | Version | Description |
+|-----------|---------|-------------|
+| **KTPGrenadeLoadout** | v1.0.0 | Custom grenade loadouts for practice mode - save/load positions |
+| **KTPPracticeMode** | v1.0.0 | Practice mode with unlimited ammo, grenade trails, and instant respawn |
+
+### KTPHLTVRecorder v1.0.4-1.3.0
 
 | Version | Changes |
 |---------|---------|
@@ -162,6 +174,7 @@ January focused on production stability, fixing edge cases discovered during rea
 | v1.2.0 | Match type support for all KTPMatchHandler types |
 | **v1.2.1** | **`.hltvrestart` admin command** with Discord audit notification |
 | **v1.2.2** | Orphaned recording cleanup on plugin startup/shutdown |
+| **v1.3.0** | **Per-half demo files** - each half gets `_h1`, `_h2`, `_ot1` suffix |
 
 - **KTPCvarChecker v7.8-7.9**: v7.8 cleaned up debug logging. v7.9 added Discord toggle cvar for enabling/disabling notifications.
 
@@ -435,4 +448,4 @@ The following is a granular breakdown of January 2026 changes, organized by feat
 
 ---
 
-*Last updated: 2026-01-13*
+*Last updated: 2026-01-22*

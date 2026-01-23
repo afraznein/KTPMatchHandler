@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.62] - 2026-01-22
+
+### Added
+- **Draft match duration** - `.draft` matches now use 15-minute halves instead of 20 minutes
+  - Sets `mp_timelimit 15` after map config execution (same pattern as 12man duration)
+
+---
+
+## [0.10.61] - 2026-01-20
+
+### Fixed
+- **Ready team label display** - `.ready` message showed wrong team label in 2nd half
+  - Previously displayed team identity name (e.g., "Axis") instead of current side name
+  - Example: Player on Allies side in 2nd half saw "Axis 1/6" instead of "Allies 1/6"
+  - Ready count labels now always show "Allies" / "Axis" (current side) instead of team identity names
+  - Affected commands: `.ready`, `.unready`, `.status`, and all pending HUD displays
+  - Reported by acetamino, January 20 2026
+
+### Changed
+- **Discord embed footers** - Now include map name in footer (Match: xxx | Map: xxx | Server: xxx)
+- **HLStatsX logging** - Changed `log_amx` to `log_message` for KTP_MATCH_START/END events
+
+---
+
 ## [0.10.60] - 2026-01-13
 
 ### Added

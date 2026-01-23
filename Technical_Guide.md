@@ -13,7 +13,7 @@
 
 **No Metamod Required** - Runs on Linux and Windows via ReHLDS Extension Mode
 
-**Last Updated:** 2026-01-13
+**Last Updated:** 2026-01-22
 
 [Architecture](#-six-layer-architecture) • [Components](#-component-documentation) • [Installation](#-complete-installation-guide) • [Repositories](#-github-repositories)
 
@@ -28,11 +28,13 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 6: Application Plugins (AMX Plugins)                                  │
-│  KTPMatchHandler v0.10.59 - Match workflow, pause, OT system, HLStatsX       │
-│  KTPHLTVRecorder v1.2.2   - Auto HLTV recording via HTTP API + FIFO pipes    │
-│  KTPCvarChecker v7.10     - Real-time cvar enforcement + Discord toggle      │
-│  KTPFileChecker v2.2      - File consistency validation + Discord            │
-│  KTPAdminAudit v2.7.1     - Menu-based kick/ban/changemap + audit            │
+│  KTPMatchHandler v0.10.62 - Match workflow, pause, OT system, HLStatsX       │
+│  KTPHLTVRecorder v1.3.0   - Auto HLTV recording via HTTP API + FIFO pipes    │
+│  KTPCvarChecker v7.11     - Real-time cvar enforcement + Discord grouping    │
+│  KTPFileChecker v2.3      - File consistency validation + Discord grouping   │
+│  KTPAdminAudit v2.7.2     - Menu-based kick/ban/changemap + audit            │
+│  KTPGrenadeLoadout v1.0.0 - Custom grenade loadouts for practice mode        │
+│  KTPPracticeMode v1.0.0   - Practice mode with unlimited ammo + trails       │
 │  stats_logging.sma        - DODX weaponstats with match ID support           │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ Uses AMXX Forwards & Natives
@@ -58,7 +60,7 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
                               ↓ Uses ReHLDS Hookchains
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 2: Scripting Platform (ReHLDS Extension)                              │
-│  KTPAMXX v2.6.3 - AMX Mod X fork with extension mode + HLStatsX integration  │
+│  KTPAMXX v2.6.4 - AMX Mod X fork with extension mode + HLStatsX integration  │
 │  Loads as ReHLDS extension, no Metamod required                              │
 │  Provides: client_cvar_changed forward, MF_RegModuleFrameFunc()              │
 │  New: ktp_drop_client, DODX score broadcasting, ktp_discord.inc v1.2.0       │
@@ -77,7 +79,7 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Cloud Services:                                                             │
 │  - Discord Relay v1.0.1     - HTTP proxy for Discord webhooks (Cloud Run)   │
-│  - KTPHLStatsX v0.1.0       - Modified HLStatsX daemon with match tracking   │
+│  - KTPHLStatsX v0.2.1       - Modified HLStatsX daemon with match tracking   │
 │                                                                              │
 │  VPS Services:                                                               │
 │  - KTPFileDistributor v1.1.0 - .NET 8 file sync daemon (SFTP distribution)  │
@@ -2367,6 +2369,6 @@ discord_channel_id_audit_competitive=5555555555555555555
 
 *Cross-platform: Windows + Linux*
 
-**Last Updated:** 2026-01-13
+**Last Updated:** 2026-01-22
 
 </div>
