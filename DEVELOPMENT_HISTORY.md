@@ -7,7 +7,7 @@
 | **Project Duration** | October 2025 - Present |
 | **Total Repositories** | 16 |
 | **Estimated Development Hours** | 750-950 |
-| **Last Updated** | 2026-01-22 |
+| **Last Updated** | 2026-01-24 |
 
 ---
 
@@ -117,7 +117,7 @@ December represented the most intensive development period, pushing all major co
 
 January focused on production stability, fixing edge cases discovered during real matches, and adding administrative tools. The explicit overtime command system was a significant rework based on player feedback.
 
-### KTPMatchHandler v0.10.30-0.10.62
+### KTPMatchHandler v0.10.30-0.10.65
 
 | Version Range | Key Changes |
 |---------------|-------------|
@@ -144,26 +144,31 @@ January focused on production stability, fixing edge cases discovered during rea
 | v0.10.60 | Expanded `.commands` output with admin/other plugin commands |
 | **v0.10.61** | **Ready team label fix** - shows "Allies"/"Axis" not team identity in 2nd half |
 | **v0.10.62** | **Draft match duration** - 15-minute halves (was 20 minutes) |
+| v0.10.63 | `.grenade` in `.commands` help, hostname caching fix (1s delay) |
+| v0.10.64 | Pause chat relay via `client_print` bypass |
+| **v0.10.65** | **Silent pause mode** - `ktp_silent_pause` cvar hides client overlay |
 
 ### Other Component Updates
 
 | Component | Version | Key Changes |
 |-----------|---------|-------------|
-| **KTPAMXX** | v2.6.2-2.6.4 | DODX score broadcasting native, changelevel hooks, ktp_discord.inc v1.2.0, grenade ammo natives |
-| **KTPReAPI** | v5.29.0.362 | Map change interception hooks (`RH_PF_changelevel_I`, `RH_Host_Changelevel_f`) |
-| **KTPCvarChecker** | v7.8-7.11 | Debug cleanup, Discord toggle cvar, KTP emoji branding, notification grouping |
-| **KTPFileChecker** | v2.2-2.3 | Discord notification grouping, fc_checkmodels cvar |
-| **KTPAdminAudit** | v2.6.0-2.7.2 | Map change auditing, RCON quit/exit blocking, changelevel countdown, concurrent changemap fix |
+| **KTP-ReHLDS** | v3.22.0.903 | Silent pause mode (`ktp_silent_pause`), hostname broadcast hooks |
+| **KTPAMXX** | v2.6.7 | `dod_damage_pre` forward, grenade natives, player manipulation natives, noclip |
+| **KTPReAPI** | v5.29.0.362-ktp | Map change interception hooks (`RH_PF_changelevel_I`, `RH_Host_Changelevel_f`) |
+| **KTPCvarChecker** | v7.11 | Debug cleanup, Discord toggle cvar, KTP emoji branding, notification grouping |
+| **KTPFileChecker** | v2.3 | Discord notification grouping, fc_checkmodels cvar |
+| **KTPAdminAudit** | v2.7.3 | Map change auditing, RCON quit/exit blocking, changemap countdown fix |
 | **KTPAmxxCurl** | v1.2.0-ktp | Use-after-free fix, handle allocation fix, socket map cleanup |
 | **KTPFileDistributor** | v1.1.0 | Multi-channel Discord support |
-| **KTPHLStatsX** | v0.1.0-0.2.1 | Player tracking, stats aggregation, half detection regex fix |
+| **KTPHLStatsX** | v0.2.2 | Player tracking, stats aggregation, half detection regex, debug logging |
 
 ### New Plugins (January 2026)
 
 | Component | Version | Description |
 |-----------|---------|-------------|
-| **KTPGrenadeLoadout** | v1.0.0 | Custom grenade loadouts for practice mode - save/load positions |
-| **KTPPracticeMode** | v1.0.0 | Practice mode with unlimited ammo, grenade trails, and instant respawn |
+| **KTPPracticeMode** | v1.3.0 | Practice mode with infinite grenades, HUD indicator, `.grenade` command |
+| **KTPGrenadeLoadout** | v1.0.3 | Custom grenade loadouts per class via INI config |
+| **KTPGrenadeDamage** | v1.0.2 | Grenade damage reduction by configurable percentage |
 
 ### KTPHLTVRecorder v1.0.4-1.3.0
 
@@ -191,6 +196,59 @@ January focused on production stability, fixing edge cases discovered during rea
 ## Detailed January 2026 Changelog
 
 The following is a granular breakdown of January 2026 changes, organized by feature/fix.
+
+---
+
+### January 24, 2026 - Silent Pause & Grenade Systems
+
+#### KTP-ReHLDS v3.22.0.903
+- **Silent Pause Mode** - New `ktp_silent_pause` cvar
+  - `0` (default): Normal behavior - clients see "PAUSED" overlay
+  - `1`: Silent mode - custom HUD works, no client overlay
+  - Used by KTPMatchHandler for professional pause experience
+
+#### KTPMatchHandler v0.10.63-0.10.65
+- **v0.10.65** - Silent pause integration - Sets `ktp_silent_pause 1` before pause
+- **v0.10.64** - Pause chat relay via `client_print` bypass
+- **v0.10.63** - `.grenade` in `.commands` help, hostname caching fix (1s delay)
+
+#### KTPAMXX v2.6.5-2.6.7
+- **v2.6.7** - `dod_damage_pre` forward, `dodx_give_grenade`, player manipulation natives
+- **v2.6.6** - `dodx_send_ammox` for client HUD ammo sync
+- **v2.6.5** - `dodx_set_user_noclip` for extension mode noclip
+
+#### KTPPracticeMode v1.3.0
+- **`.grenade` / `.nade` command** - Spawn grenade at feet
+- Simplified hostname handling (cvar change only, no broadcast)
+- Auto-exit on match start via `ktp_is_match_active()` native
+
+#### KTPGrenades
+- **KTPGrenadeLoadout v1.0.3** - Classes without grenades can now receive them
+- **KTPGrenadeDamage v1.0.2** - Production ready, debug logging removed
+
+#### KTPHLStatsX v0.2.2
+- Debug logging for KTP_MATCH event tracing
+- Removed dead code from EventHandlers.plib
+
+#### KTPAdminAudit v2.7.3
+- Fixed changemap countdown blocking itself
+
+---
+
+### January 20-22, 2026 - Draft Duration & Recording Fixes
+
+#### KTPMatchHandler v0.10.61-0.10.62
+- **v0.10.62** - Draft match duration reduced to 15 minutes (was 20)
+- **v0.10.61** - Ready team label fix in 2nd half
+
+#### KTPHLTVRecorder v1.3.0
+- Per-half demo files (`_h1`, `_h2`, `_ot1` suffixes)
+
+#### KTPAdminAudit v2.7.2
+- Concurrent changemap crash fix
+
+#### KTPCvarChecker v7.11 / KTPFileChecker v2.3
+- Discord notification grouping (reduces spam)
 
 ---
 
@@ -448,4 +506,4 @@ The following is a granular breakdown of January 2026 changes, organized by feat
 
 ---
 
-*Last updated: 2026-01-22*
+*Last updated: 2026-01-24*

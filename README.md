@@ -1045,7 +1045,7 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.10.59
+- **Current Version**: v0.10.65
 - **Status**: Stable (Score persistence and Discord embeds verified on VPS)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.6
 - **Last Updated**: January 2026
@@ -1057,7 +1057,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.59                     ║
+║             KTP MATCH HANDLER v0.10.65                     ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1098,4 +1098,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.59** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.65** - Making competitive Day of Defeat matches better, one pause at a time.

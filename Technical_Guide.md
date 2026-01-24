@@ -13,7 +13,7 @@
 
 **No Metamod Required** - Runs on Linux and Windows via ReHLDS Extension Mode
 
-**Last Updated:** 2026-01-22
+**Last Updated:** 2026-01-24
 
 [Architecture](#-six-layer-architecture) • [Components](#-component-documentation) • [Installation](#-complete-installation-guide) • [Repositories](#-github-repositories)
 
@@ -28,13 +28,14 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 6: Application Plugins (AMX Plugins)                                  │
-│  KTPMatchHandler v0.10.62 - Match workflow, pause, OT system, HLStatsX       │
+│  KTPMatchHandler v0.10.65 - Match workflow, pause, OT, silent pause, HLStatsX│
 │  KTPHLTVRecorder v1.3.0   - Auto HLTV recording via HTTP API + FIFO pipes    │
 │  KTPCvarChecker v7.11     - Real-time cvar enforcement + Discord grouping    │
 │  KTPFileChecker v2.3      - File consistency validation + Discord grouping   │
-│  KTPAdminAudit v2.7.2     - Menu-based kick/ban/changemap + audit            │
-│  KTPGrenadeLoadout v1.0.0 - Custom grenade loadouts for practice mode        │
-│  KTPPracticeMode v1.0.0   - Practice mode with unlimited ammo + trails       │
+│  KTPAdminAudit v2.7.3     - Menu-based kick/ban/changemap + audit            │
+│  KTPPracticeMode v1.3.0   - Practice mode with .grenade, noclip, HUD         │
+│  KTPGrenadeLoadout v1.0.3 - Custom grenade loadouts per class via INI        │
+│  KTPGrenadeDamage v1.0.2  - Grenade damage reduction by configurable %       │
 │  stats_logging.sma        - DODX weaponstats with match ID support           │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ Uses AMXX Forwards & Natives
@@ -42,7 +43,8 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 │  Layer 5: Game Stats Modules (AMXX Modules)                                  │
 │  DODX Module             - Day of Defeat stats, weapons, shot tracking       │
 │  New natives: dodx_flush_all_stats, dodx_reset_all_stats, dodx_set_match_id  │
-│  New forward: dod_stats_flush(id)                                            │
+│  New natives: dodx_give_grenade, dodx_set_user_noclip, dodx_send_ammox       │
+│  New forward: dod_stats_flush(id), dod_damage_pre(att,vic,dmg,wpn,hit,TA)    │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ Uses AMXX Module API
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -60,16 +62,18 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
                               ↓ Uses ReHLDS Hookchains
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 2: Scripting Platform (ReHLDS Extension)                              │
-│  KTPAMXX v2.6.4 - AMX Mod X fork with extension mode + HLStatsX integration  │
+│  KTPAMXX v2.6.7 - AMX Mod X fork with extension mode + HLStatsX integration  │
 │  Loads as ReHLDS extension, no Metamod required                              │
 │  Provides: client_cvar_changed forward, MF_RegModuleFrameFunc()              │
 │  New: ktp_drop_client, DODX score broadcasting, ktp_discord.inc v1.2.0       │
+│  New: dod_damage_pre forward, grenade natives, player manipulation natives   │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ ReHLDS Extension API
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  Layer 1: Game Engine (KTP-ReHLDS v3.20.0+)                                  │
+│  Layer 1: Game Engine (KTP-ReHLDS v3.22.0.903)                               │
 │  Custom ReHLDS fork with extension loader + KTP features                     │
 │  Provides: SV_UpdatePausedHUD hook, SV_Rcon hook, pfnClientCvarChanged       │
+│  New: ktp_silent_pause cvar, SV_BroadcastPauseState(), Host_Changelevel_f    │
 │  Blocked: kick, banid, removeid, addip, removeip (use .kick/.ban instead)    │
 │  Extension hooks: SV_ClientCommand, SV_InactivateClients, AlertMessage,      │
 │                   PF_TraceLine, PF_SetClientKeyValue, SV_PlayerRunPreThink   │
@@ -79,7 +83,7 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Cloud Services:                                                             │
 │  - Discord Relay v1.0.1     - HTTP proxy for Discord webhooks (Cloud Run)   │
-│  - KTPHLStatsX v0.2.1       - Modified HLStatsX daemon with match tracking   │
+│  - KTPHLStatsX v0.2.2       - Modified HLStatsX daemon with match tracking   │
 │                                                                              │
 │  VPS Services:                                                               │
 │  - KTPFileDistributor v1.1.0 - .NET 8 file sync daemon (SFTP distribution)  │
@@ -325,7 +329,7 @@ rehlds/
 ### Layer 1: KTP-ReHLDS (Engine)
 
 **Repository:** [github.com/afraznein/KTPReHLDS](https://github.com/afraznein/KTPReHLDS)
-**Version:** 3.20.0.896+
+**Version:** 3.22.0.903
 **License:** MIT
 
 <details>
@@ -359,7 +363,28 @@ Standard GoldSrc pause freezes everything. KTP-ReHLDS provides selective freeze:
 | Entity thinking                      | Commands (`/pause`, `/resume`)     |
 | Projectiles                          | Client message buffers             |
 
-#### Extension Mode Hookchains (v3.16.0-3.20.0)
+#### Silent Pause Mode (v3.22.0+)
+
+New cvar `ktp_silent_pause` controls client pause overlay:
+
+| Value | Behavior |
+|-------|----------|
+| `0` (default) | Normal - clients receive `svc_setpause`, see "PAUSED" overlay |
+| `1` | Silent - clients don't receive `svc_setpause`, custom HUD only |
+
+**Use Case:** KTPMatchHandler sets `ktp_silent_pause 1` before pausing, enabling custom MM:SS countdown HUD without the blocky client overlay.
+
+```cpp
+// KTP-ReHLDS broadcasts pause state respecting cvar
+void SV_BroadcastPauseState(qboolean paused) {
+    if (ktp_silent_pause.value != 0.0f) {
+        return;  // Skip broadcast - clients won't see overlay
+    }
+    // Normal broadcast to all connected clients
+}
+```
+
+#### Extension Mode Hookchains (v3.16.0-3.22.0)
 
 | Hook                       | Purpose                              | Used By              |
 |----------------------------|--------------------------------------|----------------------|
@@ -373,6 +398,7 @@ Standard GoldSrc pause freezes everything. KTP-ReHLDS provides selective freeze:
 | `PF_SetClientKeyValue`     | Client key/value changes             | DODX stats           |
 | `SV_PlayerRunPreThink`     | Player PreThink loop                 | DODX shot tracking   |
 | `SV_Rcon` (v3.20.0+)       | RCON command interception            | KTPAdminAudit        |
+| `Host_Changelevel_f` (v3.20.0+) | Console changelevel command     | KTPMatchHandler OT   |
 
 #### Custom Hook: `SV_UpdatePausedHUD`
 
@@ -2369,6 +2395,6 @@ discord_channel_id_audit_competitive=5555555555555555555
 
 *Cross-platform: Windows + Linux*
 
-**Last Updated:** 2026-01-22
+**Last Updated:** 2026-01-24
 
 </div>
