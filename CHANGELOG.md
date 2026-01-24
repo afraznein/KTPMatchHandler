@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.65] - 2026-01-24
+
+### Added
+- **Silent pause mode integration** - Uses KTP-ReHLDS `ktp_silent_pause` cvar
+  - Sets `ktp_silent_pause 1` before pausing (skips `svc_setpause` to clients)
+  - Sets `ktp_silent_pause 0` after unpausing (ready for next pause)
+  - Prevents blocky "PAUSED" overlay while custom HUD countdown still works
+  - Requires KTP-ReHLDS 3.22.0+
+
+### Removed
+- **Pause overlay restore** - No longer calls `showpause 1` on unpause
+  - Silent pause mode eliminates need for overlay management
+  - Cleaner pause experience with only custom HUD countdown
+
+### Fixed
+- **Debug code removed** - Re-enabled match live requirement for `.tech` pause
+  - Tech budget check restored
+  - Match `.go` confirmation requirement restored
+
+---
+
+## [0.10.64] - 2026-01-24
+
+### Added
+- **Pause chat relay** - Chat now works during pause via `client_print` bypass
+  - Normal `say` broadcast is blocked by engine during pause
+  - This relays chat using `client_print` which bypasses the block (same mechanism as HUD updates)
+  - Team chat (`say_team`) relays only to teammates
+  - Commands (starting with `.` or `/`) still processed normally
+  - Registered after specific command handlers to avoid conflicts
+
+### Changed
+- **DEBUG: `.tech` match requirement removed** - Temporarily disabled for testing pause chat relay
+  - `.tech` can now be called without a live match (for debugging only)
+  - Re-enable the check before production deployment
+
+---
+
+## [0.10.63] - 2026-01-23
+
+### Added
+- **`.grenade` in `.commands`** - Practice mode commands now listed in help output
+
+### Fixed
+- **Hostname caching on startup** - Fixed hostname showing "Half-Life" on first load
+  - Server configs run AFTER `plugin_cfg`, so hostname cvar wasn't set yet
+  - Now uses delayed task (1 second) to refresh hostname after configs load
+
+---
+
 ## [0.10.62] - 2026-01-22
 
 ### Added

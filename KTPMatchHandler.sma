@@ -590,7 +590,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.62"
+#define PLUGIN_VERSION "0.10.65"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -3585,6 +3585,10 @@ stock ktp_pause_now(const reason[]) {
     log_ktp("event=PAUSE_ATTEMPT reason=%s paused=%d", reason, g_isPaused);
 
     if (!g_isPaused) {
+        // KTP: Enable silent pause mode before pausing
+        set_cvar_num("ktp_silent_pause", 1);
+        client_cmd(0, "showpause 0");
+
         rh_set_server_pause(true);
         g_isPaused = true;
         log_ktp("event=PAUSE_TOGGLE reason='%s'", reason);
@@ -3600,8 +3604,8 @@ stock ktp_unpause_now(const reason[]) {
         rh_set_server_pause(false);
         g_isPaused = false;
 
-        // Restore pause overlay on clients (experimental)
-        client_cmd(0, "showpause 1");
+        // KTP: Disable silent pause mode (ready for next pause)
+        set_cvar_num("ktp_silent_pause", 0);
 
         log_ktp("event=UNPAUSE_TOGGLE reason='%s'", reason);
         client_print(0, print_chat, "[KTP] Game unpaused (reason: %s)", reason);
@@ -3679,12 +3683,15 @@ stock execute_pause(const who[], const reason[]) {
     g_pauseStartTime = get_systime();
     g_pauseExtensions = 0;
 
+    // KTP: Enable silent pause mode (skips svc_setpause to clients)
+    // This prevents the blocky "PAUSED" overlay while our custom HUD still works
+    set_cvar_num("ktp_silent_pause", 1);
+
     // Pause using ReAPI native
     rh_set_server_pause(true);
     g_isPaused = true;
 
-    // Try to disable pause overlay on clients (experimental)
-    // showpause 0 hides the pause graphic that blocks the screen
+    // Also tell clients to hide pause overlay (belt and suspenders)
     client_cmd(0, "showpause 0");
 
     // Set pause duration
@@ -4600,6 +4607,12 @@ public plugin_init() {
     // read CVARs to apply live values
     ktp_sync_config_from_cvars();
 
+    // Pause chat relay - catches all say/say_team to relay via client_print during pause
+    // Must be registered AFTER specific command handlers (like say .pause)
+    // Normal chat is blocked during pause, but client_print works (same as HUD)
+    register_clcmd("say", "handle_pause_chat_relay");
+    register_clcmd("say_team", "handle_pause_chat_relay_team");
+
     reset_captains();
 }
 
@@ -4629,6 +4642,17 @@ public plugin_cfg() {
 
     // Check for persisted match context (2nd half continuation)
     restore_match_context_from_localinfo();
+
+    // Schedule delayed hostname refresh - server configs run AFTER plugin_cfg
+    // so we need to wait for hostname cvar to be set by dodserver.cfg
+    set_task(1.0, "task_refresh_hostname_after_config");
+}
+
+// Delayed hostname refresh after server configs have run
+public task_refresh_hostname_after_config() {
+    get_cvar_string("hostname", g_serverHostname, charsmax(g_serverHostname));
+    extract_base_hostname(g_serverHostname, g_baseHostname, charsmax(g_baseHostname));
+    log_ktp("event=HOSTNAME_CACHED_DELAYED full='%s' base='%s'", g_serverHostname, g_baseHostname);
 }
 
 // Restore match context from localinfo if we're continuing a match (2nd half or OT)
@@ -5753,6 +5777,61 @@ stock handle_resume_request(id, const name[], const sid[], const team[], teamId)
     return PLUGIN_HANDLED;
 }
 
+// ========== PAUSE CHAT RELAY ==========
+// During pause, normal chat broadcast is blocked by the engine.
+// This relays chat via client_print which bypasses the block (same mechanism as HUD).
+
+public handle_pause_chat_relay(id) {
+    return relay_pause_chat(id, false);
+}
+
+public handle_pause_chat_relay_team(id) {
+    return relay_pause_chat(id, true);
+}
+
+stock relay_pause_chat(id, bool:teamOnly) {
+    // Only relay during pause
+    if (!g_isPaused)
+        return PLUGIN_CONTINUE;
+
+    // Get the message
+    new msg[192];
+    read_args(msg, charsmax(msg));
+    remove_quotes(msg);
+
+    // Skip empty messages
+    if (!msg[0])
+        return PLUGIN_CONTINUE;
+
+    // Skip commands (let specific handlers process them)
+    if (msg[0] == '.' || msg[0] == '/')
+        return PLUGIN_CONTINUE;
+
+    // Get player info
+    new name[32];
+    get_user_name(id, name, charsmax(name));
+    new playerTeam = get_user_team(id);
+
+    // Relay to appropriate players
+    if (teamOnly) {
+        // Team chat - only to same team
+        new players[32], num;
+        get_players(players, num, "ch");  // connected, not HLTV
+        for (new i = 0; i < num; i++) {
+            new target = players[i];
+            if (get_user_team(target) == playerTeam) {
+                client_print(target, print_chat, "(TEAM) %s: %s", name, msg);
+            }
+        }
+    } else {
+        // All chat - to everyone
+        client_print(0, print_chat, "%s: %s", name, msg);
+    }
+
+    // Block original say (which would fail anyway during pause)
+    return PLUGIN_HANDLED;
+}
+
 // ========== PAUSE/RESUME COMMANDS ==========
 
 // ===== Chat pause/resume with ownership & confirm =====
@@ -6341,6 +6420,10 @@ public cmd_commands(id) {
     // Other KTP Plugin Commands
     client_print(id, print_console, "");
     client_print(id, print_console, "--- Other KTP Plugin Commands ---");
+    client_print(id, print_console, "  .practice / .prac      - Enter practice mode (KTPPracticeMode)");
+    client_print(id, print_console, "  .endpractice / .endprac - Exit practice mode");
+    client_print(id, print_console, "  .noclip / .nc          - Toggle noclip (practice mode only)");
+    client_print(id, print_console, "  .grenade / .nade       - Spawn a grenade (practice mode only)");
     client_print(id, print_console, "  .kick            - Admin kick menu (KTPAdminAudit)");
     client_print(id, print_console, "  .ban             - Admin ban menu (KTPAdminAudit)");
     client_print(id, print_console, "  .restart         - Server restart (KTPAdminAudit)");
