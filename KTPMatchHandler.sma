@@ -590,7 +590,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.65"
+#define PLUGIN_VERSION "0.10.66"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -885,6 +885,12 @@ new g_prePauseInitiatorId = 0;              // Player ID of pause initiator (for
 new g_taskPrePauseId = 55610;               // Task ID for pre-pause countdown
 new g_taskScoreSaveId = 55612;              // Task ID for periodic score saves to localinfo
 new g_taskScoreRestoreId = 55613;           // Task ID for delayed score restoration after round restart
+new g_taskMatchStartLogId = 55614;          // Task ID for delayed KTP_MATCH_START logging to HLStatsX
+
+// Delayed match start log data (for HLStatsX UDP timing issue)
+new g_delayedMatchId[64];                   // Match ID for delayed log
+new g_delayedMap[64];                       // Map name for delayed log
+new g_delayedHalf[8];                       // Half text for delayed log
 
 // ================= Utilities =================
 stock log_ktp(const fmt[], any:...) {
@@ -1645,6 +1651,24 @@ stock schedule_score_restoration() {
     // If we restore during the countdown, the game resets scores when round actually restarts
     set_task(12.0, "task_delayed_score_restore", g_taskScoreRestoreId);
     log_ktp("event=SCORE_RESTORE_SCHEDULED delay=12s");
+}
+
+// Delayed KTP_MATCH_START logging for HLStatsX
+// The UDP log isn't sent correctly when log_message() is called immediately after dodx_flush_all_stats()
+// due to engine state timing issues. Adding a small delay allows the engine to stabilize.
+public task_delayed_match_start_log() {
+    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")", g_delayedMatchId, g_delayedMap, g_delayedHalf);
+    log_ktp("event=DELAYED_MATCH_START_LOG matchid=%s map=%s half=%s", g_delayedMatchId, g_delayedMap, g_delayedHalf);
+}
+
+// Schedule delayed KTP_MATCH_START log (called after stats flush)
+stock schedule_match_start_log(const matchId[], const map[], const halfText[]) {
+    copy(g_delayedMatchId, charsmax(g_delayedMatchId), matchId);
+    copy(g_delayedMap, charsmax(g_delayedMap), map);
+    copy(g_delayedHalf, charsmax(g_delayedHalf), halfText);
+    safe_remove_task(g_taskMatchStartLogId);
+    // 0.1s delay allows engine to stabilize after stats flush before UDP log send
+    set_task(0.1, "task_delayed_match_start_log", g_taskMatchStartLogId);
 }
 
 stock announce_all(const fmt[], any:...) {
@@ -7917,9 +7941,11 @@ public cmd_ready(id) {
             // 3. Set match context for future stats logging
             dodx_set_match_id(g_matchId);
 
-            // 4. Log KTP_MATCH_START marker for HLStatsX parsing
+            // 4. Log KTP_MATCH_START marker for HLStatsX parsing (delayed for UDP timing)
             // Format: KTP_MATCH_START (matchid "xxx") (map "xxx") (half "x")
-            log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")", g_matchId, map, halfText);
+            // Note: Uses delayed task because log_message() UDP send fails when called
+            // immediately after dodx_flush_all_stats() due to engine state timing issues
+            schedule_match_start_log(g_matchId, map, halfText);
         }
         #endif
         // ===============================================================

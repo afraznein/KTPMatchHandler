@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.65** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.66** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -612,6 +612,15 @@ static bool:warned_10sec = false;
 
 ## 📝 Changelog
 
+### v0.10.66 (2026-01-27) - HLStatsX First Half Stats Fix
+
+**Fixed:**
+- 🔧 **HLStatsX first half stats not recording** - KTP_MATCH_START log now uses delayed task
+  - `log_message()` UDP send fails when called immediately after `dodx_flush_all_stats()`
+  - Added 0.1s delay via `set_task()` to allow engine to stabilize before sending
+
+---
+
 ### v0.10.59 (2026-01-13) - Hostname Timing Fix & Simplified Match IDs
 
 **Fixed:**
@@ -1045,7 +1054,7 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.10.65
+- **Current Version**: v0.10.66
 - **Status**: Stable (Score persistence and Discord embeds verified on VPS)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.6
 - **Last Updated**: January 2026
@@ -1057,7 +1066,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.65                     ║
+║             KTP MATCH HANDLER v0.10.66                     ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1098,4 +1107,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.65** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.66** - Making competitive Day of Defeat matches better, one pause at a time.

@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.66] - 2026-01-27
+
+### Fixed
+- **HLStatsX first half stats not recording** - KTP_MATCH_START log now uses delayed task
+  - `log_message()` UDP send fails when called immediately after `dodx_flush_all_stats()`
+  - Engine state/timing issue prevents reliable UDP transmission in that context
+  - Added 0.1s delay via `set_task()` which allows engine to stabilize before sending
+  - This ensures HLStatsX daemon receives KTP_MATCH_START for both halves
+
+---
+
 ## [0.10.65] - 2026-01-24
 
 ### Added
