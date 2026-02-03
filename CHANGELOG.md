@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.67] - 2026-02-02
+
+### Fixed
+- **HLStatsX stats timing** - Reduced KTP_MATCH_START delay from 100ms to 10ms
+  - Original 100ms delay caused 1-2 kills at match start to be missed
+  - 10ms still provides buffer for engine stability while reducing lost kills window
+- **Abandoned match stats loss** - Added `dodx_flush_all_stats()` before KTP_MATCH_END
+  - Previously, abandoned matches (2nd half, OT) logged KTP_MATCH_END without flushing
+  - Pending stats for abandoned matches are now properly captured
+  - Affects: `finalize_abandoned_match()`, `finalize_completed_second_half()`
+
+### Added
+- **Enhanced changelevel debug logging** - Better diagnostics for map transition issues
+  - Added `CHANGELEVEL_HOOK_FIRED` log for every hook call (confirms hook is firing)
+  - Added `CHANGELEVEL_PASSTHROUGH` log when returning early due to !g_matchLive
+  - Logs all relevant state (matchLive, half, handled, inOT) to diagnose failures
+  - Logs all state (g_matchMap, g_currentMap, map) during first half end
+  - Fallback: If g_matchMap is empty, uses g_currentMap to prevent redirect failure
+  - Added pre-redirect logging to track SetHookChainArg behavior
+  - Investigation on ATL3 VPS (01/31) showed hook not firing - this will help diagnose
+
+---
+
 ## [0.10.66] - 2026-01-27
 
 ### Fixed

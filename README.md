@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.66** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.67** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -612,6 +612,20 @@ static bool:warned_10sec = false;
 
 ## 📝 Changelog
 
+### v0.10.67 (2026-02-02) - HLStatsX Stats Accuracy & Changelevel Diagnostics
+
+**Fixed:**
+- 🔧 **HLStatsX stats timing** - Reduced KTP_MATCH_START delay from 100ms to 10ms
+  - Original delay caused 1-2 kills at match start to be missed by HLStatsX
+- 🔧 **Abandoned match stats loss** - Added `dodx_flush_all_stats()` before KTP_MATCH_END
+  - Previously abandoned matches didn't flush pending stats
+
+**Added:**
+- ✅ **Enhanced changelevel debug logging** - Diagnostics for map transition issues
+  - `CHANGELEVEL_HOOK_FIRED` and `CHANGELEVEL_PASSTHROUGH` logs for troubleshooting
+
+---
+
 ### v0.10.66 (2026-01-27) - HLStatsX First Half Stats Fix
 
 **Fixed:**
@@ -1054,10 +1068,10 @@ For support and questions, please open an issue on GitHub.
 
 ## 🚦 Status
 
-- **Current Version**: v0.10.66
+- **Current Version**: v0.10.67
 - **Status**: Stable (Score persistence and Discord embeds verified on VPS)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.6
-- **Last Updated**: January 2026
+- **Last Updated**: February 2026
 - **Platforms**: Day of Defeat 1.3
 
 ---
@@ -1066,7 +1080,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.66                     ║
+║             KTP MATCH HANDLER v0.10.67                     ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1107,4 +1121,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.66** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.67** - Making competitive Day of Defeat matches better, one pause at a time.

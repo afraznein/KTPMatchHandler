@@ -590,7 +590,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.66"
+#define PLUGIN_VERSION "0.10.67"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -994,8 +994,14 @@ new g_changeMapTaskId = 0;              // Task ID for countdown
 const CHANGELEVEL_COUNTDOWN_SECS = 5;   // Seconds to wait before map change
 
 public OnChangeLevel(const map[], const landmark[]) {
+    // DIAGNOSTIC: Log every hook call to confirm hook is firing
+    // This helps diagnose issues where the hook may not be firing at all
+    log_ktp("event=CHANGELEVEL_HOOK_FIRED map=%s matchLive=%d half=%d handled=%d inOT=%d",
+            map, g_matchLive, g_currentHalf, g_changeLevelHandled, g_inOvertime);
+
     // If we're not in a live match, allow the changelevel
     if (!g_matchLive) {
+        log_ktp("event=CHANGELEVEL_PASSTHROUGH reason=not_live map=%s", map);
         return HC_CONTINUE;
     }
 
@@ -1011,9 +1017,20 @@ public OnChangeLevel(const map[], const landmark[]) {
     // ========== FIRST HALF END ==========
     // Save state and redirect changelevel to same map for 2nd half
     if (g_currentHalf == 1 && !g_inOvertime) {
-        log_ktp("event=CHANGELEVEL_FIRST_HALF map=%s matchId=%s redirect_to=%s", map, g_matchId, g_matchMap);
+        // Debug: Log all relevant state before redirect
+        log_ktp("event=CHANGELEVEL_FIRST_HALF original_map=%s matchId=%s g_matchMap=%s g_currentMap=%s",
+                map, g_matchId, g_matchMap, g_currentMap);
+
+        // Validate g_matchMap before redirect
+        if (!g_matchMap[0]) {
+            log_ktp("event=CHANGELEVEL_ERROR reason=g_matchMap_empty falling_back_to=%s", g_currentMap);
+            copy(g_matchMap, charsmax(g_matchMap), g_currentMap);
+        }
+
         handle_first_half_end();
+
         // Redirect changelevel to same map for 2nd half (all match types stay on same map)
+        log_ktp("event=CHANGELEVEL_REDIRECT before_redirect=%s target=%s", map, g_matchMap);
         SetHookChainArg(1, ATYPE_STRING, g_matchMap);
         // NOTE: Do NOT reset g_changeLevelHandled - it prevents recursion if hook fires again
         // The guard will naturally reset on plugin reinit when map loads
@@ -1667,8 +1684,9 @@ stock schedule_match_start_log(const matchId[], const map[], const halfText[]) {
     copy(g_delayedMap, charsmax(g_delayedMap), map);
     copy(g_delayedHalf, charsmax(g_delayedHalf), halfText);
     safe_remove_task(g_taskMatchStartLogId);
-    // 0.1s delay allows engine to stabilize after stats flush before UDP log send
-    set_task(0.1, "task_delayed_match_start_log", g_taskMatchStartLogId);
+    // 0.01s delay allows engine to stabilize after stats flush before UDP log send
+    // Reduced from 0.1s (2026-02-02) - original delay caused ~100ms of kills to be missed
+    set_task(0.01, "task_delayed_match_start_log", g_taskMatchStartLogId);
 }
 
 stock announce_all(const fmt[], any:...) {
@@ -5286,6 +5304,14 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
         log_ktp("event=MATCH_ABANDONED_DETECTED match_id=%s mode=%s map=%s half1=%d-%d team1=%s team2=%s",
                 g_matchId, mode, savedMap, firstHalf1, firstHalf2, team1Name, team2Name);
 
+        // Flush stats before KTP_MATCH_END to ensure all kills are captured
+        #if defined HAS_DODX
+        if (g_hasDodxStatsNatives) {
+            new flushed = dodx_flush_all_stats();
+            log_ktp("event=STATS_FLUSH type=abandoned_2nd_half players=%d match_id=%s", flushed, g_matchId);
+        }
+        #endif
+
         // Log KTP_MATCH_END for HLStatsX (partial data)
         log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"abandoned_2nd_half^")",
                 g_matchId, savedMap);
@@ -5316,6 +5342,14 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
 
         log_ktp("event=MATCH_ABANDONED_DETECTED match_id=%s mode=%s map=%s reg=%d-%d ot_round=%d team1=%s team2=%s",
                 g_matchId, mode, savedMap, regScore1, regScore2, otRound, team1Name, team2Name);
+
+        // Flush stats before KTP_MATCH_END to ensure all kills are captured
+        #if defined HAS_DODX
+        if (g_hasDodxStatsNatives) {
+            new flushed = dodx_flush_all_stats();
+            log_ktp("event=STATS_FLUSH type=abandoned_ot players=%d match_id=%s", flushed, g_matchId);
+        }
+        #endif
 
         log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"abandoned_ot%d^")",
                 g_matchId, savedMap, otRound);
@@ -5413,6 +5447,14 @@ stock finalize_completed_second_half() {
     } else {
         formatex(winner, charsmax(winner), "%s wins!", g_team2Name);
     }
+
+    // Flush stats before KTP_MATCH_END to ensure all kills are captured
+    #if defined HAS_DODX
+    if (g_hasDodxStatsNatives) {
+        new flushed = dodx_flush_all_stats();
+        log_ktp("event=STATS_FLUSH type=finalize_2nd_half players=%d match_id=%s", flushed, g_matchId);
+    }
+    #endif
 
     // Log match end
     log_ktp("event=MATCH_END match_id=%s final_score=%s_%d-%d_%s half1=%d-%d half2=%d-%d",
