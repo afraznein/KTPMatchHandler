@@ -1,567 +1,29 @@
-/* KTP Match Handler v0.10.62
+/* KTP Match Handler
  * Comprehensive match management system with ReAPI pause integration
  *
  * AUTHOR: Nein_
- * VERSION: 0.10.62
- * DATE: 2026-01-22
  *
  * ========== MAJOR FEATURES ==========
+ * - Match workflow: Pre-Start -> Pending -> Ready-up -> LIVE
+ * - Match types: Competitive (.ktp), Scrim, 12-man, Draft with distinct configs
+ * - Half tracking with context persistence across map changes
+ * - Overtime system via .ktpOT/.draftOT commands
  * - ReAPI Pause Integration: Direct pause control via rh_set_server_pause()
- * - Timed Pauses: 5-minute default with MM:SS countdown display
- * - Pause Extensions: /extend adds 2 minutes (max 2 extensions)
- * - Pre-Pause Countdown: Configurable warning before pause activates
- * - Auto-Unpause: Automatic when timer expires (KTP-ReHLDS) or on-command fallback
- * - Disconnect Auto-Pause: 30-second countdown (cancellable via .nodc)
- * - Technical Pauses: Budget-based system with time tracking per team
- * - Discord Integration: Real-time match notifications via webhook relay
- * - Comprehensive Logging: AMX log, KTP match log, and Discord
- *
- * ========== MATCH SYSTEM ==========
- * - Pre-Start: /start or /startmatch -> requires one /confirm from each team
- * - Pending: /ready (alias /ktp) + /notready until both teams reach ktp_ready_required
- * - Live: Each team gets ONE tactical pause per half
- * - Tech Pauses: Budget-based (default 300s per team per half)
- *
- * ========== PAUSE CONTROLS ==========
- * - .pause       - Initiate tactical pause (countdown before activation)
- * - .tech        - Technical pause (uses team budget)
- * - .resume      - Request unpause (owner team)
- * - .go          - Confirm unpause (other team, if required)
- * - .ext         - Extend pause by 2 minutes (max 2 times)
- * - .nodc        - Cancel disconnect auto-pause
+ * - Technical pauses with per-team budget tracking
+ * - Real-time HUD updates during pause (KTP-ReHLDS + KTP-ReAPI)
+ * - Disconnect auto-pause with 30-second cancellable countdown
+ * - Discord integration: Real-time match notifications via webhook relay
+ * - HLStatsX integration: Stats separation, match context, auto-flushing
+ * - HLTV recording integration via KTPHLTVRecorder forwards
+ * - Comprehensive logging: AMX log + Discord webhooks
  *
  * ========== REQUIREMENTS ==========
- * - AMX ModX 1.9+ (minimum)
- * - ReAPI module (recommended for full features)
- * - KTP-ReHLDS (recommended for pause HUD updates and chat)
+ * - KTPAMXX 2.6.2+ with DODX module
+ * - KTP-ReAPI 5.29.0.362-ktp+ (for RH_SV_UpdatePausedHUD hook)
+ * - KTP-ReHLDS 3.22.0+ (for pause HUD and ktp_silent_pause)
  * - cURL extension (optional, for Discord notifications)
  *
- * ========== PLATFORM COMPATIBILITY ==========
- * - Base HLDS + AMX: Core features work (requires pausable 1)
- * - ReHLDS + AMX: Same as base + better pause support (requires pausable 1)
- * - KTP-ReHLDS + ReAPI: Full feature set with pausable 0 support
- *
- * ========== SERVER CONFIGURATION ==========
- * Recommended (KTP-ReHLDS + ReAPI):
- *   pausable 0  // Block engine pause, use ReAPI pause only
- *
- * Fallback (base servers without ReAPI):
- *   pausable 1  // Required for engine pause command
- *
- * ========== CVARS ==========
- *   ktp_pause_countdown "5"              - Unpause countdown seconds
- *   ktp_pause_duration "300"             - Pause duration (5 minutes)
- *   ktp_pause_extension "120"            - Extension time (2 minutes)
- *   ktp_pause_max_extensions "2"         - Max extensions allowed
- *   ktp_prepause_seconds "5"             - Pre-pause countdown (live match)
- *   ktp_prematch_pause_seconds "5"       - Pre-pause countdown (pre-match)
- *   ktp_pause_hud "1"                    - Enable pause HUD
- *   (ktp_match_logfile removed - now uses standard AMXX log with [KTP] prefix)
- *   ktp_ready_required "6"               - Players needed to ready up
- *   ktp_cfg_basepath "configs/"          - Config file base path
- *   ktp_maps_file "<configsdir>/ktp_maps.ini"  - Maps file (auto-detected path)
- *   ktp_unpause_autorequest_secs "300"   - Auto-request timeout
- *   ktp_tech_budget_seconds "300"        - Tech pause budget per team
- *   ktp_discord_ini "<configsdir>/discord.ini" - Discord config (auto-detected path)
- *
- * ========== CHANGELOG ==========
- * v0.10.62 (2026-01-22) - Draft Match Duration
- *   + ADDED: Draft matches (.draft) now use 15-minute halves instead of 20 minutes
- *   * TECHNICAL: Sets mp_timelimit 15 after map config exec (same pattern as 12man duration)
- *
- * v0.10.61 (2026-01-20) - Ready Team Label Fix
- *   * FIXED: .ready message showed wrong team label in 2nd half (displayed team identity name instead of side name)
- *   * EXAMPLE: Player on Allies side in 2nd half saw "Axis 1/6" instead of "Allies 1/6"
- *   * CHANGED: Ready count labels now always show "Allies" / "Axis" (current side) instead of team identity names
- *   * AFFECTED: .ready, .unready, .status, and all pending HUD displays
- *   * REPORTED: acetamino, January 20 2026
- *
- * v0.10.60 (2026-01-13) - Commands List Update
- *   + ADDED: .restarthalf and .hltvrestart to .commands output (Admin Commands section)
- *   + ADDED: "Other KTP Plugin Commands" section showing .kick, .ban, .restart, .quit
- *
- * v0.10.59 (2026-01-13) - Hostname Timing Fix + Simplified Match IDs
- *   * FIXED: Demo filenames showing "Half_Life" instead of server hostname
- *   * ROOT CAUSE: Hostname cached in plugin_cfg() before dodserver.cfg executed
- *   * FIX: Re-fetch hostname cvar in generate_match_id() to ensure current value
- *   * CHANGED: Match ID format simplified for shorter demo filenames
- *     - Old: KTP-{timestamp}-{map}-{hostname} (e.g., KTP-1768174986-dod_armory-KTP_Atlanta_2)
- *     - New: {timestamp}-{shortHostname} (e.g., 1768174986-ATL2)
- *   + ADDED: get_short_hostname_code() - converts hostname to city code (ATL, DAL, etc.)
- *   * NOTE: HLTV appends map automatically, so removed from matchId to avoid duplication
- *
- * v0.10.55 (2026-01-13) - Cancel Command Expansion & Discord Embed Uniformity
- *   + ADDED: .cancel now works during second half pending (immediate cancel, no confirmation)
- *   + ADDED: Clears all match state: scores, team names, rosters, localinfo persistence
- *   + ADDED: Uniform Discord embed format for status notifications (matches ktp_discord.inc)
- *   + ADDED: send_discord_simple_embed() function with color-coded embeds
- *   + ADDED: Discord color constants (RED, ORANGE, GREEN, BLUE)
- *   * CHANGED: .cancel during live match now gives helpful message pointing to .forcereset
- *   * CHANGED: Match start commands during live match point to .forcereset instead of .cancel
- *   * CHANGED: All cancel/reset Discord notifications now use rich embeds with server footer
- *
- * v0.10.54 (2026-01-12) - Pause Overlay Disable (Experimental)
- *   + ADDED: Sends "showpause 0" to clients when pause activates (hides pause screen overlay)
- *   + ADDED: Sends "showpause 1" to clients when unpause (restores default)
- *   * NOTE: Experimental - client may reject command if protected
- *
- * v0.10.53 (2026-01-12) - Auto-DC and Password Tuning
- *   * CHANGED: Auto-DC countdown increased from 10 to 30 seconds
- *   * CHANGED: Auto-DC only triggers for competitive modes (.ktp, .ktpOT, .draft, .draftOT)
- *   * CHANGED: .draftOT no longer requires password (only .ktp and .ktpOT require password)
- *   + ADDED: is_auto_dc_enabled() helper for match-type-based auto-DC filtering
- *   * NOTE: Scrims and 12mans no longer trigger auto-DC pauses on disconnect
- *
- * v0.10.52 (2026-01-12) - Changelevel Guard Flag Fix
- *   * FIXED: First half end processing skipped due to stale g_changeLevelHandled flag
- *   * ROOT CAUSE: Flag stuck when admin .changemap blocked changelevel but hook chain still set flag
- *   * FIX: Reset g_changeLevelHandled = false when match goes live
- *
- * v0.10.51 (2026-01-12) - Roster Cross-Team Duplicate Fix
- *   * FIXED: Players appearing in both team rosters on Discord after halftime
- *   * TECHNICAL: add_to_match_roster() now checks BOTH rosters before adding a player
- *   * ISSUE: Players on wrong game team during 2nd half capture_roster_snapshot() were added to wrong roster
- *
- * v0.10.50 (2026-01-12) - 2nd Half Ready Counter Fix
- *   * FIXED: After halftime map change, .rdy counter showed players under wrong team name
- *   + ADDED: get_player_roster_team() helper to lookup team identity by SteamID
- *   * TECHNICAL: get_ready_counts() now uses roster-based identity during 2nd half pending
- *
- * v0.10.49 (2026-01-11) - Logging Cleanup
- *   * CHANGED: log_ktp() now uses standard AMXX log (log_amx) with [KTP] prefix
- *   - REMOVED: ktp_match_logfile cvar (logs now auto-rotate daily via AMXX)
- *
- * v0.10.48 (2026-01-11) - Code Cleanup
- *   - REMOVED: ~190 lines of dead code (old OT handler, unreachable tactical pause logic)
- *   - REMOVED: Unused legacy variables (g_gameEndEventCount, g_gameEndTaskId)
- *   * FIXED: All compiler warnings resolved
- *   + ADDED: .forcereset to .commands output (Admin Commands section)
- *
- * v0.10.47 (2026-01-10) - Force Reset Admin Command
- *   + ADDED: .forcereset command for admins to recover abandoned servers
- *   + ADDED: Requires ADMIN_RCON flag and confirmation step (type twice within 10s)
- *   + ADDED: Clears ALL match state: live, pending, prestart, pause, scores, rosters, localinfo
- *   + ADDED: Discord notification when force reset is executed
- *
- * v0.10.44 (2026-01-10) - Intermission Auto-DC Fix
- *   + ADDED: g_inIntermission flag to disable auto-DC pauses when timelimit expires
- *   + ADDED: is_in_intermission() helper checks timelimit vs gametime in 2nd half
- *   * FIXED: Players leaving during intermission (scoreboard) no longer trigger auto tech pauses
- *
- * v0.10.43 (2026-01-10) - Explicit Overtime Commands
- *   + ADDED: .ktpOT and .draftOT commands for manually starting overtime rounds
- *   + ADDED: MATCH_TYPE_KTP_OT and MATCH_TYPE_DRAFT_OT match types
- *   * CHANGED: Overtime no longer triggers automatically at end of tied 2nd halves
- *   * CHANGED: Match flow simplified to h1 -> h2 -> done (captains control OT initiation)
- *   * FIXED: Changelevel recursion bug eliminated by removing automatic OT triggering
- *
- * v0.10.42 (2026-01-10) - Roster Tracking + Match Ended Flag
- *   + ADDED: Persistent player roster tracking for Discord match reports
- *   + ADDED: g_matchEnded flag to disable auto-DC technicals after match ends
- *   * FIXED: "No players" issue in final match reports (roster persists via localinfo)
- *
- * v0.10.41 (2026-01-09) - Map Config Prefix Match Fix
- *   * FIXED: Map config lookup matched shorter keys first (e.g., dod_railroad before dod_railroad2_s9a)
- *   * TECHNICAL: Now sorts map keys by length descending after loading INI, so longer keys match first
- *
- * v0.10.40 (2026-01-09) - First Half Changelevel Fix + Queue ID Cancel
- *   * FIXED: First half changelevel recursion bug (same issue as OT - guard reset before return)
- *   * FIXED: All match types now stay on same map for 2nd half (12man, draft, scrim, competitive)
- *   + ADDED: Queue ID cancel option - type "cancel" or "abort" during entry to restart with .12man
- *   + ADDED: Cancel hint in Queue ID prompts
- *
- * v0.10.39 (2026-01-09) - OT Recursion Fix + Forward Update
- *   * FIXED: OT recursion bug - guard flag reset in still-tied path allowed hook re-entry
- *   * CHANGED: ktp_match_start forward now fires on all halves/OT (not just 1st half)
- *   * CHANGED: Forward signature adds 4th param: half (1=1st, 2=2nd, 101+=OT rounds)
- *   * TECHNICAL: Plugins hooking ktp_match_start must handle new signature
- *
- * v0.10.38 (2026-01-07) - 1.3 Community 12man Queue ID
- *   + ADDED: 1.3 Community Discord 12man support with Queue ID input
- *   + ADDED: Queue ID double-entry confirmation to prevent typos
- *   + ADDED: Match ID format "1.3-{queueId}-{map}-{hostname}" for 1.3 Community matches
- *   + ADDED: HUD displays Queue ID during input and after confirmation
- *   * TECHNICAL: New globals g_is13CommunityMatch, g_13QueueId, g_13InputState, g_13CaptainId
- *
- * v0.10.37 (2026-01-07) - Match ID Hostname
- *   * CHANGED: Match ID format now includes hostname: KTP-{timestamp}-{map}-{hostname}
- *   + ADDED: sanitize_hostname_for_match_id() strips dynamic suffixes, sanitizes chars
- *
- * v0.10.36 (2026-01-06) - Discord 12man/Draft Channels
- *   + ADDED: Discord support for 12man matches (discord_channel_id_12man config key)
- *   + ADDED: Discord support for draft matches (discord_channel_id_draft config key)
- *   * CHANGED: 12man/draft require explicit channel config; no fallback to default
- *
- * v0.10.35 (2026-01-06) - Tactical Pauses Disabled
- *   * CHANGED: Tactical pauses disabled - only .tech allowed, .pause/.tac rejected
- *   * CHANGED: Pause extensions disabled by default (ktp_pause_max_extensions = 0)
- *
- * v0.10.34 (2026-01-06) - OT SetHookChainArg Fix
- *   * FIXED: OT recursive loop - replaced server_cmd + guard with SetHookChainArg
- *   * TECHNICAL: SetHookChainArg modifies map in-place, HC_CONTINUE proceeds cleanly
- *   - REMOVED: g_otForcedChangelevel guard flag (no longer needed)
- *
- * v0.10.33 (2026-01-06) - Half Captain Tracking
- *   + ADDED: Half captain tracking - first .ready player per team becomes "half captain"
- *   + ADDED: Original captains preserved via localinfo for Discord/match record
- *   + ADDED: LOCALINFO_CAPTAINS key stores original captain names/SteamIDs
- *   * CHANGED: MATCH_START log now shows half_captain1/half_captain2 (actual ready players)
- *   * CHANGED: Chat announcement still uses original captains (preserved identity)
- *   * TECHNICAL: Half captains cleared on entering pending phase, set on first .ready
- *
- * v0.10.32 (2026-01-05) - OT Recursive Loop Fix
- *   * FIXED: OT rounds processing in infinite loop when tied (rounds 1->32+ in same frame)
- *   * FIXED: Array index out of bounds crash at OT round 32 (g_otScores only has 32 elements)
- *   + ADDED: g_otForcedChangelevel guard flag to prevent recursive hook processing
- *   * TECHNICAL: server_cmd("changelevel") triggers hook synchronously before HC_SUPERCEDE returns
- *   * TECHNICAL: Guard flag checked FIRST in OnChangeLevel, allows forced changelevel to pass
- *
- * v0.10.30 (2026-01-01) - Intermission Freeze Fix
- *   * FIXED: Server freeze during intermission when superseding changelevel
- *   * FIXED: Infinite score logging loop caused by HC_SUPERCEDE during intermission
- *   * CHANGED: Match end (2nd half and OT) now processes immediately and lets changelevel proceed
- *   * CHANGED: No more countdown delay for match end - game is already showing scoreboard
- *   * TECHNICAL: HC_SUPERCEDE blocks changelevel but leaves game stuck in intermission mode
- *   * TECHNICAL: OT continuation now uses HC_CONTINUE - next map detects OT via localinfo
- *
- * v0.10.29 (2026-01-01) - 2nd Half Ready HUD
- *   + ADDED: Prominent "Type .ready" HUD for 2nd half and OT pending phases
- *   + ADDED: HUD shows current score context (1st half scores or OT grand totals)
- *   + ADDED: show_continuation_pending_hud() helpers for 2nd half/OT ready phase
- *   * IMPROVED: Yellow centered HUD clearly indicates players need to type .ready
- *
- * v0.10.28 (2026-01-01) - Changelevel Hook Match Finalization
- *   + ADDED: OnChangeLevel() hook intercepts all map changes (KTP-ReHLDS)
- *   + ADDED: 2nd half end now supersedes changelevel, does announcements, then manual changelevel
- *   + ADDED: OT round end supersedes changelevel for proper announcements
- *   + ADDED: 5-second countdown before map change with HUD display
- *   + ADDED: Winner/OT announcement in chat and brief HUD (3 sec, scoreboard visible)
- *   + ADDED: Discord embed update before map change
- *   * FIXED: Match end never processed because logevents fire at exact moment of map change
- *   * FIXED: 2nd half being skipped - changelevel hook ensures proper state finalization
- *   * TECHNICAL: HC_SUPERCEDE blocks engine changelevel, manual changelevel after countdown
- *   * TECHNICAL: OT trigger no longer relies on logevents - changelevel hook handles it
- *   - REMOVED: Old handle_map_change() - replaced by handle_first_half_end(), process_second_half_end_changelevel()
- *   - REMOVED: Old handle_ot_round_end() - replaced by process_ot_round_end_changelevel()
- *
- * v0.10.24 (2025-12-31) - False OT Trigger Fix
- *   * FIXED: Clear _ktp_live flag when 1st half ends (in handle_map_change)
- *   * TECHNICAL: Prevents false 2nd-half-ended detection when 2nd half map loads
- *   * TECHNICAL: Flow: 1st live sets flag -> 1st end clears flag -> 2nd live sets flag
- *
- * v0.10.23 (2025-12-31) - Robust Match End & Overtime Trigger
- *   + ADDED: LOCALINFO_H2_SCORES to persist 2nd half scores during periodic save
- *   + ADDED: amx_nextmap set to current map during 2nd half (ensures map cycles back)
- *   + ADDED: finalize_completed_second_half() handles match end when plugin_end doesn't run
- *   + ADDED: Overtime triggers correctly from finalize if scores are tied
- *   * FIXED: 2nd half scores now persisted to localinfo for crash/end detection
- *   * TECHNICAL: Map cycling back to same map + _ktp_live="1" = 2nd half ended
- *
- * v0.10.22 (2025-12-31) - Score Calculation & Match End Detection Fix
- *   * FIXED: .score 2nd half calculation accounts for restored 1st half scores in DODX
- *   * FIXED: handle_map_change 2nd half score calculation (same fix as .score)
- *   * FIXED: Match end detection when plugin_end doesn't run (extension mode)
- *   + ADDED: LOCALINFO_LIVE flag to track when match is live
- *   + ADDED: finalize_abandoned_match() for detecting/handling matches that end without plugin_end
- *   + ADDED: Discord notification and ktp_match_end forward for abandoned matches
- *   * TECHNICAL: Mode is no longer cleared after restoration (kept until match ends)
- *
- * v0.10.21 (2025-12-31) - 2nd Half State Fix
- *   * FIXED: 2nd half restoration now sets g_matchPending=true so players can .ready
- *   * FIXED: Added g_matchLive=false during restoration to prevent false "match in progress"
- *   + ADDED: "Type .ready to start 2nd half" announcement after restoration
- *
- * v0.10.20 (2025-12-31) - DODX Native Score Broadcast
- *   + ADDED: Uses dodx_broadcast_team_score() for TeamScore updates
- *   + ADDED: g_skipTeamScoreAdjust flag to prevent double-adjustment
- *   + ADDED: ktp_is_match_active() native for external plugin queries
- *   + ADDED: .sbtest command for scoreboard broadcast testing
- *
- * v0.10.1 (2025-12-24) - External Plugin Forwards
- *   + ADDED: ktp_match_start forward for external plugins (KTPHLTVRecorder)
- *   + ADDED: ktp_match_end forward for external plugins (KTPHLTVRecorder)
- *   * TECHNICAL: Forwards fire on 1st half start and match completion (reg/OT)
- *
- * v0.10.0 (2025-12-23) - Overtime Foundation + Localinfo Refactor
- *   + ADDED: Overtime global variables and state tracking
- *   + ADDED: Consolidated localinfo format for reduced serverinfo usage
- *   + ADDED: Helper functions: format_state, parse_state, format_scores, parse_scores
- *   + ADDED: OT score helpers: format_ot_state, parse_ot_state, append_ot_score, parse_ot_scores
- *   + ADDED: HUD announcement at competitive half start showing team names and scores
- *   * CHANGED: Localinfo keys shortened (_ktp_mid, _ktp_mode, _ktp_state, etc.)
- *   * CHANGED: Mode-based context detection (h2, ot1, ot2...) replaces half_pending flag
- *   * CHANGED: Consolidated pause/tech state into single key
- *   * FIXED: HUD Y-position consistency (ready/confirm HUDs now aligned)
- *   ! BREAKING: Localinfo format changed - matches in progress will lose 2nd half context
- *
- * v0.9.17 (2025-12-22) - 12man Duration Menu
- *   + ADDED: Duration selection menu when starting 12man matches
- *   + ADDED: 20 minute (standard) or 15 minute options
- *   + ADDED: Automatic mp_timelimit override for non-standard durations
- *   * TECHNICAL: Menu displayed on .12man, sets g_12manDuration, applies after map config
- *
- * v0.9.16 (2025-12-21) - Version Consistency
- *   * CHANGED: Version bump for consistency across source and documentation
- *
- * v0.9.15 (2025-12-21) - Crash Fix
- *   * FIXED: Server crash on 2nd half map exec
- *   * CAUSE: broadcast_team_score() called during map load when players not connected
- *   * FIX: Only broadcast in delayed tasks (5s+), use dodx_set_team_score() for immediate
- *
- * v0.9.14 (2025-12-21) - Score Command Fix
- *   * FIXED: /score command no longer double-counts 1st half scores in 2nd half
- *   * FIXED: 2nd half totals now correctly show cumulative scoreboard values
- *   * TECHNICAL: Same calculation as build_scores_field() (subtract 1st half from cumulative)
- *
- * v0.9.13 (2025-12-21) - Scoreboard Broadcast Fix
- *   * FIXED: Scoreboard now updates for clients on 2nd half score restoration
- *   * ROOT CAUSE: dodx_set_team_score() only set internal value, not broadcast to clients
- *   + ADDED: broadcast_team_score() - Sends TeamScore message to all clients
- *   + ADDED: set_and_broadcast_score() - Combined set + broadcast for score restoration
- *   * TECHNICAL: Uses DoD TeamScore format (BYTE team, SHORT score) for MSG_ALL
- *
- * v0.9.12 (2025-12-21) - Discord Embed 2nd Half Score Fix
- *   * FIXED: 2nd half embed now shows correct 0-0 score at start (not subtracted values)
- *   * FIXED: Sync g_matchScore immediately after score restoration
- *   + ADDED: Multiple restoration attempts at 5s, 8s, 12s, 15s after 2nd half start
- *
- * v0.9.11 (2025-12-21) - Discord Newline Fix
- *   * FIXED: Discord embed uses ^n for newlines (properly escaped to \n in JSON)
- *   * CHANGED: Used ^n instead of \\n in score display string
- *
- * v0.9.10 (2025-12-21) - Score Save Timing Fix
- *   * CHANGED: Initial periodic score save at 2 seconds (was 30 seconds)
- *   * REASON: Ensure 0-0 is persisted early in case of early map change
- *
- * v0.9.9 (2025-12-21) - Duplicate Discord Message Fix
- *   - REMOVED: Redundant plain text Discord message at match start
- *   * KEPT: Only embed message sent at match start (no duplicate)
- *
- * v0.9.8 (2025-12-21) - Dynamic Player Name Updates
- *   * FIXED: Player names in pause HUD now update dynamically if player changes name
- *   + ADDED: get_dynamic_name() helper for real-time name lookup
- *   + ADDED: Player ID tracking for pause initiator, unpause requestor, and confirmers
- *   * TECHNICAL: Falls back to cached name if player disconnects
- *
- * v0.9.7 (2025-12-21) - HUD Command Aliases & Discord Buffer Fix
- *   * CHANGED: Pause HUD now shows .resume | .go | .ext instead of /resume | /confirmunpause | /extend
- *   + ADDED: .ext alias for pause extension command
- *   * FIXED: All chat announcements use shorter . command aliases
- *   * FIXED: Discord response buffer increased from 512 to 4096 bytes
- *
- * v0.9.5 (2025-12-21) - Discord Message ID Debug & Fixes
- *   * FIXED: Use get_datadir() instead of localinfo for temp file path (more reliable)
- *   + ADDED: Comprehensive logging for Discord message ID capture failures
- *   + ADDED: Log file path in DISCORD_MATCH_EMBED_CREATE event
- *
- * v0.9.4 (2025-12-21) - Discord Cleanup
- *   - REMOVED: Tactical pause Discord notification (unnecessary noise)
- *
- * v0.9.3 (2025-12-21) - Discord Edit URL Fix
- *   * FIXED: Discord edit URL now uses replace_string() to swap /reply with /edit
- *   * TECHNICAL: Supports shared discord.ini with /reply endpoint across plugins
- *
- * v0.9.2 (2025-12-21) - Discord Message ID & Scoreboard Restoration Fixes
- *   * FIXED: Discord message ID capture - curl now uses file handle with write callback
- *   * FIXED: Scoreboard restoration - 3-second delayed task after round restart
- *   * FIXED: TeamScore message format - DoD uses BYTE team index, not STRING
- *   + ADDED: discord_curl_write() callback for proper response capture
- *   + ADDED: task_delayed_score_restore() for post-round-restart restoration
- *   + ADDED: schedule_score_restoration() for delayed score restoration
- *
- * v0.9.1 (2025-12-20) - Discord Embed Roster & Score Persistence Fix
- *   + ADDED: Discord embed roster - Teams displayed in side-by-side inline fields
- *   + ADDED: Match ID shown in roster embed footer
- *   + ADDED: Periodic score saving (every 30s) during 1st half to localinfo
- *   + ADDED: task_periodic_score_save() for robust score persistence
- *   * FIXED: Discord message formatting - removed code block wrapper so markdown renders
- *   * FIXED: Score persistence when plugin_end doesn't run (ReHLDS extension mode)
- *   * FIXED: Newline escaping in Discord embed field values
- *   + IMPROVED: Roster format now shows player name and SteamID on separate lines
- *   + TECHNICAL: escape_for_json() function for proper JSON string escaping
- *   + TECHNICAL: send_discord_embed_raw() for sending embed payloads
- *
- * v0.7.1 (2025-12-18) - Match Context Persistence & Per-Match Pause Limits
- *   + ADDED: Match context persists across map change via localinfo
- *   + ADDED: Match ID, pause counts, and tech budget survive plugin reload for 2nd half
- *   + FIXED: Match ID now properly restored when 2nd half starts
- *   + FIXED: Pause limits are now per-MATCH (not per-half) - teams can't reset by going to 2nd half
- *   + FIXED: Tech budget is now per-MATCH (not per-half) - remaining budget carries over
- *   + IMPROVED: 2nd half announces match continuation with pause usage status
- *   NOTE: Uses localinfo keys (_ktp_match_id, _ktp_half_pending, etc.)
- *
- * v0.7.0 (2025-12-16) - HLStatsX Stats Integration
- *   + ADDED: HLStatsX integration for match vs warmup stats separation
- *   + ADDED: dodx_flush_all_stats() - flushes pending stats to log
- *   + ADDED: dodx_reset_all_stats() - resets all player stats
- *   + ADDED: dodx_set_match_id() - sets match context for stats logging
- *   + ADDED: KTP_MATCH_START log marker for HLStatsX parsing
- *   + ADDED: KTP_MATCH_END log marker for HLStatsX parsing
- *   + ADDED: (matchid "xxx") property in weaponstats log lines
- *   + IMPROVED: Stats automatically flushed at half/match end
- *   + IMPROVED: Warmup stats logged separately (no matchid) before match
- *   NOTE: Requires DODX module with HLStatsX natives
- *
- * v0.6.0 (2025-12-16) - Match ID System, Ready Enhancements, Streamlined Flow
- *   + ADDED: Unique match ID system (format: KTP-{timestamp}-{mapname})
- *   + ADDED: Match ID persists across both halves for MySQL/stats correlation
- *   + ADDED: Match ID included in Discord notifications and all log entries
- *   + ADDED: /whoneedsready command - shows unready players with Steam IDs
- *   + ADDED: /unready command alias for /whoneedsready
- *   + ADDED: Steam IDs now displayed in READY/NOTREADY announcements
- *   + ADDED: Periodic unready player reminder (every 30 sec during ready phase)
- *   + IMPROVED: Half tracking now logs match_id in HALF_START and HALF_END events
- *   + IMPROVED: Match start Discord message now includes match ID in code block
- *   - REMOVED: Automatic pause during ready phase (confirm → ready → LIVE is now seamless)
- *   - REMOVED: Unpause countdown at match start (match goes LIVE immediately when all ready)
- *   - REMOVED: Redundant half tracking code (consolidated into early match flow)
- *
- * v0.5.2 (2025-12-03) - KTP AMX Compatibility
- *   * FIXED: Use get_configsdir() for dynamic config path resolution
- *   * FIXED: Removed hardcoded "addons/amxmodx" paths for KTP AMX compatibility
- *   * IMPROVED: ReAPI availability message changed from WARNING to informational note
- *
- * v0.5.1 (2025-12-02) - Critical Bug Fixes and Security Improvements
- *   * FIXED: [CRITICAL] cURL header memory leak causing accumulation on every Discord message
- *   * FIXED: [CRITICAL] Tech pause budget integer underflow from system clock adjustments
- *   * FIXED: [HIGH] Buffer overflow in player roster concatenation with 12+ players per team
- *   * FIXED: [HIGH] Inconsistent team ID validation before g_techBudget array access
- *   * FIXED: [MEDIUM] Tech pause start time not cleared on match cancel (state corruption)
- *   * FIXED: [MEDIUM] JSON escape buffer overflow with multiple escape sequences
- *   * FIXED: [MEDIUM] Config path manipulation calling contain() twice with potential -1 index
- *   * FIXED: [MEDIUM] Team ID bounds check using || instead of && (logic error)
- *   * FIXED: [MEDIUM] Task leak state cleanup missing g_disconnectedPlayerName/Team clearing
- *   * FIXED: [MEDIUM] Double disconnect logging missing for second player
- *   * FIXED: [MEDIUM] Missing is_user_connected() checks in command handlers
- *   - REMOVED: Redundant is_user_connected() check in player roster loop (dead code)
- *   + ADDED: Time validation to prevent underflow in tech budget calculations
- *   + ADDED: Elapsed time sanity check (cap at 1 hour maximum)
- *   + ADDED: Buffer space validation before string concatenation
- *   + ADDED: Clock skew detection and error logging
- *   + IMPROVED: Defensive programming with consistent bounds checking
- *   + SECURITY: Proper memory management for cURL resources
- *
- * v0.5.0 (2025-11-24) - Major Feature Update: Match Types, Half Tracking, Command Aliases
- *   + ADDED: Match type system (COMPETITIVE, SCRIM, 12MAN) with per-type configs and Discord channels
- *   + ADDED: Per-match-type map configs (e.g., dod_kalt_12man.cfg, dod_kalt_scrim.cfg) with fallback
- *   + ADDED: Per-match-type Discord channels (discord_channel_id_12man, discord_channel_id_scrim)
- *   + ADDED: Half tracking system (1st half / 2nd half) with automatic detection
- *   + ADDED: Automatic map rotation adjustment for 2nd half (amx_nextmap to current map)
- *   + ADDED: Half number display in match start messages ("1st half" or "2nd half")
- *   + ADDED: Player roster logging to Discord at match start (all players, teams, SteamIDs, IPs)
- *   + ADDED: Dot command aliases for all commands (.pause, .tech, .ready, .resume, .status, etc.)
- *   + ADDED: /draft command (same as /start and /ktp)
- *   + CHANGED: Renamed /startmatch to /ktp (kept /start as alias)
- *   + CHANGED: Renamed /start12man to /12man (with .12man alias)
- *   + CHANGED: Renamed /startscrim to /scrim (with .scrim alias)
- *   - REMOVED: 'ready' and 'ktp' aliases from /ready command (conflict resolution)
- *   * IMPROVED: Discord messages now routed to match-type-specific channels with fallback
- *   * IMPROVED: Map config selection now tries match-type-specific configs first
- *
- * v0.4.6 (2025-11-22) - CRITICAL FIX: Match Start Flow
- *   * FIXED: Match start entering uncontrollable tactical pause instead of LIVE countdown
- *   * FIXED: Team confirmation triggering pre-pause countdown (wrong flow)
- *   * FIXED: Countdown task not running during pause (tasks don't execute when paused)
- *   * FIXED: Jarring unpause/re-pause transition from pending to match start
- *   + ADDED: Countdown handling in OnPausedHUDUpdate() hook (runs during pause)
- *   + CHANGED: Confirmation now directly executes pause (no countdown)
- *   + CHANGED: Ready completion stays paused, just starts countdown (smooth transition)
- *   + FLOW: Confirm → pause → Ready → countdown (same pause) → LIVE (smooth)
- *   + BEFORE: Confirm → pre-pause countdown → pause → Ready → stuck (broken)
- *
- * v0.4.5 (2025-11-22) - Critical Bug Fixes and Scrim Mode
- *   + ADDED: /startscrim and /start12man commands (skip Discord notifications)
- *   + ADDED: g_disableDiscord flag to control Discord webhook calls
- *   * FIXED: Missing task cleanup before pre-pause countdown (race condition)
- *   * FIXED: Missing pre-pause task cleanup in plugin_end() (memory leak)
- *   * FIXED: Tech budgets not reset on match cancel (state carry-over)
- *   * FIXED: Pre-pause state not cleared on match cancel
- *   * FIXED: Double timestamp assignment race condition in pause flow
- *   * FIXED: Disconnect state not cleared after unpause
- *   * FIXED: Missing countdown task cleanup before set_task() (duplicate tasks)
- *   * FIXED: Multiple simultaneous disconnects overwriting first disconnect info
- *   * OPTIMIZED: Removed duplicate config loading in plugin_init() (~25ms faster startup)
- *   + STABILITY: Prevents race conditions from multiple concurrent countdowns
- *   + STABILITY: Ensures clean state between matches
- *   + STABILITY: Improved disconnect auto-pause handling
- *
- * v0.4.4 (2025-11-21) - Phase 5 Performance Optimizations
- *   * OPTIMIZED: Eliminated 8 redundant get_mapname() calls (use cached g_currentMap)
- *   * OPTIMIZED: Cached g_pauseDurationSec and g_preMatchPauseSeconds CVARs
- *   * OPTIMIZED: Index-based formatex in cmd_status() (30-40% faster string building)
- *   * OPTIMIZED: Switch statement in get_ready_counts() for cleaner team ID handling
- *   - REMOVED: Unused map variable declaration (compiler warning eliminated)
- *   + PERFORMANCE: 15-20% reduction in string operations during logging
- *   + PERFORMANCE: 5-10% faster pause initialization with cached CVARs
- *   + PERFORMANCE: 10-15% faster player iteration in get_ready_counts()
- *
- * v0.4.3 (2025-11-20) - Discord Notification Filtering
- *   + ADDED: send_discord_with_hostname() helper function
- *   + ADDED: Hostname prefix to all Discord notifications
- *   * CHANGED: Disabled non-essential Discord notifications
- *   * KEPT: Only 3 essential notifications with hostname:
- *     - Match start (⚔️)
- *     - Player tactical pause (⏸️)
- *     - Disconnect auto-pause (📴)
- *
- * v0.4.2 (2025-11-20) - cURL Discord Integration Fix
- *   * FIXED: Discord notifications not working (curl.inc was disabled)
- *   * FIXED: Compilation errors with backslash character constants (changed to numeric 92)
- *   * FIXED: Compilation errors with \n, \r, \t (changed to numeric 10, 13, 9)
- *   * FIXED: JSON string escaping in formatex (changed \" to ^")
- *   * FIXED: Invalid cURL header constant (Invalid_CURLHeaders -> SList_Empty)
- *   * FIXED: Duplicate discordMsg variable declaration (wrapped in #if defined HAS_CURL)
- *   + ENABLED: curl.inc in AMX Mod X includes directory
- *   + COMPILED: Plugin now includes full cURL support for Discord notifications
- *   ! REQUIRES: curl_amxx.dll module enabled in modules.ini
- *   ! REQUIRES: discord.ini with relay URL, channel ID, and auth secret
- *
- * v0.4.1 (2025-11-17) - Pausable Cvar Removal
- *   - REMOVED: All pausable cvar manipulation code
- *   - REMOVED: ktp_force_pausable cvar (no longer needed)
- *   - REMOVED: g_pcvarPausable and g_cvarForcePausable variables
- *   - REMOVED: ktp_force_pausable_if_needed() function
- *   - REMOVED: pausable value from debug logs and client messages
- *   * CHANGED: Simplified logging (removed pausable from PAUSE_ATTEMPT/UNPAUSE_ATTEMPT)
- *   * CHANGED: Cleaner client messages ("Game paused" vs "Pause enforced")
- *   * CHANGED: cmd_ktpdebug no longer shows pausable value
- *   + IMPROVED: Cleaner code (~33 lines removed, ~10 lines simplified)
- *   + IMPROVED: Comments explain ReAPI bypass of pausable cvar
- *   ! REQUIRES: pausable 0 for KTP-ReHLDS + ReAPI (recommended)
- *   ! REQUIRES: pausable 1 for base servers without ReAPI (fallback)
- *
- * v0.4.0 (2025-11-17) - ReAPI Pause Integration
- *   + ReAPI Pause: Direct control via rh_set_server_pause() bypasses pausable cvar
- *   + Works with pausable 0: Only KTP system can pause, engine pause blocked
- *   + Complete time freeze: host_frame stops, g_psv.time frozen, SV_Physics halted
- *   + Unified pause countdown system for ALL pause entry points
- *   + Graceful degradation: Base AMX -> ReHLDS -> KTP-ReHLDS + ReAPI
- *   + Timed pauses: 5-minute default with MM:SS countdown (all platforms)
- *   + Pre-pause countdown: Configurable (live match vs pre-match)
- *   + Pause extensions: /extend command (max 2 extensions, all platforms)
- *   + Auto-unpause on timer expiration (automatic with KTP-ReHLDS)
- *   + Disconnect auto-pause: 10-second countdown, cancellable
- *   + Real-time pause tracking using get_systime() instead of host_frametime
- *   + ReAPI integration: RH_SV_UpdatePausedHUD hook for automatic HUD updates
- *   + Manual timer checks: Fallback for base AMX/standard ReHLDS
- *   + Discord integration: Webhook relay for match notifications
- *   + Map config system: Section-based ktp_maps.ini format
- *   + Comprehensive logging: AMX log, KTP match log, Discord
- *   * Fixed: Command registration conflict ("Cmd_AddMallocCommand: pause already defined")
- *   * Fixed: HUD updates during pause using real-world time
- *   * Fixed: Chat announcements during pause (rcon_say fallback)
- *   * Fixed: /ready system undefined variable bug
- *   * Enhanced: /status command shows detailed player ready status
- *   - Removed: Duplicate pause command registrations
- *   - Removed: Game-time based pause_timer_tick (replaced with real-time)
- *
- * v0.3.3 - Previous Stable Release
- *   - Two-team confirm unpause system
- *   - Per-team tactical pause limits (1 per half)
- *   - Technical pause with budget tracking
- *   - Disconnect detection with auto tech-pause
- *   - Pre-start confirmation system
- *   - Discord webhook integration (basic)
+ * See CHANGELOG.md for version history.
  */
 
 #include <amxmodx>
@@ -590,7 +52,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.67"
+#define PLUGIN_VERSION "0.10.69"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -635,7 +97,7 @@ new bool: g_countdownActive = false;
 new bool: g_matchLive = false;              // becomes true after first LIVE
 new bool: g_matchEnded = false;             // true after match ends - disables auto-DC technicals until new match
 new bool: g_inIntermission = false;         // true when timelimit expires - disables auto-DC during scoreboard
-new bool: g_disableDiscord = false;         // when true, skip all Discord notifications (legacy - use g_matchType instead)
+new bool: g_disableDiscord = false;         // when true, skip all Discord notifications
 new bool: g_periodicSaveStarted = false;    // tracks if 30s repeating score save is running
 new MatchType: g_matchType = MATCH_TYPE_COMPETITIVE; // Current match type
 new g_12manDuration = 20; // 12man match duration in minutes (20 or 15)
@@ -693,11 +155,9 @@ new g_matchId[64];              // Unique match identifier (format: KTP-{timesta
 // ---------- Captains (original - set during pre-start, persisted for Discord) ----------
 new g_captain1_name[64];
 new g_captain1_sid[44];
-new g_captain1_ip[32];
 new g_captain1_team; // 1=Allies, 2=Axis
 new g_captain2_name[64];
 new g_captain2_sid[44];
-new g_captain2_ip[32];
 new g_captain2_team; // 1=Allies, 2=Axis
 
 // ---------- Half Captains (per-half - first .ready player per team) ----------
@@ -1296,7 +756,7 @@ stock bool:process_ot_round_end_changelevel() {
 // Start the countdown before map change
 stock start_changelevel_countdown() {
     g_changeMapCountdown = CHANGELEVEL_COUNTDOWN_SECS;
-    safe_remove_task(g_changeMapTaskId);
+    remove_task(g_changeMapTaskId);
     g_changeMapTaskId = set_task(1.0, "task_changelevel_countdown", g_changeMapTaskId, .flags = "b");
     log_ktp("event=CHANGELEVEL_COUNTDOWN_START seconds=%d map=%s", CHANGELEVEL_COUNTDOWN_SECS, g_pendingChangeMap);
 
@@ -1346,6 +806,12 @@ stock handle_first_half_end() {
         log_ktp("event=STATS_FLUSH type=half1 players=%d match_id=%s", flushed, g_matchId);
     }
     #endif
+
+    // Log KTP_HALF_END for HLStatsX to set accurate end_time
+    // This fires at the actual moment gameplay ends (scoreboard appears), BEFORE map change/warmup
+    // Without this, H1's end_time gets set to H2's start_time (after warmup), causing warmup kills
+    // to be incorrectly attributed to H1
+    log_message("KTP_HALF_END (matchid ^"%s^") (map ^"%s^") (half ^"1st^")", g_matchId, g_matchMap);
 
     // Save first half scores
     save_first_half_scores();
@@ -1496,12 +962,6 @@ stock broadcast_team_score(teamId, score) {
     #endif
 }
 
-// Set team score AND broadcast to clients (combined operation for score restoration)
-// Note: dodx_broadcast_team_score already sets gamerules score, so this is just a wrapper for clarity
-stock set_and_broadcast_score(teamId, score) {
-    broadcast_team_score(teamId, score);
-}
-
 // Reset match scores (called at match start)
 stock reset_match_scores() {
     g_matchScore[1] = 0;
@@ -1591,7 +1051,7 @@ stock start_periodic_score_save() {
 
 // Stop periodic score saving
 stock stop_periodic_score_save() {
-    safe_remove_task(g_taskScoreSaveId);
+    remove_task(g_taskScoreSaveId);
 }
 
 // Delayed score restoration for 2nd half or OT (waits for round restart to complete)
@@ -1662,7 +1122,7 @@ public task_delayed_score_restore() {
 
 // Schedule delayed score restoration (called from match start for 2nd half)
 stock schedule_score_restoration() {
-    safe_remove_task(g_taskScoreRestoreId);
+    remove_task(g_taskScoreRestoreId);
     // Wait for mp_clan_timer countdown to complete before restoring
     // mp_clan_timer is typically 10s, so 12s ensures round restart is done
     // If we restore during the countdown, the game resets scores when round actually restarts
@@ -1683,7 +1143,7 @@ stock schedule_match_start_log(const matchId[], const map[], const halfText[]) {
     copy(g_delayedMatchId, charsmax(g_delayedMatchId), matchId);
     copy(g_delayedMap, charsmax(g_delayedMap), map);
     copy(g_delayedHalf, charsmax(g_delayedHalf), halfText);
-    safe_remove_task(g_taskMatchStartLogId);
+    remove_task(g_taskMatchStartLogId);
     // 0.01s delay allows engine to stabilize after stats flush before UDP log send
     // Reduced from 0.1s (2026-02-02) - original delay caused ~100ms of kills to be missed
     set_task(0.01, "task_delayed_match_start_log", g_taskMatchStartLogId);
@@ -2162,11 +1622,6 @@ stock pauses_left(teamId) {
     return 1 - used;
 }
 
-// OPTIMIZED: remove_task() is already safe to call on non-existent tasks (Phase 4)
-stock safe_remove_task(taskId) {
-    remove_task(taskId);
-}
-
 stock get_full_identity(id, name[], nameLen, sid[], sidLen, ip[], ipLen, team[], teamLen, map[], mapLen) {
     get_identity(id, name, nameLen, sid, sidLen, ip, ipLen, team, teamLen);
     copy(map, mapLen, g_currentMap);  // OPTIMIZED: Use cached map name instead of get_mapname()
@@ -2199,7 +1654,6 @@ stock show_pause_hud_message(const pauseType[]) {
         cachedExtSec = g_pauseExtensionSec;
         if (cachedExtSec <= 0) cachedExtSec = 120;
         cachedMaxExt = g_pauseMaxExtensions;
-        if (cachedMaxExt <= 0) cachedMaxExt = 2;
         lastPauseStart = g_pauseStartTime;
     }
 
@@ -2251,12 +1705,12 @@ stock show_pause_hud_message(const pauseType[]) {
 stock setup_auto_unpause_request() {
     new secs = g_autoRequestSecs;
     if (secs < AUTO_REQUEST_MIN_SECS || secs > AUTO_REQUEST_MAX_SECS) secs = AUTO_REQUEST_DEFAULT_SECS;
-    safe_remove_task(g_taskAutoUnpauseReqId);
+    remove_task(g_taskAutoUnpauseReqId);
     set_task(float(secs), "auto_unpause_request", g_taskAutoUnpauseReqId);
     g_autoReqLeft = secs;
 
     // Start countdown ticker for HUD display
-    safe_remove_task(g_taskAutoReqCountdownId);
+    remove_task(g_taskAutoReqCountdownId);
     set_task(1.0, "auto_req_countdown_tick", g_taskAutoReqCountdownId, _, _, "b");
 }
 
@@ -3007,8 +2461,12 @@ stock build_scores_field() {
 // Write callback for curl - writes response data to file
 public discord_curl_write(data[], size, nmemb, file) {
     new actual_size = size * nmemb;
+    log_ktp("event=DISCORD_CURL_WRITE size=%d nmemb=%d actual_size=%d file_handle=%d", size, nmemb, actual_size, file);
     if (file && actual_size > 0) {
-        fwrite_blocks(file, data, actual_size, BLOCK_CHAR);
+        new written = fwrite_blocks(file, data, actual_size, BLOCK_CHAR);
+        log_ktp("event=DISCORD_CURL_WRITE_RESULT written=%d data_preview='%.50s'", written, data);
+    } else {
+        log_ktp("event=DISCORD_CURL_WRITE_SKIP file=%d actual_size=%d", file, actual_size);
     }
     return actual_size;
 }
@@ -3686,7 +3144,7 @@ stock trigger_pause_countdown(const who[], const reason[], bool:isPreMatch = fal
     g_prePauseCountdown = true;
 
     // Ensure no duplicate pre-pause countdown tasks
-    safe_remove_task(g_taskPrePauseId);
+    remove_task(g_taskPrePauseId);
     set_task(1.0, "prepause_countdown_tick", g_taskPrePauseId, _, _, "b");
 
     announce_all("%s initiated pause. Pausing in %d seconds...", who, g_prePauseLeft);
@@ -3696,13 +3154,13 @@ stock trigger_pause_countdown(const who[], const reason[], bool:isPreMatch = fal
 
 public prepause_countdown_tick() {
     if (!g_prePauseCountdown) {
-        safe_remove_task(g_taskPrePauseId);
+        remove_task(g_taskPrePauseId);
         return;
     }
 
     if (g_prePauseLeft <= 0) {
         // Actually pause now
-        safe_remove_task(g_taskPrePauseId);
+        remove_task(g_taskPrePauseId);
         g_prePauseCountdown = false;
 
         announce_all("=== PAUSING NOW ===");
@@ -3769,7 +3227,7 @@ public start_unpause_countdown(const who[]) {
 
     announce_all("Unpausing in %d seconds...", g_countdownLeft);
     // Ensure no duplicate countdown tasks
-    safe_remove_task(g_taskCountdownId);
+    remove_task(g_taskCountdownId);
     set_task(1.0, "countdown_tick", g_taskCountdownId, _, _, "b");
 }
 
@@ -3784,7 +3242,7 @@ public countdown_tick() {
     }
 
     // UNPAUSE NOW
-    safe_remove_task(g_taskCountdownId);
+    remove_task(g_taskCountdownId);
     g_countdownActive = false;
 
     announce_all("=== LIVE! ===");
@@ -3867,10 +3325,10 @@ public countdown_tick() {
     g_disconnectedPlayerSteamId[0] = EOS;
     g_disconnectCountdown = 0;
     g_autoConfirmLeft = 0;
-    safe_remove_task(g_taskAutoUnpauseReqId);
-    safe_remove_task(g_taskAutoReqCountdownId);
-    safe_remove_task(g_taskPauseHudId);
-    safe_remove_task(g_taskAutoConfirmId);
+    remove_task(g_taskAutoUnpauseReqId);
+    remove_task(g_taskAutoReqCountdownId);
+    remove_task(g_taskPauseHudId);
+    remove_task(g_taskAutoConfirmId);
     stop_unpause_reminder();
 }
 
@@ -3878,7 +3336,7 @@ public auto_req_countdown_tick() {
     // Decrement auto-request countdown
     if (!g_isPaused || g_unpauseRequested) {
         // Stop if unpaused or request already made
-        safe_remove_task(g_taskAutoReqCountdownId);
+        remove_task(g_taskAutoReqCountdownId);
         return;
     }
 
@@ -3893,7 +3351,7 @@ public auto_req_countdown_tick() {
 public disconnect_countdown_tick() {
     // Stop if match ended or already paused
     if (!g_matchLive || g_isPaused) {
-        safe_remove_task(g_taskDisconnectCountdownId);
+        remove_task(g_taskDisconnectCountdownId);
         g_disconnectCountdown = 0;
         return;
     }
@@ -3912,7 +3370,7 @@ public disconnect_countdown_tick() {
         }
     } else {
         // Countdown finished - trigger tech pause
-        safe_remove_task(g_taskDisconnectCountdownId);
+        remove_task(g_taskDisconnectCountdownId);
 
         log_ktp("event=AUTO_TECH_PAUSE player='%s' team=%s reason='disconnect'",
                 g_disconnectedPlayerName, teamName);
@@ -4125,8 +3583,8 @@ public OnPausedHUDUpdate() {
             g_isTechPause = false;
             g_techPauseStartTime = 0;
             g_techPauseFrozenTime = 0;
-            safe_remove_task(g_taskCountdownId);
-            safe_remove_task(g_taskAutoConfirmId);
+            remove_task(g_taskCountdownId);
+            remove_task(g_taskAutoConfirmId);
             g_autoConfirmLeft = 0;
             return HC_CONTINUE;
         }
@@ -4151,7 +3609,7 @@ public OnPausedHUDUpdate() {
         // Time's up - auto confirm
         if (g_autoConfirmLeft <= 0) {
             g_autoConfirmLeft = 0;
-            safe_remove_task(g_taskAutoConfirmId);
+            remove_task(g_taskAutoConfirmId);
 
             announce_all("Auto-confirming unpause (60 second timeout).");
             log_ktp("event=AUTO_CONFIRMUNPAUSE reason='60s_timeout'");
@@ -4332,7 +3790,7 @@ stock prestart_reset() {
     g_preConfirmAxis   = false;
     g_confirmAlliesBy[0] = EOS;
     g_confirmAxisBy[0]   = EOS;
-    safe_remove_task(g_taskPrestartHudId);
+    remove_task(g_taskPrestartHudId);
 
     // Reset pause limits only for NEW matches (1st half), not 2nd half continuation
     // Pause counts persist across halves (per-match limit, not per-half)
@@ -4408,6 +3866,10 @@ public plugin_init() {
     g_cvarMaxExtensions  = register_cvar("ktp_pause_max_extensions", "0");   // 0 = extensions disabled
     g_cvarUnreadyReminderSec = register_cvar("ktp_unready_reminder_secs", "30");  // unready reminder interval
     g_cvarUnpauseReminderSec = register_cvar("ktp_unpause_reminder_secs", "15");  // unpause reminder interval
+
+    // Match type indicator for other plugins (KTPCvarChecker uses this)
+    // 1 = competitive (.ktp, .ktpOT), 0 = casual (12man, scrim, draft)
+    register_cvar("ktp_match_competitive", "0");
 
     // Chat controls - Pause (tactical)
     register_clcmd("say /pause",        "cmd_chat_toggle");
@@ -4874,11 +4336,11 @@ stock restore_match_context_from_localinfo() {
                 g_team2Name, g_team1Name);
 
         // Start the pending HUD task (shows "=== 2ND HALF - Type .ready ===" with scores)
-        safe_remove_task(g_taskPendingHudId);
+        remove_task(g_taskPendingHudId);
         set_task(1.0, "pending_hud_tick", g_taskPendingHudId, _, _, "b");
 
         // Start periodic unready player reminder
-        safe_remove_task(g_taskUnreadyReminderId);
+        remove_task(g_taskUnreadyReminderId);
         set_task(g_unreadyReminderSecs, "unready_reminder_tick", g_taskUnreadyReminderId, _, _, "b");
     }
     else if (isOvertime) {
@@ -4952,11 +4414,11 @@ stock restore_match_context_from_localinfo() {
         g_currentHalf = 0;  // Will be set when OT goes live
 
         // Start the pending HUD task (shows "=== OVERTIME RD X - Type .ready ===" with scores)
-        safe_remove_task(g_taskPendingHudId);
+        remove_task(g_taskPendingHudId);
         set_task(1.0, "pending_hud_tick", g_taskPendingHudId, _, _, "b");
 
         // Start periodic unready player reminder
-        safe_remove_task(g_taskUnreadyReminderId);
+        remove_task(g_taskUnreadyReminderId);
         set_task(g_unreadyReminderSecs, "unready_reminder_tick", g_taskUnreadyReminderId, _, _, "b");
     }
 
@@ -4970,18 +4432,18 @@ public plugin_end() {
     log_ktp("event=PLUGIN_END_START half=%d matchLive=%d matchId=%s changeLevelHandled=%d",
             g_currentHalf, g_matchLive ? 1 : 0, g_matchId, g_changeLevelHandled ? 1 : 0);
 
-    safe_remove_task(g_taskCountdownId);
-    safe_remove_task(g_taskPendingHudId);
-    safe_remove_task(g_taskPrestartHudId);
-    safe_remove_task(g_taskAutoUnpauseReqId);
-    safe_remove_task(g_taskAutoReqCountdownId);
-    safe_remove_task(g_taskDisconnectCountdownId);
-    safe_remove_task(g_taskPauseHudId);
-    safe_remove_task(g_taskPrePauseId);
-    safe_remove_task(g_taskUnreadyReminderId);
-    safe_remove_task(g_taskUnpauseReminderId);
-    safe_remove_task(g_taskScoreSaveId);
-    safe_remove_task(g_changeMapTaskId);
+    remove_task(g_taskCountdownId);
+    remove_task(g_taskPendingHudId);
+    remove_task(g_taskPrestartHudId);
+    remove_task(g_taskAutoUnpauseReqId);
+    remove_task(g_taskAutoReqCountdownId);
+    remove_task(g_taskDisconnectCountdownId);
+    remove_task(g_taskPauseHudId);
+    remove_task(g_taskPrePauseId);
+    remove_task(g_taskUnreadyReminderId);
+    remove_task(g_taskUnpauseReminderId);
+    remove_task(g_taskScoreSaveId);
+    remove_task(g_changeMapTaskId);
 
     // Note: Match state finalization is now handled by OnChangeLevel() hook
     // which fires BEFORE plugin_end on KTP-ReHLDS servers.
@@ -5626,7 +5088,7 @@ stock on_client_left(id) {
                     announce_all("PLAYER DISCONNECTED: %s (%s) | Auto tech-pause in %d... (type .nodc to cancel)", g_disconnectedPlayerName, teamName, DISCONNECT_COUNTDOWN_SECS);
 
                     // Start countdown task
-                    safe_remove_task(g_taskDisconnectCountdownId);
+                    remove_task(g_taskDisconnectCountdownId);
                     set_task(1.0, "disconnect_countdown_tick", g_taskDisconnectCountdownId, _, _, "b");
                 }
             }
@@ -5739,7 +5201,7 @@ stock handle_countdown_cancel(id) {
         client_print(id, print_chat, "[KTP] Only the pause-owning team can cancel the unpause countdown.");
         return PLUGIN_HANDLED;
     }
-    safe_remove_task(g_taskCountdownId);
+    remove_task(g_taskCountdownId);
     g_countdownActive = false;
 
     new name[32], sid[44], ip[32], team[16], map[32];
@@ -5755,7 +5217,7 @@ stock handle_countdown_cancel(id) {
     set_task(float(secs), "auto_unpause_request", g_taskAutoUnpauseReqId);
 
     // Restart countdown ticker
-    safe_remove_task(g_taskAutoReqCountdownId);
+    remove_task(g_taskAutoReqCountdownId);
     set_task(1.0, "auto_req_countdown_tick", g_taskAutoReqCountdownId, _, _, "b");
 
     return PLUGIN_HANDLED;
@@ -5829,7 +5291,7 @@ stock handle_resume_request(id, const name[], const sid[], const team[], teamId)
     // If the other team has pre-confirmed (rare), start the countdown now
     if (g_unpauseConfirmedOther) {
         stop_unpause_reminder();
-        safe_remove_task(g_taskAutoConfirmId);
+        remove_task(g_taskAutoConfirmId);
         start_unpause_countdown(g_lastUnpauseBy);
     } else {
         // Start reminder for other team to /confirmunpause
@@ -5950,7 +5412,7 @@ public cmd_confirm_unpause(id) {
     announce_all("%s confirmed unpause.", team);
 
     // Cancel auto-confirmunpause timer (they confirmed manually)
-    safe_remove_task(g_taskAutoConfirmId);
+    remove_task(g_taskAutoConfirmId);
     g_autoConfirmLeft = 0;
 
     // If owner already requested (or auto-request fired), we can start countdown
@@ -5991,7 +5453,6 @@ public cmd_extend_pause(id) {
     }
 
     new maxExt = g_pauseMaxExtensions;
-    if (maxExt <= 0) maxExt = 2;
 
     if (g_pauseExtensions >= maxExt) {
         client_print(id, print_chat, "[KTP] Maximum extensions (%d) already used.", maxExt);
@@ -6164,7 +5625,7 @@ public cmd_cancel_disconnect_pause(id) {
     }
 
     // Cancel the countdown
-    safe_remove_task(g_taskDisconnectCountdownId);
+    remove_task(g_taskDisconnectCountdownId);
     g_disconnectCountdown = 0;
     g_disconnectedPlayerName[0] = EOS;
     g_disconnectedPlayerTeam = 0;
@@ -6207,7 +5668,7 @@ public cmd_tech_pause(id) {
 
     // Cancel any active auto-DC countdown (manual .tech supersedes auto-pause)
     if (g_disconnectCountdown > 0) {
-        safe_remove_task(g_taskDisconnectCountdownId);
+        remove_task(g_taskDisconnectCountdownId);
         log_ktp("event=AUTO_DC_CANCELLED_BY_TECH prev_countdown=%d dc_player='%s'",
                 g_disconnectCountdown, g_disconnectedPlayerName);
         g_disconnectCountdown = 0;
@@ -6448,7 +5909,7 @@ public cmd_commands(id) {
     client_print(id, print_console, "  .tech            - Request technical pause");
     client_print(id, print_console, "  .resume          - Request unpause (pause owner)");
     client_print(id, print_console, "  .go              - Confirm unpause (other team)");
-    client_print(id, print_console, "  .extend / .ext   - Extend current pause (DISABLED)");
+    client_print(id, print_console, "  .extend / .ext   - Extend current pause");
     client_print(id, print_console, "  .nodc / .stopdc  - Cancel disconnect auto-pause");
 
     // Overtime
@@ -6661,7 +6122,6 @@ public cmd_match_start(id) {
         g_captain1_team = get_user_team(id);
         copy(g_captain1_name, charsmax(g_captain1_name), name);
         copy(g_captain1_sid,  charsmax(g_captain1_sid),  sid);
-        copy(g_captain1_ip,   charsmax(g_captain1_ip),   ip);
     }
 
     // Set flags
@@ -6684,7 +6144,7 @@ public cmd_match_start(id) {
     g_unpauseRequested = false;
     g_unpauseConfirmedOther = false;
     g_matchLive = false;
-    safe_remove_task(g_taskPauseHudId);
+    remove_task(g_taskPauseHudId);
     stop_unpause_reminder();
 
     // Log event
@@ -7020,7 +6480,6 @@ public cmd_pre_confirm(id) {
         g_captain2_team = tid;
         copy(g_captain2_name, charsmax(g_captain2_name), name);
         copy(g_captain2_sid,  charsmax(g_captain2_sid),  sid);
-        copy(g_captain2_ip,   charsmax(g_captain2_ip),   ip);
 
         log_ktp("event=PRECONFIRM_CAPTAIN2 by='%s' steamid=%s ip=%s team=%d",
                 name, safe_sid(sid), ip[0]?ip:"NA", tid);
@@ -7162,8 +6621,8 @@ public cmd_cancel(id) {
         g_inOvertime = false;
         g_otRound = 0;
         arrayset(g_ready, 0, sizeof g_ready);
-        safe_remove_task(g_taskPendingHudId);
-        safe_remove_task(g_taskUnreadyReminderId);
+        remove_task(g_taskPendingHudId);
+        remove_task(g_taskUnreadyReminderId);
 
         // Clear match identity
         g_matchId[0] = EOS;
@@ -7197,7 +6656,7 @@ public cmd_cancel(id) {
 
         // Clear periodic save task
         if (g_periodicSaveStarted) {
-            safe_remove_task(g_taskScoreSaveId);
+            remove_task(g_taskScoreSaveId);
             g_periodicSaveStarted = false;
         }
 
@@ -7241,8 +6700,8 @@ public cmd_cancel(id) {
     g_matchType = MATCH_TYPE_COMPETITIVE; // Reset to competitive for next match
     g_disableDiscord = false; // Re-enable Discord for next match (legacy)
     arrayset(g_ready, 0, sizeof g_ready);
-    safe_remove_task(g_taskPendingHudId);
-    safe_remove_task(g_taskUnreadyReminderId);
+    remove_task(g_taskPendingHudId);
+    remove_task(g_taskUnreadyReminderId);
 
     // Reset tech budgets and pre-pause state
     g_techBudget[1] = 0;
@@ -7251,8 +6710,8 @@ public cmd_cancel(id) {
     g_techPauseFrozenTime = 0;
     g_pauseStartTime = 0;
     g_autoConfirmLeft = 0;
-    safe_remove_task(g_taskPrePauseId);
-    safe_remove_task(g_taskAutoConfirmId);
+    remove_task(g_taskPrePauseId);
+    remove_task(g_taskAutoConfirmId);
     g_prePauseCountdown = false;
     g_prePauseLeft = 0;
 
@@ -7359,7 +6818,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
 
     // Cancel any pending disconnect countdown
     if (g_disconnectCountdown > 0) {
-        safe_remove_task(g_taskDisconnectCountdownId);
+        remove_task(g_taskDisconnectCountdownId);
         g_disconnectCountdown = 0;
         g_disconnectedPlayerName[0] = EOS;
         g_disconnectedPlayerTeam = 0;
@@ -7372,13 +6831,13 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     g_preConfirmAxis = false;
     g_confirmAlliesBy[0] = EOS;
     g_confirmAxisBy[0] = EOS;
-    safe_remove_task(g_taskPrestartHudId);
+    remove_task(g_taskPrestartHudId);
 
     // Clear pending match state
     g_matchPending = false;
     arrayset(g_ready, 0, sizeof g_ready);
-    safe_remove_task(g_taskPendingHudId);
-    safe_remove_task(g_taskUnreadyReminderId);
+    remove_task(g_taskPendingHudId);
+    remove_task(g_taskUnreadyReminderId);
 
     // Clear live match state
     g_matchLive = false;
@@ -7397,7 +6856,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     g_pauseExtensions = 0;
     g_prePauseCountdown = false;
     g_prePauseLeft = 0;
-    safe_remove_task(g_taskPrePauseId);
+    remove_task(g_taskPrePauseId);
 
     // Clear tech pause state
     g_techBudget[1] = 0;
@@ -7410,8 +6869,8 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     g_countdownActive = false;
     g_countdownLeft = 0;
     g_autoConfirmLeft = 0;
-    safe_remove_task(g_taskAutoConfirmId);
-    safe_remove_task(g_taskCountdownId);
+    remove_task(g_taskAutoConfirmId);
+    remove_task(g_taskCountdownId);
 
     // Clear match identity
     g_matchId[0] = EOS;
@@ -7420,10 +6879,13 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     // Reset match type
     g_matchType = MATCH_TYPE_COMPETITIVE;
     g_disableDiscord = false;
+    set_cvar_num("ktp_match_competitive", 0);  // Reset competitive mode indicator
 
-    // Clear team names
+    // Clear team names (both persistent and current display names)
     copy(g_team1Name, charsmax(g_team1Name), "Allies");
     copy(g_team2Name, charsmax(g_team2Name), "Axis");
+    copy(g_teamName[1], charsmax(g_teamName[]), "Allies");
+    copy(g_teamName[2], charsmax(g_teamName[]), "Axis");
 
     // Clear captain tracking
     g_halfCaptain1_name[0] = EOS;
@@ -7450,7 +6912,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
 
     // Clear periodic save task
     if (g_periodicSaveStarted) {
-        safe_remove_task(g_taskScoreSaveId);
+        remove_task(g_taskScoreSaveId);
         g_periodicSaveStarted = false;
     }
 
@@ -7938,8 +7400,8 @@ public cmd_ready(id) {
         // Leave pending; clear ready UI/tasks
         g_matchPending = false;
         arrayset(g_ready, 0, sizeof g_ready);
-        safe_remove_task(g_taskPendingHudId);
-        safe_remove_task(g_taskUnreadyReminderId);
+        remove_task(g_taskPendingHudId);
+        remove_task(g_taskUnreadyReminderId);
         ClearSyncHud(0, g_hudSync);  // Clear pending HUD immediately
 
         // First LIVE of this half → mark match live
@@ -7948,6 +7410,11 @@ public cmd_ready(id) {
         g_inIntermission  = false;  // Clear intermission flag for new match
         g_changeLevelHandled = false;  // Reset changelevel guard - prevents stale flag from blocking half-end processing
         set_localinfo(LOCALINFO_LIVE, "1");  // Persist live state for abandoned match detection
+
+        // Set competitive mode indicator for other plugins (KTPCvarChecker)
+        // Only .ktp and .ktpOT are competitive; 12man/scrim/draft are casual
+        new isCompetitive = (g_matchType == MATCH_TYPE_COMPETITIVE || g_matchType == MATCH_TYPE_KTP_OT) ? 1 : 0;
+        set_cvar_num("ktp_match_competitive", isCompetitive);
 
         // Reset tech budgets only for NEW matches (1st half), not 2nd half continuation
         // Tech budget persists across halves (per-match budget, not per-half)
@@ -7963,8 +7430,8 @@ public cmd_ready(id) {
             // 2nd half: capture any new players (roster persisted from 1st half via localinfo)
             capture_roster_snapshot();
         }
-        safe_remove_task(g_taskAutoUnpauseReqId);
-        safe_remove_task(g_taskPauseHudId);
+        remove_task(g_taskAutoUnpauseReqId);
+        remove_task(g_taskPauseHudId);
 
         // =============== KTP: HLStatsX Stats Integration ===============
         // Flush warmup stats BEFORE setting match ID (logged without matchid)
@@ -8130,7 +7597,7 @@ public cmd_status(id) {
 // Periodic reminder of unready players (runs every 30 seconds during pending phase)
 public unready_reminder_tick() {
     if (!g_matchPending) {
-        safe_remove_task(g_taskUnreadyReminderId);
+        remove_task(g_taskUnreadyReminderId);
         return;
     }
 
@@ -8183,13 +7650,13 @@ public unready_reminder_tick() {
 public unpause_reminder_tick() {
     // Stop if no longer paused or if countdown started
     if (!g_isPaused || g_countdownActive) {
-        safe_remove_task(g_taskUnpauseReminderId);
+        remove_task(g_taskUnpauseReminderId);
         return;
     }
 
     // Both confirmed - countdown should have started, stop reminding
     if (g_unpauseRequested && g_unpauseConfirmedOther) {
-        safe_remove_task(g_taskUnpauseReminderId);
+        remove_task(g_taskUnpauseReminderId);
         return;
     }
 
@@ -8210,27 +7677,27 @@ public unpause_reminder_tick() {
 
 // Start unpause reminder task (called when one team does their action)
 stock start_unpause_reminder() {
-    safe_remove_task(g_taskUnpauseReminderId);
+    remove_task(g_taskUnpauseReminderId);
     set_task(g_unpauseReminderSecs, "unpause_reminder_tick", g_taskUnpauseReminderId, _, _, "b");
 }
 
 // Stop unpause reminder task
 stock stop_unpause_reminder() {
-    safe_remove_task(g_taskUnpauseReminderId);
+    remove_task(g_taskUnpauseReminderId);
 }
 
 // Auto-confirmunpause countdown (60 seconds after owner /resume)
 public auto_confirmunpause_tick() {
     // Stop if no longer paused or countdown already started
     if (!g_isPaused || g_countdownActive) {
-        safe_remove_task(g_taskAutoConfirmId);
+        remove_task(g_taskAutoConfirmId);
         g_autoConfirmLeft = 0;
         return;
     }
 
     // Stop if other team already confirmed
     if (g_unpauseConfirmedOther) {
-        safe_remove_task(g_taskAutoConfirmId);
+        remove_task(g_taskAutoConfirmId);
         g_autoConfirmLeft = 0;
         return;
     }
@@ -8251,7 +7718,7 @@ public auto_confirmunpause_tick() {
 
     // Time's up - auto confirm
     if (g_autoConfirmLeft <= 0) {
-        safe_remove_task(g_taskAutoConfirmId);
+        remove_task(g_taskAutoConfirmId);
         g_autoConfirmLeft = 0;
 
         announce_all("Auto-confirming unpause (60 second timeout).");
@@ -8277,11 +7744,11 @@ stock enter_pending_phase(const initiator[]) {
     g_halfCaptain2_name[0] = g_halfCaptain2_sid[0] = EOS;
 
     // start/refresh the pending HUD
-    safe_remove_task(g_taskPendingHudId);
+    remove_task(g_taskPendingHudId);
     set_task(1.0, "pending_hud_tick", g_taskPendingHudId, _, _, "b");
 
     // Start periodic unready player reminder (configurable interval)
-    safe_remove_task(g_taskUnreadyReminderId);
+    remove_task(g_taskUnreadyReminderId);
     set_task(g_unreadyReminderSecs, "unready_reminder_tick", g_taskUnreadyReminderId, _, _, "b");
 
     // strong log so we see exact state
@@ -8327,8 +7794,8 @@ public cmd_rcon_pause(id) {
 }
 
 stock reset_captains() {
-    g_captain1_name[0] = g_captain1_sid[0] = g_captain1_ip[0] = EOS;
-    g_captain2_name[0] = g_captain2_sid[0] = g_captain2_ip[0] = EOS;
+    g_captain1_name[0] = g_captain1_sid[0] = EOS;
+    g_captain2_name[0] = g_captain2_sid[0] = EOS;
     g_captain1_team = g_captain2_team = 0;
     // Also clear half captains
     g_halfCaptain1_name[0] = g_halfCaptain1_sid[0] = EOS;

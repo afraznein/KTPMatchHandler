@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.69] - 2026-02-05
+
+### Added
+- **KTP_HALF_END log event for HLStatsX** - Logs accurate H1 end timestamp
+  - Fires at the moment gameplay ends (scoreboard appears), before map change/warmup
+  - Allows HLStatsX to set H1's `end_time` correctly, preventing warmup kills from being attributed to H1
+  - Format: `KTP_HALF_END (matchid "xxx") (map "xxx") (half "1st")`
+
+---
+
+## [0.10.68] - 2026-02-04
+
+### Fixed
+- **Team names not clearing on .forcereset** - Both `g_teamName[1]`/`g_teamName[2]` (display names) and `g_team1Name`/`g_team2Name` (persistent names) now reset to "Allies"/"Axis" when force resetting
+
+### Added
+- **`ktp_match_competitive` cvar** - Indicator for other plugins (KTPCvarChecker) to know match type
+  - Set to 1 for competitive modes (`.ktp`, `.ktpOT`)
+  - Set to 0 for casual modes (`.12man`, `.scrim`, `.draft`)
+  - Reset to 0 on `.forcereset`
+- **Debug logging for Discord curl write callback** - Traces response capture for 12man message ID investigation
+
+---
+
 ## [0.10.67] - 2026-02-02
 
 ### Fixed

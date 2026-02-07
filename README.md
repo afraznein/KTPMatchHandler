@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.67** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.69** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -8,7 +8,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 
 ---
 
-## 🎮 Key Features
+## Key Features
 
 ### Match Management
 - **Structured Match Workflow**: Pre-start → Pending → Ready-up → LIVE
@@ -67,7 +67,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Requirements
 
@@ -145,7 +145,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 
 ---
 
-## 📖 Usage
+## Usage
 
 ### Starting a Match
 
@@ -170,15 +170,16 @@ Map config auto-executes
 
 **To Pause:**
 ```
-.pause          Tactical pause (5-sec countdown → PAUSED)
-.tech           Technical pause (uses team budget)
+.tech           Technical pause (uses team budget, 5-sec countdown → PAUSED)
 ```
+
+> **Note:** Tactical pauses (`.pause` / `.tac`) are disabled. Only `.tech` is allowed.
 
 **During Pause (shows real-time HUD):**
 ```
   == GAME PAUSED ==
 
-  Type: TACTICAL
+  Type: TECHNICAL
   By: PlayerName
 
   Elapsed: 2:34  |  Remaining: 2:26
@@ -224,7 +225,7 @@ Team 2: .go        ← Confirms (both teams must agree)
 
 #### Pause Control
 ```
-.pause, .tac            Tactical pause (5-sec countdown)
+.pause, .tac            Tactical pause (DISABLED - use .tech)
 .tech, .technical       Technical pause (uses team budget)
 .resume                 Request unpause (owner team)
 .go                     Confirm unpause (other team)
@@ -304,9 +305,11 @@ server_cmd("pause");         // Requires pausable 1
 
 | Type | Limit | Duration | Extensions | Command | Budget |
 |------|-------|----------|------------|---------|--------|
-| **Tactical** | 1 per team/match | 5 min | 2× 2 min | `.pause` | No |
-| **Technical** | Unlimited | Uses budget | Unlimited | `.tech` | 5 min/team/match |
-| **Disconnect** | Auto | Uses budget | Unlimited | Auto | From tech |
+| ~~Tactical~~ | ~~1 per team/match~~ | ~~5 min~~ | ~~2x 2 min~~ | ~~`.pause`~~ | ~~No~~ |
+| **Technical** | Unlimited | Uses budget | Per cvar | `.tech` | 5 min/team/match |
+| **Disconnect** | Auto | Uses budget | Per cvar | Auto | From tech |
+
+> **Note:** Tactical pauses are disabled. Only technical pauses (`.tech`) are allowed.
 
 > **Note (v0.7.1):** Tactical pause limits and tech budgets are now per-MATCH, not per-half. Teams cannot reset their pause allowance by going to 2nd half.
 
@@ -346,7 +349,7 @@ Game RESUMES (LIVE!)
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
 ### Map Configuration (`ktp_maps.ini`)
 
@@ -426,7 +429,7 @@ ktp_cfg_basepath "dod/"               // Base path for map configs
 
 ---
 
-## 📊 Logging
+## Logging
 
 ### 1. AMX Log
 **Location:** `<logsdir>/L[MMDD].log` (e.g., `addons/ktpamx/logs/` or `addons/amxmodx/logs/`)
@@ -475,7 +478,7 @@ Rich notifications with:
 
 ---
 
-## 🏗️ Technical Architecture
+## Technical Architecture
 
 ### ReAPI Integration
 
@@ -573,9 +576,9 @@ static bool:warned_10sec = false;
 
 ---
 
-## 🎯 Platform Support
+## Platform Support
 
-### ✅ Optimal: KTP-ReHLDS + KTP-ReAPI
+### Optimal: KTP-ReHLDS + KTP-ReAPI
 
 **All features work:**
 - ✅ ReAPI pause natives (`rh_set_server_pause()`)
@@ -587,7 +590,7 @@ static bool:warned_10sec = false;
 - ✅ Discord notifications
 - ✅ All pause features (countdown, extensions, tracking)
 
-### ⬆️ Good: Standard ReHLDS + Standard ReAPI
+### Good: Standard ReHLDS + Standard ReAPI
 
 **Most features work:**
 - ✅ ReAPI pause natives work
@@ -597,7 +600,7 @@ static bool:warned_10sec = false;
 - ❌ Chat frozen during pause (server messages and player chat)
 - ⚠️ Timer checks require player commands
 
-### ⚠️ Basic: Base AMX ModX
+### Basic: Base AMX ModX
 
 **Fallback mode:**
 - ⚠️ Uses `server_cmd("pause")` fallback
@@ -610,7 +613,7 @@ static bool:warned_10sec = false;
 
 ---
 
-## 📝 Changelog
+## Changelog
 
 ### v0.10.67 (2026-02-02) - HLStatsX Stats Accuracy & Changelevel Diagnostics
 
@@ -979,7 +982,7 @@ static bool:warned_10sec = false;
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions welcome! Please:
 
@@ -1001,13 +1004,13 @@ Contributions welcome! Please:
 
 ---
 
-## 📄 License
+## License
 
 MIT License - See [LICENSE](LICENSE) file for details
 
 ---
 
-## 🔗 Links
+## Links
 
 **KTP Projects:**
 - **GitHub Repository**: [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler)
@@ -1023,7 +1026,7 @@ MIT License - See [LICENSE](LICENSE) file for details
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 - **[REAPI_PAUSE_IMPLEMENTATION.md](REAPI_PAUSE_IMPLEMENTATION.md)** - Complete guide to ReAPI pause system
 - **[DISCORD_GUIDE.md](DISCORD_GUIDE.md)** - Discord relay setup and configuration
@@ -1034,7 +1037,7 @@ MIT License - See [LICENSE](LICENSE) file for details
 
 ---
 
-## 👤 Author
+## Author
 
 **Nein_**
 - GitHub: [@afraznein](https://github.com/afraznein)
@@ -1044,7 +1047,7 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - **s1lentq** - Original ReAPI and ReGameDLL development
 - **dreamstalker** - Original ReHLDS project
@@ -1056,7 +1059,7 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-## 🔒 Security Notes
+## Security Notes
 
 **Important:**
 - Never commit `discord.ini` to git (contains auth secrets)
@@ -1066,7 +1069,7 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-## 🚦 Status
+## Status
 
 - **Current Version**: v0.10.67
 - **Status**: Stable (Score persistence and Discord embeds verified on VPS)
@@ -1076,7 +1079,7 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-## ⚡ Quick Reference Card
+## Quick Reference Card
 
 ```
 ╔════════════════════════════════════════════════════════════╗
