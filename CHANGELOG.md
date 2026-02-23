@@ -6,6 +6,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.78] - 2026-02-22
+
+### Fixed
+- **1GB+/day AMXX log spam from pfnChangeLevel hook** - v0.10.72 added `RH_PF_changelevel_I` hook that logged every call. DoD game DLL calls pfnChangeLevel for every map in the mapcycle during intermission (~10 maps/frame × 900fps = ~9000 calls/sec), generating 6.85M log entries/day. Rate-limited to first 3 calls + every 10000th.
+- **Stuck server after failed map change (no match active)** - Added 15-second general changelevel watchdog for the no-match passthrough case. If the engine's changelevel doesn't complete (SV_SpawnServer fails silently), the watchdog forces `map` command which uses a separate engine path. Previously only halftime had a watchdog.
+- **Forcereset leaving dangling tasks** - `execute_force_reset()` didn't clean up `g_taskScoreRestoreId`, `g_taskMatchStartLogId`, `g_taskHalftimeWatchdogId`, or `g_taskGeneralWatchdogId`. Also didn't clear `g_pendingScoreAllies/Axis`, `g_delayedMatchId/Map/Half`, or reset `g_changeLevelHandled`. These stale tasks/state could interfere with a new match started within seconds of a forcereset.
+
+---
+
+## [0.10.77] - 2026-02-21
+
+### Fixed
+- **Discord curl use-after-free causing crashes** - All 5 Discord send functions (`send_discord_message`, `send_discord_simple_embed`, `send_discord_embed_raw`, `send_match_embed_create`, `send_match_embed_update`) shared a single `g_curlHeaders` slist that was freed and recreated on every request. When async requests overlapped (e.g., match start fires embed create + stats flush simultaneously), the second request's `curl_slist_free_all` destroyed headers the first curl handle was still pointing to — use-after-free. Both callbacks (`discord_callback`, `discord_embed_callback`) also freed the shared headers. Fixed by creating headers once at plugin init and reusing the persistent slist. Same pattern as KTPHLTVRecorder v1.5.1 fix. NY1 crash at 22:01 ET (segfault in `_IO_flush_all_linebuffered`) was preceded by `discord_curl_write` memory errors earlier in the day — likely heap corruption from this bug.
+
+---
+
+## [0.10.76] - 2026-02-21
+
+### Fixed
+- **Half text truncation in KTP_MATCH_START log** - `g_delayedHalf[8]` buffer was too small for "1st half" (8 chars + null = 9 bytes needed). `charsmax()` returned 7, truncating to "1st hal". Increased to `g_delayedHalf[16]`. Affected HLStatsX match parsing.
+
+---
+
+## [0.10.75] - 2026-02-21
+
+### Fixed
+- **Menu crash from stale callback after map change** - `menu_12man_type_handler` and `menu_12man_duration_handler` could be invoked with garbage menu handles (e.g., -6989007) after a map change. Added `menu < 0` guard and broadened item validation from `== MENU_EXIT` to `< 0` to catch all negative sentinel values.
+
+---
+
+## [0.10.72] - 2026-02-17
+
+### Fixed
+- **Timelimit map changes bypassing match state handler** - The game DLL calls `pfnChangeLevel()` when timelimit expires, which queues a `changelevel` command via the command buffer. KTPMatchHandler only hooked `RH_Host_Changelevel_f` (the console command handler), which for unknown reasons never fired for these queued commands in some cases (e.g., match 1.3-5379 on ATL1). Added `RH_PF_changelevel_I` hook as the primary interception point — fires directly when the game DLL requests a level change, before the command buffer. The existing `Host_Changelevel_f` hook remains as a secondary handler for admin/RCON-initiated changelevel commands.
+
+### Added
+- **Prestart/pending map change guard** - When timelimit expires during match setup (prestart or pending state), the PF hook now redirects to the same map instead of dumping players to the mapcycle rotation. Players stay on the correct map and can re-initiate the match.
+
+---
+
+## [0.10.71] - 2026-02-17
+
+### Fixed
+- **12man/scrim/draft Discord embeds posting to competitive channel** - `cmd_say_hook` unconditionally set `g_matchType = MATCH_TYPE_COMPETITIVE` when anyone typed `.ktp`, even if a non-competitive match was already in progress. This silently corrupted the match type, causing `get_discord_channel_id` to route embeds to the competitive channel instead of the 12man/scrim/draft channel. The overwrite happened before `cmd_match_start` could check for an active match, and HLDS doesn't log say commands intercepted with `PLUGIN_HANDLED`, making this invisible in logs. Fixed by guarding the type assignment with match state checks.
+
+### Added
+- **Discord channel routing debug log** - `get_discord_channel_id` now logs `DISCORD_CHANNEL_ROUTE` for non-competitive match types, showing the resolved channel ID for easier diagnosis of misrouted embeds.
+
+---
+
+## [0.10.70] - 2026-02-16
+
+### Fixed
+- **Discord embed not updating for 12man matches** - The embed callback used `fgets()` to read the Discord API response from a temp file, but `fgets()` stops at the first newline character. Discord's JSON response contains literal `\n` in embed field values (player rosters), causing `fgets` to return empty. Message ID was never captured, so all subsequent updates (halftime, 2nd half, match end) edited the wrong message. Replaced with `fread_blocks()` to read the entire response file.
+
+---
+
 ## [0.10.69] - 2026-02-05
 
 ### Added

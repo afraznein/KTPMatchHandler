@@ -52,7 +52,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.69"
+#define PLUGIN_VERSION "0.10.78"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -243,7 +243,7 @@ new g_lastPauseById = 0;
 // Ready flags per player
 new bool: g_ready[33];
 
-// cURL headers (needs to be freed after use)
+// cURL headers (created once at init, persistent for all async requests)
 new curl_slist:g_curlHeaders = SList_Empty;
 
 // ---------- Global buffers for stack-heavy functions ----------
@@ -261,9 +261,8 @@ new g_rosterEmbedPayload[2048];  // Larger buffer for embed JSON
 // Discord message editing support
 new g_discordMatchMsgId[32];         // Message ID of the consolidated match embed
 new g_discordMatchChannelId[64];     // Channel where match embed was sent
-new g_discordResponseFile[128];      // Temp file path for curl response capture
-new g_discordResponseBuffer[4096];   // Buffer for reading response file (needs to capture full JSON with embeds)
-new g_discordResponseHandle[1];      // File handle for curl write callback (array for passing to perform)
+new g_discordResponseBuffer[4096];   // In-memory buffer for curl response capture
+new g_discordResponseBufPos = 0;     // Current write position in response buffer
 
 // Roster tracking for 2nd half comparison (detect new players)
 new g_firstHalfRosterAllies[16][44]; // SteamIDs of players on Allies in 1st half (max 16)
@@ -346,11 +345,14 @@ new g_taskPrePauseId = 55610;               // Task ID for pre-pause countdown
 new g_taskScoreSaveId = 55612;              // Task ID for periodic score saves to localinfo
 new g_taskScoreRestoreId = 55613;           // Task ID for delayed score restoration after round restart
 new g_taskMatchStartLogId = 55614;          // Task ID for delayed KTP_MATCH_START logging to HLStatsX
+new g_taskHalftimeWatchdogId = 55615;       // Task ID for halftime changelevel watchdog
+new g_taskGeneralWatchdogId = 55616;        // Task ID for general (no-match) changelevel watchdog
 
 // Delayed match start log data (for HLStatsX UDP timing issue)
 new g_delayedMatchId[64];                   // Match ID for delayed log
 new g_delayedMap[64];                       // Map name for delayed log
-new g_delayedHalf[8];                       // Half text for delayed log
+new g_delayedHalf[16];                      // Half text for delayed log
+new g_generalWatchdogMap[64];               // Map for general changelevel watchdog
 
 // ================= Utilities =================
 stock log_ktp(const fmt[], any:...) {
@@ -454,20 +456,18 @@ new g_changeMapTaskId = 0;              // Task ID for countdown
 const CHANGELEVEL_COUNTDOWN_SECS = 5;   // Seconds to wait before map change
 
 public OnChangeLevel(const map[], const landmark[]) {
-    // DIAGNOSTIC: Log every hook call to confirm hook is firing
-    // This helps diagnose issues where the hook may not be firing at all
     log_ktp("event=CHANGELEVEL_HOOK_FIRED map=%s matchLive=%d half=%d handled=%d inOT=%d",
             map, g_matchLive, g_currentHalf, g_changeLevelHandled, g_inOvertime);
+
+    // If already handled by PF_changelevel_I hook, just pass through
+    if (g_changeLevelHandled) {
+        log_ktp("event=CHANGELEVEL_SKIP reason=handled_by_pfn map=%s", map);
+        return HC_CONTINUE;
+    }
 
     // If we're not in a live match, allow the changelevel
     if (!g_matchLive) {
         log_ktp("event=CHANGELEVEL_PASSTHROUGH reason=not_live map=%s", map);
-        return HC_CONTINUE;
-    }
-
-    // Prevent double-processing if we somehow get called twice
-    if (g_changeLevelHandled) {
-        log_ktp("event=CHANGELEVEL_SKIP reason=already_handled map=%s", map);
         return HC_CONTINUE;
     }
 
@@ -536,6 +536,106 @@ public OnChangeLevel(const map[], const landmark[]) {
         }
 
         // Match ended normally - let changelevel proceed
+        g_changeLevelHandled = false;
+        return HC_CONTINUE;
+    }
+}
+
+// ================= PFN_CHANGELEVEL HOOK (KTP-ReHLDS) =================
+// PRIMARY hook - fires when game DLL calls pfnChangeLevel (timelimit, objectives).
+// This is more reliable than Host_Changelevel_f which only fires for the console
+// changelevel command. The game DLL path is:
+//   pfnChangeLevel() -> PF_changelevel_I [this hook] -> Cbuf_AddText("changelevel map\n")
+//   ... next frame: Host_Changelevel_f [secondary hook] -> actual map change
+// By hooking here, we intercept at the source before the command buffer.
+public OnPfnChangeLevel(const map[], const landmark[]) {
+    // Rate-limit logging: game DLL calls pfnChangeLevel for every map in the mapcycle
+    // during intermission (~10 calls/frame × 900fps = 9000 calls/sec). Only log the
+    // first 3 calls and then every 10000th to prevent 1GB+/day log files.
+    static pfn_total_count;
+    pfn_total_count++;
+    if (pfn_total_count <= 3 || pfn_total_count % 10000 == 0) {
+        log_ktp("event=PFN_CHANGELEVEL_FIRED map=%s matchLive=%d prestart=%d pending=%d half=%d inOT=%d count=%d",
+                map, g_matchLive, g_preStartPending, g_matchPending, g_currentHalf, g_inOvertime, pfn_total_count);
+    }
+
+    // === NO MATCH STATE: pass through ===
+    if (!g_matchLive && !g_preStartPending && !g_matchPending) {
+        // Watchdog: if changelevel doesn't complete within 15 seconds, force map reload.
+        // DoD game DLL calls pfnChangeLevel for every map in the mapcycle during intermission.
+        // The engine's spawncount guard silently drops all but the first call, but if that
+        // first changelevel fails (SV_SpawnServer fails silently), the server stays in
+        // intermission forever. Only arm on the first call to avoid resetting the timer.
+        if (pfn_total_count == 1) {
+            copy(g_generalWatchdogMap, charsmax(g_generalWatchdogMap), map);
+            remove_task(g_taskGeneralWatchdogId);
+            set_task(15.0, "task_general_changelevel_watchdog", g_taskGeneralWatchdogId);
+        }
+        return HC_CONTINUE;
+    }
+
+    // === PRESTART or PENDING (not yet live): block the changelevel entirely ===
+    // Prevents timelimit expiry from dumping players to mapcycle.
+    // HC_SUPERCEDE stops pfnChangeLevel from queuing "changelevel" in the command buffer,
+    // so no map reload occurs and all prestart/pending state is preserved.
+    // Admin/RCON changelevel goes through Host_Changelevel_f (OnChangeLevel), not here.
+    if (!g_matchLive) {
+        if (pfn_total_count <= 3 || pfn_total_count % 10000 == 0) {
+            log_ktp("event=PFN_CHANGELEVEL_PRESTART_BLOCK map=%s prestart=%d pending=%d count=%d",
+                    map, g_preStartPending, g_matchPending, pfn_total_count);
+        }
+        return HC_SUPERCEDE;
+    }
+
+    // === LIVE MATCH: delegate to existing match state logic ===
+    // Rate-limit logging for already_handled: first 3 events, then every 10000th
+    // (can reach 300,000+ events if changelevel fails silently at halftime)
+    static pfn_skip_count;
+
+    // Prevent double-processing
+    if (g_changeLevelHandled) {
+        pfn_skip_count++;
+        if (pfn_skip_count <= 3 || pfn_skip_count % 10000 == 0) {
+            log_ktp("event=PFN_CHANGELEVEL_SKIP reason=already_handled map=%s count=%d", map, pfn_skip_count);
+        }
+        return HC_CONTINUE;
+    }
+    pfn_skip_count = 0;
+
+    g_changeLevelHandled = true;
+
+    // --- FIRST HALF END ---
+    if (g_currentHalf == 1 && !g_inOvertime) {
+        if (!g_matchMap[0]) {
+            copy(g_matchMap, charsmax(g_matchMap), g_currentMap);
+        }
+        handle_first_half_end();
+        log_ktp("event=PFN_CHANGELEVEL_REDIRECT_H2 original=%s target=%s", map, g_matchMap);
+        SetHookChainArg(1, ATYPE_STRING, g_matchMap);
+        return HC_CONTINUE;
+    }
+
+    // --- SECOND HALF END or OT ROUND END ---
+    g_inIntermission = true;
+    copy(g_pendingChangeMap, charsmax(g_pendingChangeMap), map);
+
+    if (g_inOvertime) {
+        log_ktp("event=PFN_CHANGELEVEL_OT map=%s otRound=%d", map, g_otRound);
+        new bool:stillTied = process_ot_round_end_changelevel();
+        if (stillTied) {
+            log_ktp("event=PFN_OT_REDIRECT original=%s target=%s round=%d", map, g_matchMap, g_otRound);
+            SetHookChainArg(1, ATYPE_STRING, g_matchMap);
+            return HC_CONTINUE;
+        }
+        g_changeLevelHandled = false;
+        return HC_CONTINUE;
+    } else {
+        log_ktp("event=PFN_CHANGELEVEL_H2_END map=%s matchId=%s", map, g_matchId);
+        new bool:otTriggered = process_second_half_end_changelevel();
+        if (otTriggered) {
+            log_ktp("event=PFN_OT_REDIRECT original=%s target=%s", map, g_matchMap);
+            SetHookChainArg(1, ATYPE_STRING, g_matchMap);
+        }
         g_changeLevelHandled = false;
         return HC_CONTINUE;
     }
@@ -856,6 +956,55 @@ stock handle_first_half_end() {
         send_match_embed_update(halfStatus);
     }
     #endif
+
+    // Watchdog: if changelevel doesn't complete within 10 seconds, force map reload.
+    // The normal flow: PF_changelevel_I_internal queues "changelevel <map>" in the command
+    // buffer, which executes next frame via Host_Changelevel_f_internal -> SV_SpawnServer.
+    // If SV_SpawnServer fails silently, the server stays in intermission forever, logging
+    // team scores every frame (1,400/sec) and cycling through the mapcycle in a tight loop.
+    // The "map" command bypasses both PF_changelevel_I and Host_Changelevel_f hooks,
+    // using a completely separate engine path that avoids the spawncount guard.
+    remove_task(g_taskHalftimeWatchdogId);
+    set_task(10.0, "task_halftime_watchdog", g_taskHalftimeWatchdogId);
+}
+
+// Halftime watchdog: fires if changelevel didn't complete within 10 seconds.
+// Forces "map" command which uses a separate engine path (Host_Map_f -> SV_SpawnServer),
+// bypassing the PF_changelevel_I spawncount guard and all changelevel hooks.
+public task_halftime_watchdog() {
+    log_amx("[KTP] WARNING: Halftime changelevel watchdog fired - map change did not complete within 10s, forcing map reload");
+    log_ktp("event=HALFTIME_WATCHDOG_FIRED matchId=%s matchMap=%s currentMap=%s", g_matchId, g_matchMap, g_currentMap);
+
+    new target[64];
+    if (g_matchMap[0]) {
+        copy(target, charsmax(target), g_matchMap);
+    } else {
+        copy(target, charsmax(target), g_currentMap);
+    }
+
+    // Reset the handled flag so plugin_init on the new map starts clean
+    g_changeLevelHandled = false;
+
+    server_cmd("map %s", target);
+    server_exec();
+}
+
+// General changelevel watchdog: fires if a no-match changelevel didn't complete within 15 seconds.
+// This catches the case where the server gets stuck in intermission with no match active,
+// endlessly cycling through the mapcycle calling pfnChangeLevel (spawncount guard drops all calls).
+public task_general_changelevel_watchdog() {
+    log_amx("[KTP] WARNING: General changelevel watchdog fired - map change did not complete within 15s, forcing map reload");
+    log_ktp("event=GENERAL_WATCHDOG_FIRED targetMap=%s currentMap=%s", g_generalWatchdogMap, g_currentMap);
+
+    new target[64];
+    if (g_generalWatchdogMap[0]) {
+        copy(target, charsmax(target), g_generalWatchdogMap);
+    } else {
+        copy(target, charsmax(target), g_currentMap);
+    }
+
+    server_cmd("map %s", target);
+    server_exec();
 }
 
 // Save OT state to localinfo for next round
@@ -1546,6 +1695,8 @@ stock get_short_hostname_code(output[], maxlen) {
         copy(cityCode, charsmax(cityCode), "CHI");
     } else if (containi(g_baseHostname, "Denver") != -1) {
         copy(cityCode, charsmax(cityCode), "DEN");
+    } else if (containi(g_baseHostname, "New York") != -1) {
+        copy(cityCode, charsmax(cityCode), "NY");
     } else if (containi(g_baseHostname, "Seattle") != -1) {
         copy(cityCode, charsmax(cityCode), "SEA");
     } else if (containi(g_baseHostname, "Miami") != -1) {
@@ -1760,6 +1911,12 @@ stock get_discord_channel_id(channelId[], maxlen) {
             copy(channelId, maxlen, g_discordChannelId);
         }
     }
+
+    // Debug: log channel routing for non-competitive match types
+    // Helps diagnose misrouted Discord embeds
+    if (_:g_matchType != _:MATCH_TYPE_COMPETITIVE) {
+        log_ktp("event=DISCORD_CHANNEL_ROUTE match_type=%d channel=%s", _:g_matchType, channelId[0] ? channelId : "(empty)");
+    }
 }
 
 stock send_discord_with_hostname(const message[]) {
@@ -1830,40 +1987,14 @@ stock send_discord_message(const message[]) {
     // Create cURL handle
     new CURL:curl = curl_easy_init();
     if (curl) {
-        // Free any previous headers
-        if (g_curlHeaders != SList_Empty) {
-            curl_slist_free_all(g_curlHeaders);
-            g_curlHeaders = SList_Empty;
-        }
-
-        // Set URL from INI config
         curl_easy_setopt(curl, CURLOPT_URL, g_discordRelayUrl);
-
-        // Disable SSL verification (Linux servers may not have CA bundle configured)
-        // This is acceptable since we're connecting to our own trusted Discord relay
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
-
-        // Set headers
-        g_curlHeaders = curl_slist_append(SList_Empty, "Content-Type: application/json");
-
-        formatex(g_discordAuthHeader, charsmax(g_discordAuthHeader), "X-Relay-Auth: %s", g_discordAuthSecret);
-        g_curlHeaders = curl_slist_append(g_curlHeaders, g_discordAuthHeader);
-
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_curlHeaders);
-
-        // Set POST data (using global buffer)
         curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_discordPayload);
-
-        // Set timeout (5 seconds)
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5);
 
-        // Debug: Log the request
         log_ktp("event=DISCORD_CURL_SEND url='%s' channel='%s'", g_discordRelayUrl, g_discordChannelIdBuf);
-
-        // Perform request asynchronously (non-blocking)
         curl_easy_perform(curl, "discord_callback");
-
-        // Cleanup (handle and headers freed in callback)
     } else {
         log_ktp("event=DISCORD_ERROR reason='curl_init_failed'");
     }
@@ -1878,14 +2009,8 @@ public discord_callback(CURL:curl, CURLcode:code) {
     } else {
         log_ktp("event=DISCORD_SUCCESS");
     }
-    // Cleanup curl handle
     curl_easy_cleanup(curl);
-
-    // Free headers
-    if (g_curlHeaders != SList_Empty) {
-        curl_slist_free_all(g_curlHeaders);
-        g_curlHeaders = SList_Empty;
-    }
+    // Note: g_curlHeaders is persistent — never free here (overlapping async requests)
 }
 
 // Discord embed colors (matching ktp_discord.inc for consistency)
@@ -1923,19 +2048,9 @@ stock send_discord_simple_embed(const title[], const description[], color) {
     // Send via curl
     new CURL:curl = curl_easy_init();
     if (curl) {
-        if (g_curlHeaders != SList_Empty) {
-            curl_slist_free_all(g_curlHeaders);
-            g_curlHeaders = SList_Empty;
-        }
-
         curl_easy_setopt(curl, CURLOPT_URL, g_discordRelayUrl);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
-
-        g_curlHeaders = curl_slist_append(SList_Empty, "Content-Type: application/json");
-        formatex(g_discordAuthHeader, charsmax(g_discordAuthHeader), "X-Relay-Auth: %s", g_discordAuthSecret);
-        g_curlHeaders = curl_slist_append(g_curlHeaders, g_discordAuthHeader);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_curlHeaders);
-
         curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_simpleEmbedPayload);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5);
 
@@ -2063,19 +2178,9 @@ stock send_discord_embed_raw(const payload[]) {
 
     new CURL:curl = curl_easy_init();
     if (curl) {
-        if (g_curlHeaders != SList_Empty) {
-            curl_slist_free_all(g_curlHeaders);
-            g_curlHeaders = SList_Empty;
-        }
-
         curl_easy_setopt(curl, CURLOPT_URL, g_discordRelayUrl);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
-
-        g_curlHeaders = curl_slist_append(SList_Empty, "Content-Type: application/json");
-        formatex(g_discordAuthHeader, charsmax(g_discordAuthHeader), "X-Relay-Auth: %s", g_discordAuthSecret);
-        g_curlHeaders = curl_slist_append(g_curlHeaders, g_discordAuthHeader);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_curlHeaders);
-
         curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, payload);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5);
 
@@ -2458,70 +2563,49 @@ stock build_scores_field() {
     }
 }
 
-// Write callback for curl - writes response data to file
+// Write callback for curl - appends response data to in-memory buffer (no temp file)
 public discord_curl_write(data[], size, nmemb, file) {
     new actual_size = size * nmemb;
-    log_ktp("event=DISCORD_CURL_WRITE size=%d nmemb=%d actual_size=%d file_handle=%d", size, nmemb, actual_size, file);
-    if (file && actual_size > 0) {
-        new written = fwrite_blocks(file, data, actual_size, BLOCK_CHAR);
-        log_ktp("event=DISCORD_CURL_WRITE_RESULT written=%d data_preview='%.50s'", written, data);
-    } else {
-        log_ktp("event=DISCORD_CURL_WRITE_SKIP file=%d actual_size=%d", file, actual_size);
+    new remaining = charsmax(g_discordResponseBuffer) - g_discordResponseBufPos;
+    new toWrite = (actual_size < remaining) ? actual_size : remaining;
+    for (new i = 0; i < toWrite; i++) {
+        g_discordResponseBuffer[g_discordResponseBufPos++] = data[i];
     }
     return actual_size;
 }
 
-// Callback for Discord embed with response capture
-public discord_embed_callback(CURL:curl, CURLcode:code, data[]) {
-    // Close the response file if it was opened
-    if (data[0]) {
-        fclose(data[0]);
-        data[0] = 0;
-    }
-
+// Callback for Discord embed with response capture (in-memory, no temp file)
+public discord_embed_callback(CURL:curl, CURLcode:code) {
     if (code == CURLE_OK) {
-        // Try to read the response file to get message ID
-        if (g_discordResponseFile[0]) {
-            new fp = fopen(g_discordResponseFile, "rt");
-            if (fp) {
-                fgets(fp, g_discordResponseBuffer, charsmax(g_discordResponseBuffer));
-                fclose(fp);
+        // Null-terminate the response buffer filled by discord_curl_write
+        g_discordResponseBuffer[g_discordResponseBufPos] = EOS;
 
-                // Parse message ID from JSON response: {"id":"1234567890",...}
-                new idStart = contain(g_discordResponseBuffer, "^"id^":^"");
-                if (idStart != -1) {
-                    idStart += 6;  // Skip past "id":"
-                    new idEnd = idStart;
-                    while (g_discordResponseBuffer[idEnd] && g_discordResponseBuffer[idEnd] != '"' && idEnd < idStart + 30) {
-                        idEnd++;
-                    }
-                    new idLen = idEnd - idStart;
-                    if (idLen > 0 && idLen < charsmax(g_discordMatchMsgId)) {
-                        for (new i = 0; i < idLen; i++) {
-                            g_discordMatchMsgId[i] = g_discordResponseBuffer[idStart + i];
-                        }
-                        g_discordMatchMsgId[idLen] = EOS;
-
-                        // Store in localinfo for 2nd half
-                        set_localinfo(LOCALINFO_DISCORD_MSG, g_discordMatchMsgId);
-                        copy(g_discordMatchChannelId, charsmax(g_discordMatchChannelId), g_discordChannelIdBuf);
-                        set_localinfo(LOCALINFO_DISCORD_CHAN, g_discordMatchChannelId);
-
-                        log_ktp("event=DISCORD_MSG_ID_CAPTURED id=%s channel=%s", g_discordMatchMsgId, g_discordMatchChannelId);
-                    } else {
-                        log_ktp("event=DISCORD_MSG_ID_PARSE_FAILED idLen=%d response='%.100s'", idLen, g_discordResponseBuffer);
-                    }
-                } else {
-                    log_ktp("event=DISCORD_MSG_ID_NOT_FOUND response='%.100s'", g_discordResponseBuffer);
+        // Parse message ID from JSON response: {"id":"1234567890",...}
+        new idStart = contain(g_discordResponseBuffer, "^"id^":^"");
+        if (idStart != -1) {
+            idStart += 6;  // Skip past "id":"
+            new idEnd = idStart;
+            while (g_discordResponseBuffer[idEnd] && g_discordResponseBuffer[idEnd] != '"' && idEnd < idStart + 30) {
+                idEnd++;
+            }
+            new idLen = idEnd - idStart;
+            if (idLen > 0 && idLen < charsmax(g_discordMatchMsgId)) {
+                for (new i = 0; i < idLen; i++) {
+                    g_discordMatchMsgId[i] = g_discordResponseBuffer[idStart + i];
                 }
+                g_discordMatchMsgId[idLen] = EOS;
 
-                // Delete temp file
-                delete_file(g_discordResponseFile);
+                // Store in localinfo for 2nd half
+                set_localinfo(LOCALINFO_DISCORD_MSG, g_discordMatchMsgId);
+                copy(g_discordMatchChannelId, charsmax(g_discordMatchChannelId), g_discordChannelIdBuf);
+                set_localinfo(LOCALINFO_DISCORD_CHAN, g_discordMatchChannelId);
+
+                log_ktp("event=DISCORD_MSG_ID_CAPTURED id=%s channel=%s", g_discordMatchMsgId, g_discordMatchChannelId);
             } else {
-                log_ktp("event=DISCORD_RESPONSE_FILE_READ_FAILED path=%s", g_discordResponseFile);
+                log_ktp("event=DISCORD_MSG_ID_PARSE_FAILED idLen=%d response='%.100s'", idLen, g_discordResponseBuffer);
             }
         } else {
-            log_ktp("event=DISCORD_RESPONSE_FILE_PATH_EMPTY");
+            log_ktp("event=DISCORD_MSG_ID_NOT_FOUND bufpos=%d response='%.100s'", g_discordResponseBufPos, g_discordResponseBuffer);
         }
         log_ktp("event=DISCORD_EMBED_SUCCESS");
     } else {
@@ -2531,10 +2615,7 @@ public discord_embed_callback(CURL:curl, CURLcode:code, data[]) {
     }
 
     curl_easy_cleanup(curl);
-    if (g_curlHeaders != SList_Empty) {
-        curl_slist_free_all(g_curlHeaders);
-        g_curlHeaders = SList_Empty;
-    }
+    // Note: g_curlHeaders is persistent — never free here (overlapping async requests)
 }
 
 // Send match embed and capture message ID for later editing
@@ -2572,40 +2653,22 @@ stock send_match_embed_create() {
         g_team2Name, axisCount, g_rosterAxisEscaped,
         g_matchId, g_matchMap, g_serverHostnameEscaped);
 
-    // Set up temp file for response capture (use data dir for reliable path)
-    new dataDir[128];
-    get_datadir(dataDir, charsmax(dataDir));
-    formatex(g_discordResponseFile, charsmax(g_discordResponseFile), "%s/discord_resp_%d.tmp", dataDir, get_systime());
+    // Reset response buffer for capturing Discord API response in memory
+    g_discordResponseBufPos = 0;
+    g_discordResponseBuffer[0] = EOS;
 
     // Send with response capture
     new CURL:curl = curl_easy_init();
     if (curl) {
-        if (g_curlHeaders != SList_Empty) {
-            curl_slist_free_all(g_curlHeaders);
-            g_curlHeaders = SList_Empty;
-        }
-
         curl_easy_setopt(curl, CURLOPT_URL, g_discordRelayUrl);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
-
-        g_curlHeaders = curl_slist_append(SList_Empty, "Content-Type: application/json");
-        formatex(g_discordAuthHeader, charsmax(g_discordAuthHeader), "X-Relay-Auth: %s", g_discordAuthSecret);
-        g_curlHeaders = curl_slist_append(g_curlHeaders, g_discordAuthHeader);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_curlHeaders);
-
         curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_rosterEmbedPayload);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, "discord_curl_write");
 
-        // Open file for response capture and set up write callback
-        g_discordResponseHandle[0] = fopen(g_discordResponseFile, "wb");
-        if (g_discordResponseHandle[0]) {
-            curl_easy_setopt(curl, CURLOPT_WRITEDATA, g_discordResponseHandle[0]);
-            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, "discord_curl_write");
-            log_ktp("event=DISCORD_MATCH_EMBED_CREATE response_file=%s", g_discordResponseFile);
-        } else {
-            log_ktp("event=DISCORD_MATCH_EMBED_CREATE response_file_failed path=%s", g_discordResponseFile);
-        }
-        curl_easy_perform(curl, "discord_embed_callback", g_discordResponseHandle, sizeof(g_discordResponseHandle));
+        log_ktp("event=DISCORD_MATCH_EMBED_CREATE");
+        curl_easy_perform(curl, "discord_embed_callback");
     }
 
     // Save roster for 2nd half comparison
@@ -2688,19 +2751,9 @@ stock send_match_embed_update(const status[]) {
     // Send edit request
     new CURL:curl = curl_easy_init();
     if (curl) {
-        if (g_curlHeaders != SList_Empty) {
-            curl_slist_free_all(g_curlHeaders);
-            g_curlHeaders = SList_Empty;
-        }
-
         curl_easy_setopt(curl, CURLOPT_URL, editUrl);
         curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
-
-        g_curlHeaders = curl_slist_append(SList_Empty, "Content-Type: application/json");
-        formatex(g_discordAuthHeader, charsmax(g_discordAuthHeader), "X-Relay-Auth: %s", g_discordAuthSecret);
-        g_curlHeaders = curl_slist_append(g_curlHeaders, g_discordAuthHeader);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_curlHeaders);
-
         curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_rosterEmbedPayload);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5);
 
@@ -3828,6 +3881,11 @@ public _native_is_match_active(plugin, params) {
 public plugin_init() {
     register_plugin(PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR);
 
+    // Cancel changelevel watchdogs from previous map — if we reached plugin_init,
+    // the map change succeeded and these are no longer needed.
+    remove_task(g_taskHalftimeWatchdogId);
+    remove_task(g_taskGeneralWatchdogId);
+
     // Register forwards for external plugins (KTPHLTVRecorder, etc.)
     // ktp_match_start(matchId[], map[], matchType, half) - half: 1=1st, 2=2nd, 101+=OT round
     g_fwdMatchStart = CreateMultiForward("ktp_match_start", ET_IGNORE, FP_STRING, FP_STRING, FP_CELL, FP_CELL);
@@ -4099,11 +4157,17 @@ public plugin_init() {
     RegisterHookChain(RH_SV_UpdatePausedHUD, "OnPausedHUDUpdate", .post = false);
     log_amx("[KTP] Registered RH_SV_UpdatePausedHUD hook (KTP-ReHLDS mode)");
 
+    // Register ReAPI hook for game DLL pfnChangeLevel interception (KTP-ReHLDS)
+    // This is the PRIMARY hook - fires when game DLL requests level change (timelimit, objectives)
+    RegisterHookChain(RH_PF_changelevel_I, "OnPfnChangeLevel", .post = false);
+    log_amx("[KTP] Registered RH_PF_changelevel_I hook (KTP-ReHLDS mode)");
+
     // Register ReAPI hook for console changelevel interception (KTP-ReHLDS)
-    // This hooks server_cmd("changelevel") to finalize match state before map changes
+    // SECONDARY hook - fires when changelevel console command executes (admin/RCON)
+    // Skips processing if already handled by PF_changelevel_I above
     RegisterHookChain(RH_Host_Changelevel_f, "OnChangeLevel", .post = false);
     log_amx("[KTP] Registered RH_Host_Changelevel_f hook (KTP-ReHLDS mode)");
-    log_ktp("event=CHANGELEVEL_HOOK_REGISTERED");
+    log_ktp("event=CHANGELEVEL_HOOKS_REGISTERED");
 
     g_lastUnpauseBy[0] = EOS;
     g_lastPauseBy[0] = EOS;
@@ -4129,6 +4193,17 @@ public plugin_cfg() {
     load_map_mappings();
     load_discord_config();
     ktp_discord_load_config();  // Also populate shared Discord state for other plugins
+
+    // Initialize persistent curl headers (NEVER free/recreate per-request — causes
+    // use-after-free when async requests overlap. Same fix as KTPHLTVRecorder v1.5.1)
+    #if defined HAS_CURL
+    if (g_discordAuthSecret[0]) {
+        g_curlHeaders = curl_slist_append(SList_Empty, "Content-Type: application/json");
+        formatex(g_discordAuthHeader, charsmax(g_discordAuthHeader), "X-Relay-Auth: %s", g_discordAuthSecret);
+        g_curlHeaders = curl_slist_append(g_curlHeaders, g_discordAuthHeader);
+        log_ktp("event=CURL_HEADERS_INIT persistent=1");
+    }
+    #endif
 
     // KTP: Runtime check for DODX HLStatsX natives
     // These natives may not exist in older DODX builds
@@ -4444,6 +4519,7 @@ public plugin_end() {
     remove_task(g_taskUnpauseReminderId);
     remove_task(g_taskScoreSaveId);
     remove_task(g_changeMapTaskId);
+    remove_task(g_taskHalftimeWatchdogId);
 
     // Note: Match state finalization is now handled by OnChangeLevel() hook
     // which fires BEFORE plugin_end on KTP-ReHLDS servers.
@@ -6002,10 +6078,13 @@ public cmd_say_hook(id) {
     if (equali(args, "/ktp", 4) || equali(args, ".ktp", 4)) {
         // Must be exactly /ktp or have a space after for password
         if (strlen(args) == 4 || args[4] == ' ') {
-            // Explicitly set competitive match type and enable Discord
-            // (scrim/12man/draft handlers set their own types before calling cmd_match_start)
-            g_matchType = MATCH_TYPE_COMPETITIVE;
-            g_disableDiscord = false;
+            // Only set competitive match type if no other match is in progress
+            // Bug fix: previously this overwrote g_matchType unconditionally, corrupting
+            // 12man/scrim/draft matches if someone typed .ktp during their pending phase
+            if (!g_matchLive && !g_preStartPending && !g_matchPending) {
+                g_matchType = MATCH_TYPE_COMPETITIVE;
+                g_disableDiscord = false;
+            }
             return cmd_match_start(id);
         }
     }
@@ -6219,7 +6298,10 @@ public cmd_start_12man(id) {
 
 // Handler for 12man type selection (standard vs 1.3 Community)
 public menu_12man_type_handler(id, menu, item) {
-    if (item == MENU_EXIT) {
+    if (menu < 0)
+        return PLUGIN_HANDLED;
+
+    if (item < 0) {
         menu_destroy(menu);
         return PLUGIN_HANDLED;
     }
@@ -6362,7 +6444,10 @@ stock handle_13_queue_id_input(id, const input[]) {
 }
 
 public menu_12man_duration_handler(id, menu, item) {
-    if (item == MENU_EXIT) {
+    if (menu < 0)
+        return PLUGIN_HANDLED;
+
+    if (item < 0) {
         menu_destroy(menu);
         return PLUGIN_HANDLED;
     }
@@ -6915,6 +7000,24 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
         remove_task(g_taskScoreSaveId);
         g_periodicSaveStarted = false;
     }
+
+    // Clear remaining tasks that could fire after reset and interfere with new matches
+    remove_task(g_taskScoreRestoreId);
+    remove_task(g_taskMatchStartLogId);
+    remove_task(g_taskHalftimeWatchdogId);
+    remove_task(g_taskGeneralWatchdogId);
+
+    // Clear pending score restoration state
+    g_pendingScoreAllies = 0;
+    g_pendingScoreAxis = 0;
+
+    // Clear delayed match start log data
+    g_delayedMatchId[0] = EOS;
+    g_delayedMap[0] = EOS;
+    g_delayedHalf[0] = EOS;
+
+    // Reset changelevel guard
+    g_changeLevelHandled = false;
 
     // Clear all localinfo keys
     clear_localinfo_match_context();
