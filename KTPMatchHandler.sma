@@ -52,7 +52,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.84"
+#define PLUGIN_VERSION "0.10.85"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -6396,25 +6396,6 @@ public cmd_ready(id) {
         // Chat announcement uses original captains (preserved for Discord/match record)
         announce_all("All players ready. Captains: %s (%s) vs %s (%s)", c1n, c1TeamName, c2n, c2TeamName);
 
-        // Discord notification - consolidated match embed
-        // 1st half: Create new embed with rosters and capture message ID
-        // 2nd half/OT: Update existing embed with roster changes and scores
-        #if defined HAS_CURL
-        if (!g_disableDiscord) {
-            if (g_inOvertime) {
-                // OT rounds update existing embed (message ID restored from localinfo)
-                new status[64];
-                formatex(status, charsmax(status), "OVERTIME ROUND %d - Match Live", g_otRound);
-                send_match_embed_update(status);
-            } else if (g_currentHalf == 1) {
-                send_match_embed_create();
-            } else if (g_currentHalf == 2) {
-                // Embed will be updated - message ID was restored from localinfo
-                send_match_embed_update("2nd Half - Match Live");
-            }
-        }
-        #endif
-
         // Leave pending; clear ready UI/tasks
         g_matchPending = false;
         arrayset(g_ready, 0, sizeof g_ready);
@@ -6493,6 +6474,25 @@ public cmd_ready(id) {
 
         // Update server hostname with match state
         update_server_hostname();
+
+        // Discord notification - consolidated match embed
+        // Sent AFTER state transitions (g_matchPending=false, g_matchLive=true) and
+        // update_server_hostname() so the embed footer shows "LIVE" not "PENDING"
+        #if defined HAS_CURL
+        if (!g_disableDiscord) {
+            if (g_inOvertime) {
+                // OT rounds update existing embed (message ID restored from localinfo)
+                new status[64];
+                formatex(status, charsmax(status), "OVERTIME ROUND %d - Match Live", g_otRound);
+                send_match_embed_update(status);
+            } else if (g_currentHalf == 1) {
+                send_match_embed_create();
+            } else if (g_currentHalf == 2) {
+                // Embed will be updated - message ID was restored from localinfo
+                send_match_embed_update("2nd Half - Match Live");
+            }
+        }
+        #endif
 
         // Fire ktp_match_start forward for ALL half/OT starts (KTPHLTVRecorder, etc.)
         // half parameter: 1=1st half, 2=2nd half, 101+=OT round (101, 102, 103...)

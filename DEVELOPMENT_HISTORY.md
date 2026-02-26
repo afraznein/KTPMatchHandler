@@ -6,8 +6,8 @@
 |--------|-------|
 | **Project Duration** | October 2025 - Present |
 | **Total Repositories** | 16 |
-| **Estimated Development Hours** | 830-1040 |
-| **Last Updated** | 2026-02-06 |
+| **Estimated Development Hours** | 990-1240 |
+| **Last Updated** | 2026-02-28 |
 
 ---
 
@@ -30,8 +30,8 @@
 | November 2025 | 180-225 | Platform (C++ ReAPI/KTPAMXX), major plugin rewrites |
 | December 2025 | 300-375 | Feature-complete push - overtime, extension mode, v1.0 releases |
 | January 2026 | 120-150 | Stability, polish, explicit OT, admin tools |
-| February 2026 | 80-120 | Bare metal migration, performance optimization, codebase review |
-| **Total** | **830-1040** | |
+| February 2026 | 240-320 | Bare metal migration, performance optimization, lag investigation, CPU isolation, bug audit, 2 new server deployments |
+| **Total** | **990-1240** | |
 
 ### Repository Breakdown
 
@@ -279,7 +279,7 @@ February marked the transition from VPS hosting to dedicated bare metal servers,
 - LinuxGSM monitor bug fix documentation (HIGH PRIORITY)
 - Ubuntu optimization research documentation
 
-### Other Updates
+### Other Updates (Feb 1-6)
 
 | Component | Version | Changes |
 |-----------|---------|---------|
@@ -287,7 +287,7 @@ February marked the transition from VPS hosting to dedicated bare metal servers,
 | KTPHLStatsX | v0.2.5 | KTP_HALF_END handler for accurate H1 end_time |
 | KTPCvarChecker | v7.12 | Emoji removal from headers, documentation cleanup |
 
-### Codebase Review
+### Codebase Review (Feb 1-6)
 
 Systematic review across all 16+ KTP projects:
 - Documentation cleanup: emoji removal from headers, stale version fixes
@@ -295,15 +295,144 @@ Systematic review across all 16+ KTP projects:
 - CLAUDE.md gitignore audit across all projects
 - README/CHANGELOG consistency pass
 
+### Feb 7-19: Frame Profiling & Lag Investigation
+
+Deep investigation into recurring lag spikes reported by players during competitive matches. Built comprehensive profiling tools at the engine level.
+
+**KTP-ReHLDS Frame Profiling:**
+- 6-phase frame timing: read (SV_ReadPackets), phys (SV_Physics), misc1, send (SV_SendClientMessages), post, steam
+- `[KTP_SPIKE]` log alerts when any phase exceeds configurable thresholds
+- Per-opcode instrumentation for granular packet processing analysis
+- SV_ParseMove CPU-time profiling to isolate per-client processing costs
+
+**Engine Changes:**
+- MAX_RATE raised from 100,000 to 1,000,000 in net.h (allows higher client rate settings)
+- HLTV interp buffer reduced from 50ms to 15ms for lower latency spectating
+- MAX_PROXY_UPDATERATE raised to 200
+
+**Key Findings:**
+- Discovered `clc_cvarvalue2` causing 160-185ms frame freezes (KTPCvarChecker bug - synchronous cvar queries blocking the frame loop)
+- Steam API processing confirmed negligible (<0.055ms)
+- Spikes are 100% in `read` phase (SV_ReadPackets) - single client packets taking 3-6ms to process
+- `profiling-report.py` tool built for multi-server spike analysis across all locations
+
+### Feb 17-19: New York & Chicago Deployments
+
+Expanded server fleet with two new locations for scrim play.
+
+| Server | IP | Hardware | Branding |
+|--------|-----|----------|----------|
+| New York 1-5 | 74.91.123.64 | Baremetal | KTPSCRIM - New York 1-5 |
+| Chicago 1-5 | 172.238.176.101 | KVM VPS | KTPSCRIM - Chicago 1-5 |
+
+- Total fleet: **25 game servers** across 5 locations (Atlanta, Dallas, Denver, New York, Chicago)
+- 25 HLTV proxy instances on data server (ports 27020-27044)
+- Full KTP stack deployment with clone-ktp-stack.sh provisioning
+- LinuxGSM monitor bug patch applied to all new instances
+
+### Feb 17: KTPAMXX v2.6.10 - plugin_init Memory Leak Fix
+
+Critical extension mode bug where subsystem re-registration on every map change caused unbounded memory growth.
+
+**Problem:** In extension mode, `plugin_init` re-registered all commands, forwards, events, log events, messages, and menus on each map change without cleanup. Growth rate: ~2ms per map change, reaching 107ms+ after 50 map changes.
+
+**Two-pronged fix:**
+1. `modules_callPluginsUnloading()` called before `plugin_init` - lets ReAPI clear hookchain vectors (100% plugin-owned)
+2. Dedup-at-registration for all 7 subsystems: commands, SP forwards, multi-forwards, events, log events, messages, menus
+
+**Result:** `plugin_init` flat at ~0.9ms regardless of map changes (120x improvement over post-leak state).
+
+**Critical lesson learned:** No subsystem cleanup (`g_commands.clear()` etc.) is safe because C++ modules register state during `AMXX_Attach`. Dedup-at-registration is the correct approach.
+
+### Feb 20-24: KTPMatchHandler v0.10.70-0.10.82
+
+| Version | Key Changes |
+|---------|-------------|
+| v0.10.72-73 | Discord consolidated embeds with live-updating scores during match |
+| **v0.10.74** | **Halftime changelevel watchdog** - fixes NY5 infinite changelevel loop |
+| **v0.10.75** | **Menu crash fix** - ATL1 segfault from menu callback during map change |
+| **v0.10.77** | **Discord curl use-after-free fix** - shared header slist across async requests |
+| **v0.10.78** | **pfnChangeLevel rate limiting** - 6.8M daily log lines from changelevel spam |
+| **v0.10.82** | **pfnChangeLevel debounce** - 26M+ calls reduced to 1 per intermission, 11 crashes fixed, ~10GB logs cleaned |
+
+### Feb 20-24: Infrastructure Optimization
+
+Comprehensive performance tuning across all bare metal servers.
+
+**Rate Settings Standardized (all 25 servers):**
+- `sv_maxrate 1000000` (was mixed values)
+- `sv_maxupdaterate 120` (reverted from 200 - DoD client.dll clamps, breaks above 120)
+
+**CPU Isolation & Pinning:**
+- Kernel boot params: `isolcpus=2,3,5,6,7 nohz_full=2,3,5,6,7 rcu_nocbs=2,3,5,6,7`
+- IRQ affinity steering to housekeeping CPUs 0,1,4 (bitmask 0x13) via rc.local
+- Per-port CPU pinning: 27015→CPU2, 27016→CPU3, 27017→CPU5, 27018→CPU6, 27019→CPU7
+- Chicago (4 vCPU, no isolcpus): 27015→1, 27016→2, 27017→3, 27018+27019→0
+- `SCHED_FIFO` priority 50 (upgraded from `SCHED_RR` 20)
+- `ktp-apply-chrt.sh` runs every 30s via `ktp-chrt.timer`
+- `ktp-scheduled-restart.sh` applies pinning immediately after server start
+
+**Result:** OS scheduling stalls reduced from 9,445 to 0.
+
+### Feb 25-27: Systematic Bug Audit
+
+**Phase 1 - Six Components:**
+
+| Component | Version | Key Fixes |
+|-----------|---------|-----------|
+| **KTPAmxxCurl** | v1.3.0-1.3.1-ktp | `curl_get_response_body` native added, 4 bug fixes |
+| **KTPAMXX** | v2.6.11 | SP forward dedup crash fix, null guards, infinite loop fix, bounds fix |
+| **KTPCvarChecker** | v7.17 | Range enforcement fix (clamps to nearest valid bound instead of rejecting) |
+| **KTPAdminAudit** | v2.7.5 | Changemap race condition fix, menu buffer size increase |
+| **KTPHLStatsX** | v0.2.7 | 4 data integrity fixes: headshot flush timing, duplicate player handling, start_time accuracy, TK/suicide aggregation |
+| **KTPHLTVRecorder** | v1.5.2 | HTTP response validation, auth header fix, demo cutoff fix |
+
+**Phase 2 - KTPMatchHandler + Full Deploy:**
+
+- **KTPMatchHandler v0.10.83:** Discord code extraction (~980 lines into helper functions), 6 bug fixes, ~165 lines dead code removed
+- **KTPMatchHandler v0.10.84:** HTTP response validation for all curl callbacks, OT break state cleanup, additional dead code removal
+- Full stack recompile + deploy to all 25 servers (325 file uploads via paramiko SFTP)
+
+### Feb 27: Critical Crash Fix (Post-Deploy)
+
+4 segfaults (3x New York, 1x Atlanta) traced to SP forward dedup parameter type mismatch in KTPAMXX `CForward.cpp`.
+
+**Root Cause:** Same Pawn function registered as both a menu callback (`FP_CELL`) and a curl callback (`FP_STRING`). The dedup logic matched on function name alone, so when the curl callback fired, it found the menu forward (registered first) and passed a string pointer where an integer was expected. Integer menu selection value `1` cast to `char*` → `strlen(0x1)` → segfault.
+
+**Fix:** Added `numParams` + `paramTypes` comparison via `memcmp` to both `registerSPForward` overloads. Forwards with the same function name but different signatures are now correctly treated as distinct forwards.
+
+Rebuilt KTPAMXX v2.6.11, deployed to all 25 servers, verified stable.
+
+### Other Updates (Feb 7-28)
+
+| Component | Version | Changes |
+|-----------|---------|---------|
+| KTPHLTVRecorder | v1.5.2 | Demo cutoff fix, use-after-free fix, HTTP response validation |
+| KTPCvarChecker | v7.17 | Fixed cvar polling, async enforcement, range correction |
+| KTPAdminAudit | v2.7.5 | Changemap race condition, menu buffer increase |
+| KTPAmxxCurl | v1.3.1-ktp | Response body capture native, 4 bug fixes |
+| KTPHLStatsX | v0.2.7 | Headshot flush, duplicate players, TK/suicide aggregation |
+| KTPInfrastructure | v1.4.0 | CPU isolation, per-port pinning, SCHED_FIFO 50 |
+| KTPGrenadeLoadout | v1.0.5 | (unchanged) |
+| KTPGrenadeDamage | v1.0.2 | (unchanged) |
+| KTPPracticeMode | v1.3.0 | (unchanged) |
+
 ### Infrastructure Optimizations Applied
 
-All bare metal servers now have:
+All bare metal servers (Atlanta, Dallas, Denver, New York) now have:
 - Lowlatency kernel (1000Hz) + pingboost 2
 - CPU mitigations disabled (`mitigations=off`)
 - ALL C-states disabled (`max_cstate=0`)
 - 25MB UDP buffers
 - Real-time scheduling via systemd timer
 - Persistent optimizations via `/etc/rc.local`
+- **CPU isolation:** `isolcpus` + `nohz_full` + `rcu_nocbs` on game server CPUs
+- **IRQ affinity:** All hardware interrupts steered to housekeeping CPUs (0, 1, 4)
+- **Per-port CPU pinning:** Each game server instance pinned to a dedicated CPU core
+- **SCHED_FIFO 50:** Real-time scheduling priority for all game server processes
+- **ktp-chrt.timer:** Systemd timer re-applies CPU pinning + scheduling every 30 seconds
+
+Chicago (KVM VPS, 4 vCPU) has all optimizations except `isolcpus` (insufficient cores) with adjusted CPU pinning layout.
 
 ---
 
@@ -317,4 +446,4 @@ All bare metal servers now have:
 
 ---
 
-*Last updated: 2026-02-06*
+*Last updated: 2026-02-28*

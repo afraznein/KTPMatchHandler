@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.85] - 2026-02-25
+
+### Fixed
+- **Discord embed footer shows "PENDING" instead of "LIVE"** — `send_match_embed_create()` was called before the state transition (`g_matchPending = false`, `g_matchLive = true`) and before `update_server_hostname()`. The hostname baked into the embed footer was still in PENDING state. Moved the Discord embed block to after `update_server_hostname()` so the footer correctly shows "LIVE - 1ST HALF".
+
+---
+
 ## [0.10.84] - 2026-02-25
 
 ### Fixed
