@@ -70,12 +70,15 @@ cp "$KTPAMXX_BUILD/amxxpc" "$TEMP_BUILD/"
 cp "$KTPAMXX_BUILD/amxxpc32.so" "$TEMP_BUILD/"
 cp -r "$KTPAMXX_INCLUDES" "$TEMP_BUILD/include"
 
-# Convert line endings and copy source
+# Convert line endings and copy source + local includes
 sed 's/\r$//' "$SCRIPT_DIR/$PLUGIN_NAME.sma" > "$TEMP_BUILD/$PLUGIN_NAME.sma"
+for inc in "$SCRIPT_DIR"/*.inc; do
+    [ -f "$inc" ] && sed 's/\r$//' "$inc" > "$TEMP_BUILD/$(basename "$inc")"
+done
 
 # Compile
 cd "$TEMP_BUILD"
-./amxxpc "$PLUGIN_NAME.sma" -i./include -o"$PLUGIN_NAME.amxx"
+./amxxpc "$PLUGIN_NAME.sma" -i./include -i. -o"$PLUGIN_NAME.amxx"
 
 if [ $? -ne 0 ]; then
     echo

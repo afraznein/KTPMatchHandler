@@ -6,6 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.84] - 2026-02-25
+
+### Fixed
+- **No HTTP response code validation in Discord callbacks** — Both `discord_callback` and `discord_embed_callback` only checked `CURLcode` transport-level success, never the HTTP response code. Discord relay returning 401/500 was silently treated as success. Now checks `CURLINFO_RESPONSE_CODE` and logs HTTP errors with status code.
+- **OT break state not cleared in force reset** — `execute_force_reset()` didn't clear `g_otBreakActive`, `g_otBreakTimeLeft`, `g_otBreakVotes[]`, `g_otBreakExtensions[]`, or remove OT break vote/tick tasks. Force-resetting during an OT break left stale state that could interfere with subsequent matches.
+- **Dead conditions in Discord message escape logic** — Default branch in `send_discord_message()` escape switch checked `message[i] == 10 || message[i] == 13 || message[i] == 9`, but these values are already handled by explicit switch cases above and can never reach the default. Simplified to `message[i] >= 32`.
+
+### Removed
+- **`g_readyRequired` variable and `ktp_ready_required` cvar** — Variable was synced from cvar but `get_required_ready_count()` uses hardcoded values by match type (6 for KTP/KTP OT, 5 for all others), never referencing the cvar. Removed variable, cvar pointer, cvar registration, and cvar sync.
+- **`send_discord_with_hostname()`** — Never called; replaced by embed-based messaging.
+- **`send_player_roster_to_discord()`** (~90 lines) — Never called; replaced by consolidated embed system (`send_match_embed_create`/`send_match_embed_update`).
+
+---
+
+## [0.10.83] - 2026-02-25
+
+### Fixed
+- **Tied match incorrectly reported as Team 2 win** — `finalize_completed_second_half()` used a two-way if/else where the `else` clause caught both "team2 wins" and "tied" cases, reporting ties as Team 2 victories in Discord embeds and logs. Added three-way if/else-if/else with explicit tie case.
+- **Variable shadowing in `OnPausedHUDUpdate()`** — Inner `new currentTime` shadowed the outer variable, causing the tech budget countdown to use a stale value. Removed the inner declaration.
+- **Malformed backslash check in `exec_map_config()`** — Character literal `'\'` was a compiler-specific undefined behavior. Replaced with hex literal `0x5C`.
+- **Match type lost across halftime map change** — `g_matchType` was never saved to localinfo, resetting to COMPETITIVE after map change. Draft/scrim/12man matches fired wrong match type in `ktp_match_start`/`ktp_match_end` forwards, affecting HLStatsX and HLTVRecorder. Added `_ktp_mtyp` localinfo persistence.
+- **Discord channel ID not set for simple embeds** — `send_discord_simple_embed()` relied on callers to pre-populate `g_discordChannelIdBuf`. Moved `get_discord_channel_id()` call inside the function and removed all 7 caller-side calls.
+- **Pipe delimiter collision in roster serialization** — Player names containing `|` or `;` could corrupt the `name|steamid;name|steamid` localinfo format. Added `sanitize_name_for_localinfo()` that strips these characters from names before serialization.
+
+### Changed
+- **OT break tasks use dedicated IDs** — Both OT break vote and tick tasks shared default ID 0, making `remove_task()` from `.otskip` unreliable. Assigned unique IDs 55617 and 55618.
+- **Optimized roster restore** — Cached `strlen(buf)` before both roster restore loops to eliminate O(n²) rescanning on every iteration.
+- **Dual static buffers in `safe_sid()`** — Alternating two buffers prevents stale pointer reuse when called twice in the same expression.
+- **Removed unused `tname[16]` buffer** from `get_user_team_id()`.
+
+### Removed
+- **Dead code cleanup (~165 lines)** — Removed `start_changelevel_countdown()`/`task_changelevel_countdown()` (superseded by watchdog system), `cmd_client_pause()` (never registered), `unpause_reminder_tick()`/`start_unpause_reminder()`/`stop_unpause_reminder()` (superseded by `OnPausedHUDUpdate` real-time hook), `auto_confirmunpause_tick()` (never scheduled), and associated variables/call sites.
+- **Unreachable tech budget deduction** — 57 lines in `countdown_tick()` that could never execute because AMXX tasks don't fire during engine pause.
+
+### Refactored
+- **Discord code extracted to `ktp_matchhandler_discord.inc`** — ~980 lines of Discord messaging, embeds, roster tracking, and config loading moved to a separate include file. Purely organizational — identical compiled output (561,212 bytes).
+- **`compile.sh` updated** — Now copies local `.inc` files to the temp build directory with CR/LF stripping, and adds `-i.` for local include resolution.
+
+---
+
+## [0.10.82] - 2026-02-25
+
+### Fixed
+- **pfnChangeLevel hook firing millions of times during intermission** — Game DLL calls `pfnChangeLevel` for every map in the mapcycle during intermission (~9000 calls/sec). v0.10.78's rate-limiting only throttled logging but the hook handler still executed every call, generating 26M+ log entries and 3.7 GB log files on ATL1 alone. Added `g_pfnChangeLevelProcessed` debounce flag — only the first call per intermission cycle is processed, all subsequent calls return immediately with zero overhead. Flag resets on map load. Prestart/pending still blocks every call (HC_SUPERCEDE). Cleaned ~10 GB of bloated logs from ATL and NY.
+
+---
+
+## [0.10.81] - 2026-02-25
+
+### Fixed
+- **Discord score updates not posting (stack overflow in callback)** - v0.10.80 introduced `new responseBuffer[4096]` as a local variable inside `discord_embed_callback`. In Pawn, local arrays are stack-allocated — 4096 cells = 16KB, exceeding the available stack space. Every match embed POST crashed the callback with runtime error 3 (stack error) before it could parse the Discord message ID. Without the message ID, all subsequent edits (half-time scores, final scores, match complete status) were silently skipped. Moved to a 512-cell global buffer `g_discordResponseBuf`. Confirmed hitting ATL4 (3 crashes on Feb 24) and CHI2 (1 crash).
+
+---
+
+## [0.10.80] - 2026-02-23
+
+### Fixed
+- **Recurring discord_curl_write segfaults** - Eliminated Pawn-level `discord_curl_write` WRITEFUNCTION callback entirely. The `MF_ExecuteForward` → `amx_Allot` path could fail silently under memory pressure, writing response data to an uninitialized pointer and corrupting the heap. Now uses KTPAmxxCurl 1.3.0's built-in C++ response body capture (`curl_get_response_body` native) — response is buffered safely in `std::string` and read in the completion callback. Removes `g_discordResponseBuffer`, `g_discordResponseBufPos` globals and the `discord_curl_write` function.
+
+### Changed
+- **Requires KTPAmxxCurl 1.3.0-ktp** - Uses new `curl_get_response_body()` native for Discord embed response capture.
+
+---
+
 ## [0.10.78] - 2026-02-22
 
 ### Fixed
