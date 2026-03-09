@@ -52,7 +52,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.94"
+#define PLUGIN_VERSION "0.10.95"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -349,6 +349,7 @@ new g_taskGeneralWatchdogId = 55616;        // Task ID for general (no-match) ch
 new g_taskOtBreakVoteId = 55617;            // Task ID for OT break vote check
 new g_taskOtBreakTickId = 55618;            // Task ID for OT break countdown tick
 new g_taskIdleHintId = 55619;               // Task ID for idle command hint
+new g_taskSetMatchIdId = 55620;             // Task ID for delayed dodx_set_match_id after round restart
 
 // Delayed match start log data (for HLStatsX UDP timing issue)
 new g_delayedMatchId[64];                   // Match ID for delayed log
@@ -875,6 +876,11 @@ stock handle_first_half_end() {
     if (g_hasDodxStatsNatives) {
         new flushed = dodx_flush_all_stats();
         log_ktp("event=STATS_FLUSH type=half1 players=%d match_id=%s", flushed, g_matchId);
+
+        // Clear match context BEFORE map change to prevent warmup kills on the new map
+        // from being tagged with the match_id. It will be re-set when players .rdy for half 2.
+        dodx_set_match_id("");
+        log_ktp("event=MATCH_ID_CLEARED reason=halftime");
     }
     #endif
 
@@ -1286,15 +1292,28 @@ public task_delayed_match_start_log() {
     log_ktp("event=DELAYED_MATCH_START_LOG matchid=%s map=%s half=%s", g_delayedMatchId, g_delayedMap, g_delayedHalf);
 }
 
+// Delayed dodx_set_match_id after round restart
+// Called 1.5s after mp_clan_restartround 1 to ensure the round has restarted
+// and no countdown kills are tagged with the match_id.
+public task_delayed_set_match_id() {
+    #if defined HAS_DODX
+    if (g_hasDodxStatsNatives) {
+        dodx_set_match_id(g_delayedMatchId);
+        log_ktp("event=MATCH_ID_SET_DELAYED match_id=%s", g_delayedMatchId);
+    }
+    #endif
+}
+
 // Schedule delayed KTP_MATCH_START log (called after stats flush)
 stock schedule_match_start_log(const matchId[], const map[], const halfText[]) {
     copy(g_delayedMatchId, charsmax(g_delayedMatchId), matchId);
     copy(g_delayedMap, charsmax(g_delayedMap), map);
     copy(g_delayedHalf, charsmax(g_delayedHalf), halfText);
     remove_task(g_taskMatchStartLogId);
-    // 0.01s delay allows engine to stabilize after stats flush before UDP log send
-    // Reduced from 0.1s (2026-02-02) - original delay caused ~100ms of kills to be missed
-    set_task(0.01, "task_delayed_match_start_log", g_taskMatchStartLogId);
+    // 1.6s delay: fires 0.1s after dodx_set_match_id (1.5s) to ensure match context
+    // is set before the HLStatsX daemon receives KTP_MATCH_START.
+    // Previously 0.01s when set_match_id was immediate.
+    set_task(1.6, "task_delayed_match_start_log", g_taskMatchStartLogId);
 }
 
 stock announce_all(const fmt[], any:...) {
@@ -5906,6 +5925,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     // Clear remaining tasks that could fire after reset and interfere with new matches
     remove_task(g_taskScoreRestoreId);
     remove_task(g_taskMatchStartLogId);
+    remove_task(g_taskSetMatchIdId);
     remove_task(g_taskHalftimeWatchdogId);
     remove_task(g_taskGeneralWatchdogId);
     g_generalWatchdogArmed = false;
@@ -6436,13 +6456,17 @@ public cmd_ready(id) {
             new reset = dodx_reset_all_stats();
             log_ktp("event=STATS_RESET players=%d", reset);
 
-            // 3. Set match context for future stats logging
-            dodx_set_match_id(g_matchId);
+            // 3. Delay setting match context until AFTER round restart completes.
+            // mp_clan_restartround 1 (called above) takes ~1s. Setting match_id now
+            // would tag countdown kills with the match_id. Delay 1.5s to ensure
+            // the round has restarted and players have respawned.
+            copy(g_delayedMatchId, charsmax(g_delayedMatchId), g_matchId);
+            remove_task(g_taskSetMatchIdId);
+            set_task(1.5, "task_delayed_set_match_id", g_taskSetMatchIdId);
 
             // 4. Log KTP_MATCH_START marker for HLStatsX parsing (delayed for UDP timing)
             // Format: KTP_MATCH_START (matchid "xxx") (map "xxx") (half "x")
-            // Note: Uses delayed task because log_message() UDP send fails when called
-            // immediately after dodx_flush_all_stats() due to engine state timing issues
+            // Delayed 1.6s to fire after match_id is set (1.5s)
             schedule_match_start_log(g_matchId, g_currentMap, halfText);
         }
         #endif

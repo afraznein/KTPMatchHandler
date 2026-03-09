@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.95] - 2026-03-09
+
+### Fixed
+- **Warmup kills counted toward match stats** — `handle_first_half_end()` flushed stats but never cleared the DODX match_id before the halftime map change. Warmup kills on the new map were tagged with the active match_id and recorded in HLStatsX. Now calls `dodx_set_match_id("")` before the changelevel to clear match context during halftime warmup.
+- **Countdown kills counted toward match stats** — `cmd_ready()` set `dodx_set_match_id()` immediately before `mp_clan_restartround 1`, but the round restart has a ~1-second engine delay. Kills during the countdown were tagged with the match_id. Now delays `dodx_set_match_id()` by 1.5 seconds via `task_delayed_set_match_id`, firing after the round restart completes. `schedule_match_start_log` delay increased from 0.01s to 1.6s to fire after match_id is set.
+
+---
+
 ## [0.10.94] - 2026-03-06
 
 ### Fixed
