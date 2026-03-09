@@ -6,6 +6,123 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.94] - 2026-03-06
+
+### Fixed
+- **`[KTP] Waiting for:` unready reminder spammed every second during pending phase** — `unready_reminder_tick()` repeating task fired far more frequently than its configured 30-second interval (likely engine timing quirk during map load/round restart). Added `get_systime()` rate-limit guard: messages are never sent more frequently than the configured `ktp_unready_reminder_secs` interval, with a 10-second safety floor.
+
+---
+
+## [0.10.93] - 2026-03-02
+
+### Fixed
+- **`.score` showed swapped team scores during OT alternate-side rounds** — `cmd_score` used `g_matchScore[1]`/`g_matchScore[2]` directly (Allies/Axis side scores), but during OT rounds where Team 1 plays Axis (`g_otTeam1StartsAs == 2`), scores were displayed next to the wrong team names. Added OT-aware branch that maps side scores to team identity and shows grand totals (regulation + previous OT rounds + current round).
+- **Stale `g_autoConfirmLeft` after countdown cancel caused premature unpause** — `handle_countdown_cancel` did not reset `g_autoConfirmLeft` or remove the auto-confirm task. If the auto-confirm timer was counting down in `OnPausedHUDUpdate` when the countdown was cancelled, it continued decrementing and could trigger an unpause countdown without the owner having requested unpause. Now clears `g_autoConfirmLeft` and removes the task on cancel.
+- **`is_in_intermission()` missed OT rounds** — Timelimit expiry check only triggered for `g_currentHalf == 2`, but OT rounds use `g_currentHalf = 1`. A disconnect during the brief window between OT timelimit expiry and the changelevel hook could trigger a false auto-DC tech pause. Now also checks `g_inOvertime`.
+- **`.skip` triggered redundant changelevel during OT pending** — The `!g_matchLive` fallthrough in `cmd_ot_skip` was reachable during normal OT ready-up (when no break vote was pending), causing a full map reload. Added `task_exists(g_taskOtBreakVoteId)` guard so `.skip` only fires when a break vote is actually active.
+
+---
+
+## [0.10.92] - 2026-03-02
+
+### Fixed
+- **OT tech budget not persisted across OT rounds** — `save_ot_state_for_next_round()` and `save_ot_context()` saved from stale `g_otTechBudget` instead of active `g_techBudget`. Teams got full budget back each OT round. Now syncs `g_otTechBudget` after every tech budget deduction during overtime (both HUD-path and resume-path).
+- **Auto-DC tech pause uses wrong duration** — Disconnect auto-pause skipped setting `g_pauseDurationSec` to the team's remaining tech budget, so HUD and timeout used stale values (default 300s or last manual pause). Now sets duration from `g_techBudget[team]` before `execute_pause`.
+- **Tech pause corrupts tactical pause duration** — `.tech` set `g_pauseDurationSec` to the tech budget, which persisted into subsequent tactical pauses. Now `execute_pause()` restores `g_pauseDurationSec` from the CVAR cache for non-tech pauses.
+- **`g_unpauseConfirmedOther` not reset on countdown cancel** — If the other team `.go`'d and the owner cancelled, the confirmation persisted. Next `.resume` immediately started countdown, bypassing the 60-second wait. Now cleared in `handle_countdown_cancel`.
+- **Idle hint not restarted after prestart/pending/secondhalf cancel** — `cmd_match_start` removed the idle hint task, but `.cancel` paths never restarted it, leaving hints permanently stopped until next map change. Added restart in all three cancel paths.
+- **Pending cancel leaks 1.3 Community state** — If a 1.3 Community 12man entered pending and was cancelled, `g_is13CommunityMatch`, `g_13QueueId`, and `g_matchMap` persisted. Next non-12man match could use stale state. Now calls `clear_match_id()` in pending cancel.
+- **`ktp_pause_max_extensions` CVAR of 0 can't disable extensions** — Sync check `if (v7 > 0)` prevented CVAR value of 0 from overriding cached default of 2. Changed to `if (v7 >= 0)`.
+- **Pause 30s/10s warnings missed on clock skip** — Warnings required `remaining` to be in a narrow 1-second window. If the per-second tick skipped a value due to timing jitter, the warning never fired. Widened windows to `(10, 30]` and `(0, 10]`, relying on the per-pause guard to prevent repeats.
+- **`g_forceResetPending`/`g_restartHalfPending` not cleared on disconnect** — If the admin disconnected after requesting a force reset or half restart, a new player getting the same slot could accidentally confirm. Now cleared in `on_client_left`.
+- **`cmd_pre_notconfirm` gave no feedback to spectators** — Spectators calling `.unconfirm` got no message. Added "You must be on Allies or Axis to un-confirm."
+- **`g_readyOverride` survived force reset** — Debug override persisted through `.forcereset`, silently lowering ready requirements. Now cleared in `execute_force_reset`.
+- **Unpause reminder fired early on new pause** — `lastReminderTime` static persisted across pause sessions. First reminder of a new pause could fire based on old pause timing. Now resets when `g_pauseStartTime` changes.
+- **Dead guard in `cmd_match_start`** — Duplicate `g_matchPending || g_preStartPending` check at line 5033 was unreachable (already returned at lines 4963/4967). Removed.
+
+### Changed
+- **Map sort early-return guard** — Added `if (g_mapRows < 2) return` before the sort loop to avoid `g_mapRows - 1` underflow when no map entries are loaded.
+- **`cmd_ready` uses `get_identity` + cached `g_currentMap`** — Replaced `get_full_identity` (which calls `get_mapname()`) with `get_identity` and the pre-cached `g_currentMap`, saving an engine call per `.ready` invocation.
+
+---
+
+## [0.10.91] - 2026-03-02
+
+### Added
+- **Idle command hint** — Repeating chat message every 120 seconds when no match is active, showing available match types (`.ktp`, `.12man`, `.draft`, `.scrim`, `.practice`) and pointing players to `.commands`. Suppressed during matches, practice mode, and when the server is empty. Stops when a match starts, resumes after match end or force reset.
+
+---
+
+## [0.10.90] - 2026-03-02
+
+### Fixed
+- **Discord cancel notifications routed to wrong channel** — Both second-half cancel and pending cancel reset `g_matchType = MATCH_TYPE_COMPETITIVE` before sending Discord notifications. Since `get_discord_channel_id()` routes based on match type, 12man/draft/scrim cancel messages went to the competitive channel. Moved Discord sends before the match type reset.
+- **Second-half cancel leaves orphaned DODX/HLStatsX match** — After first half, DODX retains the match ID and HLStatsX has an open match record. Cancelling at halftime cleared `g_matchId` but never flushed stats, logged `KTP_MATCH_END`, or called `dodx_set_match_id("")`. Warmup kills after cancel were attributed to the cancelled match.
+- **Force reset leaves orphaned DODX/HLStatsX match** — Same class as above. `execute_force_reset` now flushes stats, logs `KTP_MATCH_END (status "forcereset")`, and clears DODX match context before clearing state.
+- **Stale player ID in disconnect auto-pause HUD** — `execute_pause()` set `g_lastPauseById = g_prePauseInitiatorId`, but the disconnect auto-pause path bypasses `trigger_pause_countdown` (which sets that variable). The stale ID from a previous manual pause could show the wrong player name in the pause HUD. Now explicitly cleared to 0 before calling `execute_pause`.
+- **Server hostname not updated during pause** — `execute_pause()` (the active pause function) never called `update_server_hostname()`. Hostname showed "LIVE" during the entire pause duration. Added the call after `g_isPaused = true`.
+- **1.3 Community Queue ID input state not cleared on captain disconnect** — If the captain disconnected mid-Queue-ID-input, `g_13InputState` and `g_13CaptainId` persisted. The next player assigned that slot ID had their chat silently consumed by the Queue ID handler. Added cleanup in `on_client_left`.
+- **Spectator could trigger unpause** — `handle_resume_request` recovery path set `g_pauseOwnerTeam = 0` for spectators, then the `teamId != g_pauseOwnerTeam` guard (0 != 0) passed, allowing spectators to request unpauses. Added early spectator rejection.
+
+### Changed
+- **Force reset uses `clear_match_id()` and `reset_team_names()`** — Replaced inline clearing of `g_matchId`, 1.3 Community state, and team names with the shared helpers, preventing future divergence.
+
+### Removed
+- **Dead `ktp_pause_now()` function** — Superseded by `execute_pause()`, never called.
+- **Dead `g_taskPauseHudId` task ID** — Declared and used in 4 `remove_task()` calls, but no `set_task` ever created a task with this ID. All calls were no-ops.
+- **Dead OT break entry functions** — `trigger_overtime()`, `task_check_ot_break_votes()`, `start_ot_break()`, `task_ot_break_tick()` (~150 lines). The old in-map OT trigger was replaced by changelevel-based OT (`.ktpOT`). The reachable OT functions (`end_ot_break`, `start_overtime_round`, `save_ot_context`) are retained for the `.skip` command path.
+
+---
+
+## [0.10.89] - 2026-03-02
+
+### Fixed
+- **Queue ID mismatch log always empty** — `g_13QueueIdFirst` was cleared to `EOS` before the `log_ktp` call that logs it, so the `first=` field was always empty. Moved the clear to after the log statement.
+- **Second-half cancel leaks 1.3 Community state** — Used `g_matchId[0] = EOS` directly instead of `clear_match_id()`, leaving `g_is13CommunityMatch`, `g_13QueueId`, `g_13InputState`, and `g_13CaptainId` with stale values. Next non-1.3 match could generate a malformed match ID using the stale queue ID.
+- **Second-half cancel leaks custom team names** — Reset `g_team1Name`/`g_team2Name` but not `g_teamName[]`. Custom team names bled into the next match when `reset_match_scores()` copied them back. Now uses `reset_team_names()`.
+- **Pending cancel leaks custom team names** — Same issue as second-half cancel but in the pending-cancel path. Added `reset_team_names()`.
+- **Abandoned OT forward passes first-half scores instead of regulation totals** — `ktp_match_end` forward in `finalize_abandoned_match` always passed `firstHalf1`/`firstHalf2`. For abandoned OT matches, `regScore1`/`regScore2` are the correct values. Split the forward call into per-branch with correct scores.
+- **OT context saved log shows wrong data** — `buf` was reused across `generate_ot_scores_string`, `format_ot_state`, and `format_state` calls, but the log labeled the final `buf` contents as `ot_scores`. Saved OT scores string separately before overwrite.
+- **No bounds check on `g_otRound`** — `g_otScores[32][3]` supports indices 0-31, but `g_otRound` was incremented with no upper bound. After 31 OT rounds, out-of-bounds array write. Added bounds check that ends the match at round 31.
+- **Sort swap buffer truncation** — `tmpKey[64]` was too small for `g_mapKeys[][96]` entries during map config sort. Increased to `tmpKey[96]`.
+- **Missing upper-bound on auto-request re-arm** — `handle_countdown_cancel` checked `secs < AUTO_REQUEST_MIN_SECS` but not `secs > AUTO_REQUEST_MAX_SECS`, inconsistent with `setup_auto_unpause_request()`. Added the upper-bound check and `remove_task` before `set_task`.
+- **Disconnect state not cleared in OnPausedHUDUpdate unpause path** — When unpause completed through the HUD update path, disconnect tracking state and auto-request tasks were not cleaned up (unlike the task-based fallback path). Added matching cleanup.
+- **Double "LIVE" announcement in task-based countdown fallback** — Both `"=== LIVE! ==="` and `"Live! (Unpaused by %s)"` were announced. Consolidated into single `"=== LIVE! === (Unpaused by %s)"`.
+- **`save_ot_context()` didn't persist `LOCALINFO_MATCH_TYPE`** — Relied on stale value surviving from regulation. Now explicitly saves it for robustness.
+- **Hardcoded "60 second" in auto-confirm message** — Replaced with `AUTO_CONFIRM_SECS` constant used in both the timer assignment and the announcement.
+- **`save_ot_state_for_first_round()` bypassed `format_state()` helper** — Manual `formatex` with the same format string. Replaced with `format_state()` call for consistency.
+
+### Changed
+- **Consolidated `cmd_setteamallies`/`cmd_setteamaxis`** — Near-identical 50-line functions replaced with shared `cmd_setteam()` helper parameterized by team ID, label, and usage string.
+
+### Removed
+- **Redundant `clear_localinfo_match_context()` calls** — Removed from two sites that called it immediately after `end_match_cleanup()`, which already calls it internally.
+
+---
+
+## [0.10.88] - 2026-03-02
+
+### Fixed
+- **Changelevel permanently blocked if map change fails to complete** — `g_changeLevelHandled` flag had no safety timeout. If set to `true` but the map never loaded (preventing plugin reinit), all subsequent changelevel hooks would skip processing permanently. Added `g_changeLevelHandledTime` timestamp; both `OnChangeLevel()` and `OnPfnChangeLevel()` now reset the flag with a warning log if it has been set for >15 seconds.
+- **General changelevel watchdog didn't reset `g_changeLevelHandled`** — `task_general_changelevel_watchdog()` forced `server_cmd("map ...")` but never reset the flag first, unlike the halftime watchdog which did. Added the reset for consistency.
+- **`g_changeLevelHandled` reset in `plugin_init()` was implicit** — The flag relied on AMXX's automatic global reinitialization on map load. Added explicit reset in `plugin_init()` as defense in depth.
+
+---
+
+## [0.10.87] - 2026-02-26
+
+### Fixed
+- **Discord embed message ID never captured — all embed updates skipped** — Discord API returns the `"id"` field *after* all embed content in the JSON response (e.g., at byte offset 361+ for simple embeds, 2000+ for match embeds with rosters). The response buffer `g_discordResponseBuf` was only 512 characters, truncating before the `"id"` field was reached. This caused `DISCORD_MSG_ID_NOT_FOUND` on every embed create, and all subsequent updates were skipped with `DISCORD_EDIT_SKIP reason=no_msg_id`. Increased buffer from 512 to 4096 characters to capture the full Discord API response including the message ID.
+
+---
+
+## [0.10.86] - 2026-02-26
+
+### Fixed
+- **Discord embed not updating with scores during live matches** — `task_periodic_score_save()` ran every 30 seconds pulling current scores from DODX, but only persisted them to localinfo for crash recovery. It never called `send_match_embed_update()`. Added score change detection via `g_lastEmbedScore[]` tracking array and Discord embed update when scores differ. Embeds now refresh every ~30s during gameplay with correct status ("1st Half - Match Live", "2nd Half - Match Live", "OVERTIME ROUND N - Match Live").
+
+---
+
 ## [0.10.85] - 2026-02-25
 
 ### Fixed
