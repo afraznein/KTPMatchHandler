@@ -15,30 +15,36 @@ stock get_discord_channel_id(channelId[], maxlen) {
     channelId[0] = EOS;
 
     switch (g_matchType) {
+        case MATCH_TYPE_COMPETITIVE, MATCH_TYPE_KTP_OT: {
+            // Competitive .ktp/.ktpOT → dedicated competitive channel
+            copy(channelId, maxlen, g_discordChannelId);
+        }
         case MATCH_TYPE_12MAN: {
             // 12man requires explicit channel - no fallback
             if (g_discordChannelId12man[0]) {
                 copy(channelId, maxlen, g_discordChannelId12man);
             }
-            // If not configured, channelId stays empty → Discord will be skipped
         }
         case MATCH_TYPE_SCRIM: {
             // Scrim requires explicit channel - no fallback
             if (g_discordChannelIdScrim[0]) {
                 copy(channelId, maxlen, g_discordChannelIdScrim);
             }
-            // If not configured, channelId stays empty → Discord will be skipped
         }
-        case MATCH_TYPE_DRAFT: {
+        case MATCH_TYPE_DRAFT, MATCH_TYPE_DRAFT_OT: {
             // Draft requires explicit channel - no fallback
             if (g_discordChannelIdDraft[0]) {
                 copy(channelId, maxlen, g_discordChannelIdDraft);
             }
-            // If not configured, channelId stays empty → Discord will be skipped
         }
         default: {
-            // Competitive matches use default channel
-            copy(channelId, maxlen, g_discordChannelId);
+            // Non-match context (forcereset, cancellations, etc.)
+            // Use dedicated default channel, fall back to competitive if not configured
+            if (g_discordChannelIdDefault[0]) {
+                copy(channelId, maxlen, g_discordChannelIdDefault);
+            } else {
+                copy(channelId, maxlen, g_discordChannelId);
+            }
         }
     }
 
@@ -340,14 +346,20 @@ stock build_roster_with_tags(output[], maxlen, team, &count) {
 stock bool:add_to_match_roster(const name[], const authid[], team) {
     // Check if player is already in EITHER roster (prevents duplicates across teams)
     // This handles the case where a player hasn't switched sides yet after halftime
+    // Extract SteamID after pipe delimiter for exact match (avoid substring false positives)
+    new storedSid[44];
     for (new i = 0; i < g_matchRosterTeam1Count; i++) {
-        if (contain(g_matchRosterTeam1[i], authid) != -1) {
-            return false; // Already tracked in Team 1
+        new pipePos = contain(g_matchRosterTeam1[i], "|");
+        if (pipePos != -1) {
+            copy(storedSid, charsmax(storedSid), g_matchRosterTeam1[i][pipePos + 1]);
+            if (equal(storedSid, authid)) return false;
         }
     }
     for (new i = 0; i < g_matchRosterTeam2Count; i++) {
-        if (contain(g_matchRosterTeam2[i], authid) != -1) {
-            return false; // Already tracked in Team 2
+        new pipePos = contain(g_matchRosterTeam2[i], "|");
+        if (pipePos != -1) {
+            copy(storedSid, charsmax(storedSid), g_matchRosterTeam2[i][pipePos + 1]);
+            if (equal(storedSid, authid)) return false;
         }
     }
 
@@ -416,16 +428,21 @@ stock get_player_roster_team(id) {
     new authid[44];
     get_user_authid(id, authid, charsmax(authid));
 
-    // Check Team 1 roster
+    // Check Team 1 roster — extract SteamID after pipe delimiter for exact match
+    new storedSid[44];
     for (new i = 0; i < g_matchRosterTeam1Count; i++) {
-        if (contain(g_matchRosterTeam1[i], authid) != -1) {
-            return 1;
+        new pipePos = contain(g_matchRosterTeam1[i], "|");
+        if (pipePos != -1) {
+            copy(storedSid, charsmax(storedSid), g_matchRosterTeam1[i][pipePos + 1]);
+            if (equal(storedSid, authid)) return 1;
         }
     }
     // Check Team 2 roster
     for (new i = 0; i < g_matchRosterTeam2Count; i++) {
-        if (contain(g_matchRosterTeam2[i], authid) != -1) {
-            return 2;
+        new pipePos = contain(g_matchRosterTeam2[i], "|");
+        if (pipePos != -1) {
+            copy(storedSid, charsmax(storedSid), g_matchRosterTeam2[i][pipePos + 1]);
+            if (equal(storedSid, authid)) return 2;
         }
     }
     return 0;  // Not in roster
@@ -485,7 +502,7 @@ stock build_roster_from_stored(output[], maxlen, team, &count) {
 // Save roster to localinfo (for map change persistence)
 // Format: "name|sid;name|sid;..." (semicolon separates entries)
 stock save_roster_to_localinfo() {
-    new buf[1024];
+    new buf[2048];
 
     // Save Team 1 roster
     buf[0] = EOS;
@@ -508,7 +525,7 @@ stock save_roster_to_localinfo() {
 
 // Restore roster from localinfo (after map change)
 stock restore_roster_from_localinfo() {
-    new buf[1024];
+    new buf[2048];
 
     // Restore Team 1 roster
     get_localinfo(LOCALINFO_ROSTER1, buf, charsmax(buf));
@@ -832,6 +849,7 @@ stock load_discord_config() {
     // Reset to defaults
     g_discordRelayUrl[0] = EOS;
     g_discordChannelId[0] = EOS;
+    g_discordChannelIdDefault[0] = EOS;
     g_discordChannelId12man[0] = EOS;
     g_discordChannelIdScrim[0] = EOS;
     g_discordChannelIdDraft[0] = EOS;
@@ -878,6 +896,9 @@ stock load_discord_config() {
             loaded++;
         } else if (equal(key, "discord_channel_id")) {
             copy(g_discordChannelId, charsmax(g_discordChannelId), val);
+            loaded++;
+        } else if (equal(key, "discord_channel_id_default")) {
+            copy(g_discordChannelIdDefault, charsmax(g_discordChannelIdDefault), val);
             loaded++;
         } else if (equal(key, "discord_channel_id_12man")) {
             copy(g_discordChannelId12man, charsmax(g_discordChannelId12man), val);

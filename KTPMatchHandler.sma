@@ -52,7 +52,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.95"
+#define PLUGIN_VERSION "0.10.100"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -73,7 +73,8 @@ new g_cvarUnpauseReminderSec; // unpause reminder interval (ktp_unpause_reminder
 
 // ---------- Discord Config (loaded from INI) ----------
 new g_discordRelayUrl[256];          // Discord relay endpoint URL
-new g_discordChannelId[64];          // Discord channel ID (competitive)
+new g_discordChannelId[64];          // Discord channel ID (competitive .ktp/.ktpOT only)
+new g_discordChannelIdDefault[64];   // Discord channel ID for general/operational notifications (fallback: g_discordChannelId)
 new g_discordChannelId12man[64];     // Discord channel ID for 12man matches (optional)
 new g_discordChannelIdScrim[64];     // Discord channel ID for scrim matches (optional)
 new g_discordChannelIdDraft[64];     // Discord channel ID for draft matches (optional)
@@ -200,7 +201,8 @@ new bool:g_skipTeamScoreAdjust = false;  // Skip msg_TeamScore adjustment (used 
 new bool:g_inOvertime = false;      // Currently in overtime
 new g_otRound = 0;                  // Current OT round (1, 2, 3...)
 new g_regulationScore[3];           // Regulation totals [1]=team1, [2]=team2
-new g_otScores[32][3];              // OT scores per round [round][team] - supports up to 31 OT rounds
+#define MAX_OT_ROUNDS 31
+new g_otScores[MAX_OT_ROUNDS + 1][3]; // OT scores per round [round][team] - indices 1..MAX_OT_ROUNDS
 new g_otTechBudget[3];              // OT tech budgets (reset once at OT start)
 new g_otTeam1StartsAs = 0;          // Which side team1 starts on this OT round (1=Allies, 2=Axis)
 new bool:g_otBreakActive = false;   // Break in progress before OT
@@ -331,6 +333,7 @@ new g_disconnectedPlayerSteamId[44];        // SteamID of player who disconnecte
 
 // ---------- Pause Timing System ----------
 new g_pauseStartTime = 0;                   // Unix timestamp when pause began
+new g_pauseSequence = 0;                    // Unique pause counter (for static cache invalidation)
 new g_pauseDurationSec = 300;               // 5 minutes default pause duration
 new g_pauseExtensions = 0;                  // How many extensions have been used
 // Note: Extension seconds and max extensions are read from CVARs dynamically
@@ -350,11 +353,19 @@ new g_taskOtBreakVoteId = 55617;            // Task ID for OT break vote check
 new g_taskOtBreakTickId = 55618;            // Task ID for OT break countdown tick
 new g_taskIdleHintId = 55619;               // Task ID for idle command hint
 new g_taskSetMatchIdId = 55620;             // Task ID for delayed dodx_set_match_id after round restart
+new g_taskDeferredStatsId = 55621;          // Task ID for deferred stats flush/reset (phase 1, 0.1s)
+new g_taskDeferredDiscordFwdId = 55622;     // Task ID for deferred Discord + forward (phase 2, 0.2s)
+new g_taskRestartHalfStatsId = 55623;       // Task ID for deferred restarthalf stats (phase 1, 0.1s)
+new g_taskRestartHalfDiscordId = 55624;     // Task ID for deferred restarthalf Discord (phase 2, 0.2s)
+new g_taskPendingPhaseId = 55625;           // Task ID for deferred enter_pending_phase after confirm
 
 // Delayed match start log data (for HLStatsX UDP timing issue)
 new g_delayedMatchId[64];                   // Match ID for delayed log
 new g_delayedMap[64];                       // Map name for delayed log
 new g_delayedHalf[16];                      // Half text for delayed log
+new g_deferredHalfText[16];                 // Half text for deferred match start task
+new g_restartHalfByName[64];                // Admin name for deferred restarthalf Discord embed
+new g_pendingPhaseInitiator[64];            // Initiator name for deferred enter_pending_phase
 new g_generalWatchdogMap[64];               // Map for general changelevel watchdog
 new bool:g_generalWatchdogArmed = false;    // Whether watchdog has been armed this map cycle
 new bool:g_pfnChangeLevelProcessed = false; // Debounce: skip all pfnChangeLevel calls after the first
@@ -845,7 +856,7 @@ stock bool:process_ot_round_end_changelevel() {
         #endif
 
         // Prepare for next OT round (swap sides, increment round)
-        if (g_otRound >= 31) {
+        if (g_otRound >= MAX_OT_ROUNDS) {
             log_amx("[KTP] ERROR: OT round limit reached (%d) — ending match to prevent overflow", g_otRound);
             log_ktp("event=OT_ROUND_LIMIT match_id=%s round=%d", g_matchId, g_otRound);
             end_match_cleanup();
@@ -1310,10 +1321,10 @@ stock schedule_match_start_log(const matchId[], const map[], const halfText[]) {
     copy(g_delayedMap, charsmax(g_delayedMap), map);
     copy(g_delayedHalf, charsmax(g_delayedHalf), halfText);
     remove_task(g_taskMatchStartLogId);
-    // 1.6s delay: fires 0.1s after dodx_set_match_id (1.5s) to ensure match context
+    // 2.0s delay: fires 0.5s after dodx_set_match_id (1.5s) to ensure match context
     // is set before the HLStatsX daemon receives KTP_MATCH_START.
-    // Previously 0.01s when set_match_id was immediate.
-    set_task(1.6, "task_delayed_match_start_log", g_taskMatchStartLogId);
+    // Gap increased from 0.1s to 0.5s — under load both tasks could coalesce in same frame.
+    set_task(2.0, "task_delayed_match_start_log", g_taskMatchStartLogId);
 }
 
 stock announce_all(const fmt[], any:...) {
@@ -1816,13 +1827,13 @@ stock show_pause_hud_message(const pauseType[]) {
     }
 
     // Cache CVAR values (static so they persist across calls, only lookup once per pause)
-    static cachedExtSec = 0, cachedMaxExt = 0, lastPauseStart = 0;
-    if (lastPauseStart != g_pauseStartTime) {
+    static cachedExtSec = 0, cachedMaxExt = 0, lastPauseSeq = -1;
+    if (lastPauseSeq != g_pauseSequence) {
         // New pause started, refresh cached values
         cachedExtSec = g_pauseExtensionSec;
         if (cachedExtSec <= 0) cachedExtSec = 120;
         cachedMaxExt = g_pauseMaxExtensions;
-        lastPauseStart = g_pauseStartTime;
+        lastPauseSeq = g_pauseSequence;
     }
 
     new totalDuration = g_pauseDurationSec + (g_pauseExtensions * cachedExtSec);
@@ -2266,6 +2277,7 @@ stock execute_pause(const who[], const reason[]) {
     copy(g_lastPauseBy, charsmax(g_lastPauseBy), who);
     g_lastPauseById = g_prePauseInitiatorId;
     g_pauseStartTime = get_systime();
+    g_pauseSequence++;  // Unique counter to invalidate static caches
     g_pauseExtensions = 0;
 
     // KTP: Enable silent pause mode (skips svc_setpause to clients)
@@ -2461,14 +2473,14 @@ stock check_unpause_reminder_realtime() {
     if (!g_unpauseRequested && !g_unpauseConfirmedOther) return;
 
     static lastReminderTime = 0;
-    static lastPauseId = 0;
+    static lastPauseSeq = -1;
     new currentTime = get_systime();
     new reminderInterval = floatround(g_unpauseReminderSecs);
     if (reminderInterval < 5) reminderInterval = 15;
 
     // Reset reminder timer for new pause sessions
-    if (lastPauseId != g_pauseStartTime) {
-        lastPauseId = g_pauseStartTime;
+    if (lastPauseSeq != g_pauseSequence) {
+        lastPauseSeq = g_pauseSequence;
         lastReminderTime = 0;
     }
 
@@ -2505,11 +2517,11 @@ stock check_pause_timer_realtime() {
     static lastWarning10 = 0;
 
     // Cache extension seconds (static so it persists, only lookup once per pause)
-    static cachedExtSec = 0, lastPauseStart = 0;
-    if (lastPauseStart != g_pauseStartTime) {
+    static cachedExtSec = 0, lastPauseSeq = -1;
+    if (lastPauseSeq != g_pauseSequence) {
         cachedExtSec = g_pauseExtensionSec;
         if (cachedExtSec <= 0) cachedExtSec = 120;
-        lastPauseStart = g_pauseStartTime;
+        lastPauseSeq = g_pauseSequence;
     }
 
     new currentTime = get_systime();
@@ -3615,6 +3627,7 @@ stock start_overtime_round() {
     // Changelevel to same map for OT round
     log_ktp("event=OT_CHANGELEVEL map=%s round=%d", g_matchMap, g_otRound);
     server_cmd("changelevel %s", g_matchMap);
+    server_exec();
 }
 
 // Save OT context to localinfo before changelevel
@@ -4011,17 +4024,6 @@ stock bool:is_in_intermission() {
     // If explicitly set (by changelevel hook), use that
     if (g_inIntermission) return true;
 
-    // Check if we're in second half or OT and timelimit has expired
-    if ((g_currentHalf == 2 || g_inOvertime) && g_matchLive) {
-        new Float:timelimit = get_cvar_float("mp_timelimit");
-        if (timelimit > 0.0) {
-            new Float:elapsed = get_gametime() / 60.0;  // Convert to minutes
-            if (elapsed >= timelimit) {
-                return true;
-            }
-        }
-    }
-
     return false;
 }
 
@@ -4302,10 +4304,12 @@ stock handle_resume_request(id, const name[], const sid[], const team[], teamId)
 // This relays chat via client_print which bypasses the block (same mechanism as HUD).
 
 public handle_pause_chat_relay(id) {
+    if (!g_isPaused) return PLUGIN_CONTINUE;
     return relay_pause_chat(id, false);
 }
 
 public handle_pause_chat_relay_team(id) {
+    if (!g_isPaused) return PLUGIN_CONTINUE;
     return relay_pause_chat(id, true);
 }
 
@@ -4954,6 +4958,18 @@ public auto_unpause_request() {
 
 // Hook for say commands with arguments (register_clcmd("say /cmd") only matches exact "/cmd", not "/cmd arg")
 public cmd_say_hook(id) {
+    // Fast path: check if this could be a KTP command or 1.3 input before doing string work.
+    // All KTP commands start with '.' or '/', and read_args returns `"text"` (with leading quote).
+    // Skip string processing for ordinary chat (~99% of say messages).
+    if (g_13InputState == 0 || id != g_13CaptainId) {
+        new raw[4];
+        read_args(raw, charsmax(raw));
+        // raw[0] is the leading quote from engine; raw[1] is the first real char
+        if (raw[1] != '.' && raw[1] != '/') {
+            return PLUGIN_CONTINUE;
+        }
+    }
+
     new args[128];
     read_args(args, charsmax(args));
     remove_quotes(args);
@@ -5434,9 +5450,9 @@ public cmd_pre_status(id) {
 }
 
 public cmd_pre_confirm(id) {
-    if (!g_preStartPending) { 
-        client_print(id, print_chat, "[KTP] Not in pre-start. Use .ktp to begin."); 
-        return PLUGIN_HANDLED; 
+    if (!g_preStartPending) {
+        client_print(id, print_chat, "[KTP] Not in pre-start. Use .ktp, .draft, .12man, or .scrim to begin.");
+        return PLUGIN_HANDLED;
     }
     if (!is_user_connected(id)) return PLUGIN_HANDLED;
 
@@ -5504,18 +5520,12 @@ public cmd_pre_confirm(id) {
         // reset pre-start state
         prestart_reset();
 
-        // OPTIMIZED: Use cached map name instead of get_mapname()
-        log_ktp("event=PRESTART_COMPLETE captain1='%s' c1_sid=%s c1_team=%d captain2='%s' c2_sid=%s c2_team=%d",
-                g_captain1_name, g_captain1_sid[0]?g_captain1_sid:"NA", g_captain1_team,
-                g_captain2_name, g_captain2_sid[0]?g_captain2_sid:"NA", g_captain2_team);
-
-        log_ktp("event=PENDING_BEGIN map=%s need=%d", g_currentMap, get_required_ready_count());
-
-        // Single entry point: sets g_matchPending, clears ready[], starts HUD, logs state
-        enter_pending_phase(g_captain2_name[0] ? g_captain2_name : g_captain1_name);
-
-        // RCON visibility
-        console_print(0, "[KTP] Pending: need=%d (%s/%s).", get_required_ready_count(), g_teamName[1], g_teamName[2]);
+        // Defer pending phase to next frame (+0.1s) to reduce confirm command stall
+        // Logs + enter_pending_phase + announce_all broadcasts add ~15-20ms synchronously
+        copy(g_pendingPhaseInitiator, charsmax(g_pendingPhaseInitiator),
+             g_captain2_name[0] ? g_captain2_name : g_captain1_name);
+        remove_task(g_taskPendingPhaseId);
+        set_task(0.1, "task_enter_pending_phase", g_taskPendingPhaseId);
     }
 
     return PLUGIN_HANDLED;
@@ -5573,7 +5583,7 @@ public cmd_cancel(id) {
         // Block cancel for competitive (.ktp) matches during 2nd half pending
         // These matches are "official" and should only be ended via .forcereset
         if (g_matchType == MATCH_TYPE_COMPETITIVE) {
-            client_print(id, print_chat, "[KTP] Cannot cancel a .ktp match after 1st half has completed.");
+            client_print(id, print_chat, "[KTP] Cannot cancel a competitive match after 1st half has completed.");
             client_print(id, print_chat, "[KTP] To end the match, an admin must use .forcereset");
             return PLUGIN_HANDLED;
         }
@@ -5926,6 +5936,11 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     remove_task(g_taskScoreRestoreId);
     remove_task(g_taskMatchStartLogId);
     remove_task(g_taskSetMatchIdId);
+    remove_task(g_taskDeferredStatsId);
+    remove_task(g_taskDeferredDiscordFwdId);
+    remove_task(g_taskRestartHalfStatsId);
+    remove_task(g_taskRestartHalfDiscordId);
+    remove_task(g_taskPendingPhaseId);
     remove_task(g_taskHalftimeWatchdogId);
     remove_task(g_taskGeneralWatchdogId);
     g_generalWatchdogArmed = false;
@@ -5938,6 +5953,9 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     g_delayedMatchId[0] = EOS;
     g_delayedMap[0] = EOS;
     g_delayedHalf[0] = EOS;
+    g_deferredHalfText[0] = EOS;
+    g_restartHalfByName[0] = EOS;
+    g_pendingPhaseInitiator[0] = EOS;
 
     // Reset changelevel guard
     g_changeLevelHandled = false;
@@ -6076,19 +6094,7 @@ stock execute_restart_half(id, const name[], const sid[], const ip[]) {
     }
     #endif
 
-    // Flush DODX stats for the aborted 2nd half progress
-    #if defined HAS_DODX
-    if (g_hasDodxStatsNatives) {
-        new flushed = dodx_flush_all_stats();
-        log_ktp("event=RESTARTHALF_STATS_FLUSHED players=%d", flushed);
-
-        // Reset stats for fresh 2nd half
-        new reset = dodx_reset_all_stats();
-        log_ktp("event=RESTARTHALF_STATS_RESET players=%d", reset);
-    }
-    #endif
-
-    // Trigger round restart
+    // Trigger round restart (synchronous — must happen immediately)
     server_cmd("mp_clan_restartround 1");
     server_exec();
 
@@ -6102,12 +6108,40 @@ stock execute_restart_half(id, const name[], const sid[], const ip[]) {
     announce_all("1st half preserved: %s %d - %d %s", g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
     announce_all("========================================");
 
-    // Send Discord notification
+    // Defer heavy work to avoid stalling the admin's command frame
+    // Phase 1 (0.1s): stats flush/reset
+    // Phase 2 (0.2s): Discord notification
+    copy(g_restartHalfByName, charsmax(g_restartHalfByName), name);
+    remove_task(g_taskRestartHalfStatsId);
+    remove_task(g_taskRestartHalfDiscordId);
+    set_task(0.1, "task_restarthalf_stats", g_taskRestartHalfStatsId);
+    set_task(0.2, "task_restarthalf_discord", g_taskRestartHalfDiscordId);
+}
+
+// =============== Deferred restarthalf — Phase 1 (0.1s) ===============
+public task_restarthalf_stats() {
+    if (!g_matchLive) return;
+
+    #if defined HAS_DODX
+    if (g_hasDodxStatsNatives) {
+        new flushed = dodx_flush_all_stats();
+        log_ktp("event=RESTARTHALF_STATS_FLUSHED players=%d", flushed);
+
+        new reset = dodx_reset_all_stats();
+        log_ktp("event=RESTARTHALF_STATS_RESET players=%d", reset);
+    }
+    #endif
+}
+
+// =============== Deferred restarthalf — Phase 2 (0.2s) ===============
+public task_restarthalf_discord() {
+    if (!g_matchLive) return;
+
     if (g_discordRelayUrl[0] && !g_disableDiscord) {
         new discordDesc[256];
         formatex(discordDesc, charsmax(discordDesc),
             "**%s** restarted the 2nd half.\n\n**1st Half Score:** %s %d - %d %s\n**2nd Half:** Reset to 0-0",
-            name, g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
+            g_restartHalfByName, g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
         send_discord_simple_embed("<:ktp:1105490705188659272> 2nd Half Restarted", discordDesc, DISCORD_COLOR_ORANGE);
     }
 }
@@ -6120,13 +6154,13 @@ public cmd_ready(id) {
     // CVARs are synced at plugin_cfg and when configs are executed
 
     if (!g_matchPending) {
-        client_print(id, print_chat, "[KTP] No pending match. Use .ktp to begin.");
+        client_print(id, print_chat, "[KTP] No pending match. Use .ktp, .draft, .12man, or .scrim to begin.");
         return PLUGIN_HANDLED;
     }
     if (!is_user_connected(id)) return PLUGIN_HANDLED;
-    if (g_ready[id]) { 
-        client_print(id, print_chat, "[KTP] You are already READY."); 
-        return PLUGIN_HANDLED; 
+    if (g_ready[id]) {
+        client_print(id, print_chat, "[KTP] You are already READY.");
+        return PLUGIN_HANDLED;
     }
 
     g_ready[id] = true;
@@ -6196,14 +6230,12 @@ public cmd_ready(id) {
         // 12man duration override - set mp_timelimit after map config
         if (g_matchType == MATCH_TYPE_12MAN && g_12manDuration != 20) {
             server_cmd("mp_timelimit %d", g_12manDuration);
-            server_exec();
             log_ktp("event=12MAN_TIMELIMIT duration=%d", g_12manDuration);
         }
 
         // Draft duration override - 15 minute halves (vs 20 min standard)
         if (g_matchType == MATCH_TYPE_DRAFT) {
             server_cmd("mp_timelimit 15");
-            server_exec();
             log_ktp("event=DRAFT_TIMELIMIT duration=15");
         }
 
@@ -6224,17 +6256,18 @@ public cmd_ready(id) {
             log_ktp("event=EXPLICIT_OT_INIT match_type=%d ot_round=1", _:g_matchType);
         }
 
-        // ALWAYS execute restart round - even if no map config was found
-        // This triggers the match countdown and respawn
-        server_cmd("mp_clan_restartround 1");
-        server_exec();
-
         // OT timelimit override - 5 minutes per OT round
+        // Must be set BEFORE restart round so the timelimit takes effect on the restarted round
         if (g_inOvertime) {
             server_cmd("mp_timelimit 5");
-            server_exec();
             log_ktp("event=OT_TIMELIMIT duration=5 round=%d", g_otRound);
         }
+
+        // ALWAYS execute restart round - even if no map config was found
+        // This triggers the match countdown and respawn
+        // Single server_exec() processes all queued commands (timelimit + restart)
+        server_cmd("mp_clan_restartround 1");
+        server_exec();
 
         // Build captain fields (no team-tag inference)
         new c1n[64], c2n[64];
@@ -6442,35 +6475,20 @@ public cmd_ready(id) {
         remove_task(g_taskAutoUnpauseReqId);
     
 
-        // =============== KTP: HLStatsX Stats Integration ===============
-        // Flush warmup stats BEFORE setting match ID (logged without matchid)
-        // Reset stats for fresh match tracking
-        // Set match ID for future stats logging
-        #if defined HAS_DODX
-        if (g_hasDodxStatsNatives) {
-            // 1. Flush warmup stats (logged WITHOUT matchid - these are pre-match stats)
-            new flushed = dodx_flush_all_stats();
-            log_ktp("event=STATS_FLUSH type=warmup players=%d", flushed);
+        // =============== Deferred match start (3-phase) ===============
+        // Heavy work is spread across multiple frames to avoid stalling the
+        // player's command frame. The round restart countdown is ~1s, so 0.1-0.2s
+        // delays are invisible to players.
+        //
+        // Phase 0 (this frame):  State changes, unpause, announcements, HUD
+        // Phase 1 (0.1s):        Stats flush/reset, match ID setup
+        // Phase 2 (0.2s):        Discord embed, ktp_match_start forward, context save
 
-            // 2. Reset all stats for fresh match tracking
-            new reset = dodx_reset_all_stats();
-            log_ktp("event=STATS_RESET players=%d", reset);
-
-            // 3. Delay setting match context until AFTER round restart completes.
-            // mp_clan_restartround 1 (called above) takes ~1s. Setting match_id now
-            // would tag countdown kills with the match_id. Delay 1.5s to ensure
-            // the round has restarted and players have respawned.
-            copy(g_delayedMatchId, charsmax(g_delayedMatchId), g_matchId);
-            remove_task(g_taskSetMatchIdId);
-            set_task(1.5, "task_delayed_set_match_id", g_taskSetMatchIdId);
-
-            // 4. Log KTP_MATCH_START marker for HLStatsX parsing (delayed for UDP timing)
-            // Format: KTP_MATCH_START (matchid "xxx") (map "xxx") (half "x")
-            // Delayed 1.6s to fire after match_id is set (1.5s)
-            schedule_match_start_log(g_matchId, g_currentMap, halfText);
-        }
-        #endif
-        // ===============================================================
+        copy(g_deferredHalfText, charsmax(g_deferredHalfText), halfText);
+        remove_task(g_taskDeferredStatsId);
+        remove_task(g_taskDeferredDiscordFwdId);
+        set_task(0.1, "task_deferred_stats", g_taskDeferredStatsId);
+        set_task(0.2, "task_deferred_discord_fwd", g_taskDeferredDiscordFwdId);
 
         log_ktp("event=HALF_START half=%s map=%s match_id=%s", halfText, g_currentMap, g_matchId);
 
@@ -6489,36 +6507,8 @@ public cmd_ready(id) {
         // Update server hostname with match state
         update_server_hostname();
 
-        // Discord notification - consolidated match embed
-        // Sent AFTER state transitions (g_matchPending=false, g_matchLive=true) and
-        // update_server_hostname() so the embed footer shows "LIVE" not "PENDING"
-        #if defined HAS_CURL
-        if (!g_disableDiscord) {
-            if (g_inOvertime) {
-                // OT rounds update existing embed (message ID restored from localinfo)
-                new status[64];
-                formatex(status, charsmax(status), "OVERTIME ROUND %d - Match Live", g_otRound);
-                send_match_embed_update(status);
-            } else if (g_currentHalf == 1) {
-                send_match_embed_create();
-            } else if (g_currentHalf == 2) {
-                // Embed will be updated - message ID was restored from localinfo
-                send_match_embed_update("2nd Half - Match Live");
-            }
-        }
-        #endif
-
-        // Fire ktp_match_start forward for ALL half/OT starts (KTPHLTVRecorder, etc.)
-        // half parameter: 1=1st half, 2=2nd half, 101+=OT round (101, 102, 103...)
+        // HUD announcement for match half/OT start (all match types)
         {
-            new ret;
-            new half = g_inOvertime ? (100 + g_otRound) : g_currentHalf;
-            ExecuteForward(g_fwdMatchStart, ret, g_matchId, g_currentMap, g_matchType, half);
-            log_ktp("event=FWD_MATCH_START match_id=%s map=%s type=%d half=%d", g_matchId, g_currentMap, g_matchType, half);
-        }
-
-        // HUD announcement for competitive half/OT start
-        if (g_matchType == MATCH_TYPE_COMPETITIVE) {
             set_hudmessage(0, 255, 0, -1.0, 0.35, 0, 0.0, 8.0, 0.5, 0.5, -1);
 
             if (g_inOvertime) {
@@ -6545,15 +6535,6 @@ public cmd_ready(id) {
                     g_currentHalf == 1 ? "1st Half" : "2nd Half");
             }
         }
-
-        // =============== Proactive context save for 1st half ===============
-        // Save match context to localinfo NOW so that if plugin_end fails
-        // to run (engine shutdown issue), the context is already persisted
-        if (g_currentHalf == 1) {
-            save_match_context_for_second_half();
-            log_ktp("event=PROACTIVE_CONTEXT_SAVE match_id=%s map=%s half=1", g_matchId, g_matchMap);
-        }
-        // ===================================================================
 
         // Start periodic score tracking for all halves
         // - 1st half: persists scores to localinfo for 2nd half restoration
@@ -6582,9 +6563,97 @@ public cmd_notready(id) {
     return PLUGIN_HANDLED;
 }
 
+// =============== Deferred pending phase (0.1s after cmd_pre_confirm) ===============
+// Logs + enter_pending_phase + RCON print deferred from confirm to reduce command stall.
+public task_enter_pending_phase() {
+    // Guard: if forcereset cleared the initiator in the 0.1s window, abort
+    if (!g_pendingPhaseInitiator[0]) return;
+
+    log_ktp("event=PRESTART_COMPLETE captain1='%s' c1_sid=%s c1_team=%d captain2='%s' c2_sid=%s c2_team=%d",
+            g_captain1_name, g_captain1_sid[0]?g_captain1_sid:"NA", g_captain1_team,
+            g_captain2_name, g_captain2_sid[0]?g_captain2_sid:"NA", g_captain2_team);
+
+    log_ktp("event=PENDING_BEGIN map=%s need=%d", g_currentMap, get_required_ready_count());
+
+    // Single entry point: sets g_matchPending, clears ready[], starts HUD, logs state
+    enter_pending_phase(g_pendingPhaseInitiator);
+
+    // RCON visibility
+    console_print(0, "[KTP] Pending: need=%d (%s/%s).", get_required_ready_count(), g_teamName[1], g_teamName[2]);
+
+    g_pendingPhaseInitiator[0] = EOS;
+}
+
+// =============== Deferred match start — Phase 1 (0.1s after cmd_ready) ===============
+// Stats flush/reset + match ID setup. Separated from cmd_ready to avoid stalling
+// the player's command frame. The round restart countdown is ~1s so this is invisible.
+public task_deferred_stats() {
+    // Guard: if match was reset in the 0.1s window, abort
+    if (!g_matchLive) return;
+
+    #if defined HAS_DODX
+    if (g_hasDodxStatsNatives) {
+        // 1. Flush warmup stats (logged WITHOUT matchid - these are pre-match stats)
+        new flushed = dodx_flush_all_stats();
+        log_ktp("event=STATS_FLUSH type=warmup players=%d", flushed);
+
+        // 2. Reset all stats for fresh match tracking
+        new reset = dodx_reset_all_stats();
+        log_ktp("event=STATS_RESET players=%d", reset);
+
+        // 3. Delay setting match context until AFTER round restart completes.
+        // mp_clan_restartround 1 takes ~1s. Delay 1.5s from original cmd_ready
+        // (1.4s from this deferred task) to ensure round has restarted.
+        copy(g_delayedMatchId, charsmax(g_delayedMatchId), g_matchId);
+        remove_task(g_taskSetMatchIdId);
+        set_task(1.4, "task_delayed_set_match_id", g_taskSetMatchIdId);
+
+        // 4. Log KTP_MATCH_START marker for HLStatsX parsing (delayed for UDP timing)
+        schedule_match_start_log(g_matchId, g_currentMap, g_deferredHalfText);
+    }
+    #endif
+}
+
+// =============== Deferred match start — Phase 2 (0.2s after cmd_ready) ===============
+// Discord embed, ktp_match_start forward, and proactive context save.
+public task_deferred_discord_fwd() {
+    // Guard: if match was reset in the 0.2s window, abort
+    if (!g_matchLive) return;
+
+    // Discord notification - consolidated match embed
+    #if defined HAS_CURL
+    if (!g_disableDiscord) {
+        if (g_inOvertime) {
+            new status[64];
+            formatex(status, charsmax(status), "OVERTIME ROUND %d - Match Live", g_otRound);
+            send_match_embed_update(status);
+        } else if (g_currentHalf == 1) {
+            send_match_embed_create();
+        } else if (g_currentHalf == 2) {
+            send_match_embed_update("2nd Half - Match Live");
+        }
+    }
+    #endif
+
+    // Fire ktp_match_start forward for ALL half/OT starts (KTPHLTVRecorder, etc.)
+    // half parameter: 1=1st half, 2=2nd half, 101+=OT round (101, 102, 103...)
+    {
+        new ret;
+        new half = g_inOvertime ? (100 + g_otRound) : g_currentHalf;
+        ExecuteForward(g_fwdMatchStart, ret, g_matchId, g_currentMap, g_matchType, half);
+        log_ktp("event=FWD_MATCH_START match_id=%s map=%s type=%d half=%d", g_matchId, g_currentMap, g_matchType, half);
+    }
+
+    // Proactive context save for 1st half
+    if (g_currentHalf == 1) {
+        save_match_context_for_second_half();
+        log_ktp("event=PROACTIVE_CONTEXT_SAVE match_id=%s map=%s half=1", g_matchId, g_matchMap);
+    }
+}
+
 public cmd_status(id) {
     if (!g_matchPending) {
-        client_print(id, print_chat, "[KTP] No pending match. Use .ktp to begin.");
+        client_print(id, print_chat, "[KTP] No pending match. Use .ktp, .draft, .12man, or .scrim to begin.");
         return PLUGIN_HANDLED;
     }
 

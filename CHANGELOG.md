@@ -6,6 +6,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.100] - 2026-03-13
+
+### Changed
+- **`cmd_say_hook` fast path** — Added prefix check before string processing. All KTP commands start with `.` or `/`, so ordinary chat messages (~99% of say traffic) now return immediately after reading only 4 bytes, skipping `remove_quotes`/`trim` entirely.
+- **Pause relay early guard** — `handle_pause_chat_relay` and `handle_pause_chat_relay_team` now check `g_isPaused` before calling `relay_pause_chat()`, avoiding function call overhead for ~99% of invocations (when not paused).
+
+---
+
+## [0.10.99] - 2026-03-13
+
+### Changed
+- **Deferred pending phase after confirm** — `cmd_pre_confirm` now defers `enter_pending_phase()` + logging + RCON print to a 0.1s task when both teams confirm. Reduces the confirm command frame by ~15-20ms (multiple `announce_all` broadcasts + log I/O). The pending phase starts on the next server frame, invisible to players. Task is guarded by `g_pendingPhaseInitiator` and cleaned up on `.forcereset`.
+
+---
+
+## [0.10.98] - 2026-03-13
+
+### Changed
+- **Discord channel routing: separate default channel** — Added `discord_channel_id_default` config key for general/operational notifications (`.forcereset`, match cancellations). Previously these routed to `discord_channel_id` (the competitive `.ktp` channel), polluting it with non-match messages. Now:
+  - `discord_channel_id` → `.ktp` and `.ktpOT` matches only
+  - `discord_channel_id_default` → non-match notifications (`.forcereset`, cancellations, etc.)
+  - Falls back to `discord_channel_id` if `discord_channel_id_default` is not configured (backward compatible)
+  - Also added explicit `MATCH_TYPE_KTP_OT` and `MATCH_TYPE_DRAFT_OT` cases to channel routing (previously hit `default` branch)
+
+---
+
+## [0.10.97] - 2026-03-13
+
+### Changed
+- **Deferred match start work (3-phase)** — `cmd_ready` match start path previously did all work synchronously in a single frame (~160ms stall). Now split into 3 phases:
+  - **Phase 0 (immediate):** State changes, round restart, unpause, announcements, HUD (~60-80ms, unavoidable engine work)
+  - **Phase 1 (+0.1s):** Stats flush/reset, match ID setup (~20-40ms, dominated by `dodx_flush_all_stats` firing `log_message` per weapon per player)
+  - **Phase 2 (+0.2s):** Discord embed, `ktp_match_start` forward, proactive context save (~10-15ms)
+  - Net effect: player's `.ready` command frame drops from ~160ms to ~60-80ms. Deferred work is invisible during the 1-second round restart countdown.
+  - All deferred tasks have `g_matchLive` guards and are cleaned up on `.forcereset`.
+- **Deferred `.restarthalf` work (3-phase)** — Same pattern applied to `execute_restart_half()`. Stats flush/reset deferred to +0.1s, Discord notification to +0.2s.
+
+---
+
+## [0.10.96] - 2026-03-12
+
+### Fixed
+- **OT timelimit set after restart round** — `mp_timelimit 5` was queued after `mp_clan_restartround 1`, so the first game tick of an OT round could use the previous timelimit. Now set before the restart.
+- **Missing `server_exec()` in `start_overtime_round()`** — `server_cmd("changelevel")` was not followed by `server_exec()`, inconsistent with every other changelevel path.
+- **Static pause cache stale on sub-second re-pause** — `show_pause_hud_message` and `check_pause_timer_realtime` keyed their static caches on `g_pauseStartTime` (Unix timestamp). Two pauses starting in the same second reused stale cached values. Now uses a monotonic `g_pauseSequence` counter.
+- **Redundant `server_exec()` calls in match start** — 12man/draft timelimit overrides each called `server_exec()` independently. Now queued and flushed with a single `server_exec()` alongside the restart round command.
+- **Match start log timing too tight** — `schedule_match_start_log` delay increased from 1.6s to 2.0s (0.5s gap after `set_match_id` at 1.5s, was 0.1s) to prevent task coalescing under load.
+- **Roster `contain()` false positive** — `get_player_roster_team` and `add_to_match_roster` used substring matching (`contain()`) on "name|steamid" entries. Now extracts the SteamID after the pipe delimiter and uses exact `equal()` comparison.
+- **Roster pipe-position guard skipped index-zero entries** — The new exact-match code used `pipePos > 0` which skipped entries where the pipe was at position 0 (empty player name after sanitization). Changed to `pipePos != -1` in all four roster lookup loops.
+- **Roster localinfo buffer overflow** — `save_roster_to_localinfo` and `restore_roster_from_localinfo` used 1024-byte buffers, but 24 roster entries at 80 chars each requires ~1943 bytes. Increased to 2048 to prevent silent truncation of roster tails (especially in 12-man matches).
+- **Unpause reminder cache not migrated to `g_pauseSequence`** — `check_unpause_reminder_realtime` still used `g_pauseStartTime` as its session discriminator while the other two pause cache sites were updated. Now uses `g_pauseSequence` for consistency.
+- **`is_in_intermission()` false positive from `get_gametime()`** — The timelimit-elapsed fallback used `get_gametime()` which returns time since server process start, not map start. On long-running servers this always exceeded `mp_timelimit`, making the branch always true. Removed the dead branch — the `g_inIntermission` flag set by the changelevel hook is sufficient.
+- **`.ktp`-specific user messages** — "Use .ktp to begin" messages in `cmd_ready`, `cmd_pre_confirm`, and `cmd_status` now list all match types: `.ktp, .draft, .12man, or .scrim`.
+- **Cancel message said ".ktp match"** — Changed to "competitive match" since the restriction applies to the match type, not the command name.
+- **HUD match start only showed for competitive** — Score/half HUD announcement at match start was gated behind `MATCH_TYPE_COMPETITIVE`. Now shows for all match types.
+
+### Changed
+- **`MAX_OT_ROUNDS` constant** — Replaced magic number `32`/`31` with `#define MAX_OT_ROUNDS 31` for `g_otScores` array and overflow guard.
+
+---
+
 ## [0.10.95] - 2026-03-09
 
 ### Fixed
