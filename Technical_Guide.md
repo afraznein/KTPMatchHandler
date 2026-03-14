@@ -4,7 +4,7 @@
 
 **No Metamod Required** - Runs on Linux and Windows via ReHLDS Extension Mode
 
-**Last Updated:** 2026-02-28
+**Last Updated:** 2026-03-14
 
 [Architecture](#six-layer-architecture) | [Components](#component-documentation) | [Installation](#complete-installation-guide) | [Repositories](#github-repositories)
 
@@ -17,15 +17,15 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 6: Application Plugins (AMX Plugins)                                  │
-│  KTPMatchHandler v0.10.84 - Match workflow, pause, OT, Discord embeds,HLStatsX│
-│  KTPHLTVRecorder v1.5.2   - Auto HLTV recording via HTTP API + health checks │
-│  KTPCvarChecker v7.17     - Real-time cvar enforcement + Discord grouping    │
-│  KTPFileChecker v2.3      - File consistency validation + Discord grouping   │
-│  KTPAdminAudit v2.7.5     - Menu-based kick/ban/changemap + audit            │
-│  KTPPracticeMode v1.3.0   - Practice mode with .grenade, noclip, HUD         │
-│  KTPGrenadeLoadout v1.0.5 - Custom grenade loadouts per class via INI        │
-│  KTPGrenadeDamage v1.0.2  - Grenade damage reduction by configurable %       │
-│  stats_logging.sma        - DODX weaponstats with match ID support           │
+│  KTPMatchHandler v0.10.100- Match workflow, pause, OT, Discord embeds,HLStatsX│
+│  KTPHLTVRecorder v1.5.4   - Auto HLTV recording via HTTP API + health checks │
+│  KTPCvarChecker v7.20     - Real-time cvar enforcement + Discord grouping    │
+│  KTPFileChecker v2.4      - File consistency validation + Discord grouping   │
+│  KTPAdminAudit v2.7.11    - Menu-based kick/ban/changemap + audit            │
+│  KTPPracticeMode v1.3.1   - Practice mode with .grenade, noclip, HUD         │
+│  KTPGrenadeLoadout v1.0.6 - Custom grenade loadouts per class via INI        │
+│  KTPGrenadeDamage v1.0.3  - Grenade damage reduction by configurable %       │
+│  stats_logging.sma v1.11.0- DODX weaponstats with match ID support           │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ Uses AMXX Forwards & Natives
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -40,7 +40,7 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
                               ↓ Uses AMXX Module API
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 4: HTTP/Networking Modules (AMXX Modules)                             │
-│  KTP AMXX Curl v1.3.1-ktp - Non-blocking HTTP/FTP via libcurl                │
+│  KTP AMXX Curl v1.3.5-ktp - Non-blocking HTTP/FTP via libcurl                │
 │  Uses MF_RegModuleFrameFunc() for async processing                           │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ Uses AMXX Module API
@@ -53,17 +53,17 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
                               ↓ Uses ReHLDS Hookchains
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Layer 2: Scripting Platform (ReHLDS Extension)                              │
-│  KTPAMXX v2.6.11 - AMX Mod X fork with extension mode + HLStatsX integration │
+│  KTPAMXX v2.7.2  - AMX Mod X fork with extension mode + HLStatsX integration │
 │  Loads as ReHLDS extension, no Metamod required                              │
 │  Provides: client_cvar_changed forward, MF_RegModuleFrameFunc()              │
-│  New: ktp_drop_client, DODX score broadcasting, ktp_discord.inc v1.3.2       │
+│  New: ktp_drop_client, DODX score broadcasting, ktp_discord.inc v1.3.4       │
 │  New: dod_damage_pre forward, grenade natives, player manipulation natives   │
-│  v2.6.10: Subsystem dedup (commands, forwards, events) prevents plugin_init  │
-│  leak. v2.6.11: SP forward dedup crash fix (safe deregistration)             │
+│  v2.7.0: JIT/ASM32 re-enabled, security hardening, 60+ code review fixes    │
+│  v2.7.2: Shot double-counting fix, ClearPluginLibraries crash fix            │
 └─────────────────────────────────────────────────────────────────────────────┘
                               ↓ ReHLDS Extension API
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  Layer 1: Game Engine (KTP-ReHLDS v3.22.0.904)                               │
+│  Layer 1: Game Engine (KTP-ReHLDS v3.22.0.909)                               │
 │  Custom ReHLDS fork with extension loader + KTP features                     │
 │  Provides: SV_UpdatePausedHUD hook, SV_Rcon hook, pfnClientCvarChanged       │
 │  New: ktp_silent_pause cvar, SV_BroadcastPauseState(), Host_Changelevel_f    │
@@ -76,10 +76,10 @@ The KTP stack eliminates Metamod dependency through a custom extension loading a
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Cloud Services:                                                             │
 │  - Discord Relay v1.0.1     - HTTP proxy for Discord webhooks (Cloud Run)   │
-│  - KTPHLStatsX v0.2.7       - Modified HLStatsX daemon with match tracking   │
+│  - KTPHLStatsX v0.3.2       - Modified HLStatsX daemon with match tracking   │
 │                                                                              │
 │  VPS Services:                                                               │
-│  - KTPFileDistributor v1.1.0 - .NET 8 file sync daemon (SFTP distribution)  │
+│  - KTPFileDistributor v1.1.1 - .NET 8 file sync daemon (SFTP distribution)  │
 │  - HLTV Scheduled Restarts  - systemd timer (replaces KTPHLTVKicker)        │
 │                                                                              │
 │  SDK Layer:                                                                  │
@@ -322,7 +322,7 @@ rehlds/
 ### Layer 1: KTP-ReHLDS (Engine)
 
 **Repository:** [github.com/afraznein/KTPReHLDS](https://github.com/afraznein/KTPReHLDS)
-**Version:** 3.22.0.904
+**Version:** 3.22.0.909
 **License:** MIT
 
 <details>
@@ -524,7 +524,7 @@ void SV_ParseCvarValue(client_t *cl, sizebuf_t *msg) {
 ### Layer 2: KTPAMXX (Scripting Platform)
 
 **Repository:** [github.com/afraznein/KTPAMXX](https://github.com/afraznein/KTPAMXX)
-**Version:** 2.6.11
+**Version:** 2.7.2
 **License:** GPL v3
 **Base:** AMX Mod X 1.10.0.5468-dev
 
@@ -702,7 +702,7 @@ This native provides an audited alternative that:
 </details>
 
 <details>
-<summary><b>ktp_discord.inc - Shared Discord Integration (v1.3.2)</b></summary>
+<summary><b>ktp_discord.inc - Shared Discord Integration (v1.3.4)</b></summary>
 
 #### Purpose
 
@@ -1004,13 +1004,15 @@ public OnPausedHUDUpdate() {
 ### Layer 4: KTP AMXX Curl (HTTP Module)
 
 **Repository:** [github.com/afraznein/KTPAMXXCurl](https://github.com/afraznein/KTPAMXXCurl)
-**Version:** 1.3.1-ktp
+**Version:** 1.3.5-ktp
 **License:** MIT
 **Base:** AmxxCurl by Polarhigh
 
 **v1.3.x Updates:**
 - **`curl_get_response_body` native** (v1.3.0) - Retrieve HTTP response body from completed requests, enabling plugins to parse API responses
 - **Persistent header slist** (v1.3.0) - Shared `curl_slist` for headers is created once at init and reused, preventing use-after-free with overlapping async requests
+- **In-flight callback safety** (v1.3.4) - All callback methods check `IsAmxValid()` before calling into Pawn, deferred cleanup for in-flight handles
+- **POSTFIELDS copy safety** (v1.3.5) - Auto-upgrades `CURLOPT_POSTFIELDS` to `CURLOPT_COPYPOSTFIELDS` for async requests, preventing stale pointer reads
 
 <details>
 <summary><b>Non-Blocking HTTP Without Metamod</b></summary>
@@ -1042,7 +1044,7 @@ void CurlFrameCallback() {
 ### Layer 5: DODX Stats Module
 
 **Included in:** KTPAMXX
-**Version:** 2.6.0
+**Version:** 2.7.2
 **Purpose:** Day of Defeat weapon stats, shot tracking, HLStatsX integration
 
 <details>
@@ -1253,11 +1255,21 @@ forward dod_stats_flush(id);
 #### KTPMatchHandler
 
 **Repository:** [github.com/afraznein/KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler)
-**Version:** 0.10.84
+**Version:** 0.10.100
 **License:** MIT
 
 <details>
-<summary><b>Recent Updates (v0.10.32 - v0.10.84)</b></summary>
+<summary><b>Recent Updates (v0.10.32 - v0.10.100)</b></summary>
+
+#### March 2026 (v0.10.91 - v0.10.100)
+- **Deferred match start** (v0.10.97) - Split ~160ms synchronous match start into 3 phases across multiple frames to eliminate frame stalls
+- **Say hook fast path** (v0.10.100) - Ordinary chat (~99% of say traffic) returns after 4 bytes, skipping all command processing
+- **OT timing fix** (v0.10.96) - Overtime timelimit now set before round restart (was briefly using previous half's value)
+- **Roster matching fix** (v0.10.96) - SteamID lookup uses exact match instead of substring (prevents false positives)
+- **OT score display fix** (v0.10.93) - `.score` showed swapped team scores during OT alternate-side rounds
+- **12 pause/OT/state leak fixes** (v0.10.92) - OT tech budget persistence, auto-DC pause duration, stale state cleanup
+- **Discord channel routing** (v0.10.98) - Separate default channel for non-match notifications
+- **Deferred pending phase** (v0.10.99) - Confirm command frame reduced by ~15-20ms
 
 #### Late February 2026 (v0.10.70 - v0.10.84)
 - **Discord embed system with live-updating scores** (v0.10.80+) - Match notifications use editable Discord embeds that update in real-time as scores change during live matches
@@ -2449,6 +2461,6 @@ discord_channel_id_audit_competitive=5555555555555555555
 
 *Cross-platform: Windows + Linux*
 
-**Last Updated:** 2026-02-28
+**Last Updated:** 2026-03-14
 
 </div>

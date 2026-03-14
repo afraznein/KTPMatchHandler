@@ -5,9 +5,9 @@
 | Metric | Value |
 |--------|-------|
 | **Project Duration** | October 2025 - Present |
-| **Total Repositories** | 16 |
-| **Estimated Development Hours** | 990-1240 |
-| **Last Updated** | 2026-02-28 |
+| **Total Repositories** | 17 |
+| **Estimated Development Hours** | 1150-1440 |
+| **Last Updated** | 2026-03-14 |
 
 ---
 
@@ -19,6 +19,7 @@
 - [December 2025](#december-2025---feature-complete) - Feature Complete
 - [January 2026](#january-2026---stability--polish) - Stability & Polish
 - [February 2026](#february-2026---bare-metal--performance) - Bare Metal & Performance
+- [March 2026](#march-2026---jit--code-review) - JIT & Code Review
 
 ---
 
@@ -31,14 +32,15 @@
 | December 2025 | 300-375 | Feature-complete push - overtime, extension mode, v1.0 releases |
 | January 2026 | 120-150 | Stability, polish, explicit OT, admin tools |
 | February 2026 | 240-320 | Bare metal migration, performance optimization, lag investigation, CPU isolation, bug audit, 2 new server deployments |
-| **Total** | **990-1240** | |
+| March 2026 | 160-200 | JIT re-enablement, 3-round KTPAMXX code review (60+ fixes), fleet-wide plugin audit, match system performance |
+| **Total** | **1150-1440** | |
 
 ### Repository Breakdown
 
 | Category | Count | Projects |
 |----------|-------|----------|
 | Core Engine (C++) | 4 | KTPReHLDS, KTPAMXX, KTPReAPI, KTPAmxxCurl |
-| Game Plugins (Pawn) | 8 | KTPMatchHandler, KTPCvarChecker, KTPFileChecker, KTPAdminAudit, KTPHLTVRecorder, KTPPracticeMode, KTPGrenadeLoadout, KTPGrenadeDamage |
+| Game Plugins (Pawn) | 9 | KTPMatchHandler, KTPCvarChecker, KTPFileChecker, KTPAdminAudit, KTPHLTVRecorder, KTPPracticeMode, KTPGrenadeLoadout, KTPGrenadeDamage, KTPScoreTracker |
 | Backend Services | 3 | Discord Relay, KTPFileDistributor, KTPHLStatsX |
 | Discord Bots | 2 | KTPScoreBot-ScoreParser, KTPScoreBot-WeeklyMatches |
 
@@ -436,6 +438,93 @@ Chicago (KVM VPS, 4 vCPU) has all optimizations except `isolcpus` (insufficient 
 
 ---
 
+## March 2026 - JIT & Code Review
+
+**Focus: KTPAMXX Code Review, JIT Re-Enablement, Fleet-Wide Plugin Audit**
+
+March centered on a comprehensive three-round code review of the KTPAMXX engine (the platform all plugins run on), producing 60+ fixes across all layers of the stack. The headline discovery was that JIT compilation had been disabled since the KTP fork was created — every plugin had been running through the slow C interpreter since launch.
+
+### KTPAMXX v2.6.16-2.7.2 — Engine Code Review + JIT
+
+**v2.6.16-2.6.18 (Mar 7-13):** Pre-review fixes including DODX pdata offset auto-detection rewrite (two-phase write-then-verify), halftime score zeroing fix (scores were being reset to 0 before KTPMatchHandler could read them), and DODX detection log spam cleanup.
+
+**v2.7.0 (Mar 13) — Code Review Round 1 + JIT Re-Enablement:**
+
+Three rounds of code review across the entire KTPAMXX codebase covering core runtime, module SDK, DODX module, and build system. All reviewed through the lens of extension mode operation (no Metamod).
+
+| Category | Findings |
+|----------|----------|
+| Critical | 8 (7 fixed, 1 was not a bug) |
+| Warning | 17 (12 fixed, 2 not bugs, 3 deferred) |
+
+**JIT/ASM32 Re-Enablement (Critical #1):** The JIT compiler and x86 ASM dispatcher were disabled with a "KTP DEBUG" label since the initial fork to get extension mode working. All Pawn plugins had been running through the slow C interpreter since day one. Re-enabled native x86 JIT compilation and hand-optimized ASM dispatcher.
+
+Measured impact — fleet-wide profiling data (~290k pre-JIT intervals vs ~65k post-JIT):
+```
+                    Before      After
+Avg frame time      0.026ms     0.020ms   (-23%)
+Worst spike         1.84ms      0.17ms    (-91%)
+Min FPS floor       351         845       (+141%)
+```
+
+Other critical fixes: security hardening (`-fstack-protector-strong`, `FORTIFY_SOURCE=2`, full RELRO), module SDK double-free in `rewriteNativeLists`, stale frame callbacks after module detach, DODX weapon ID bounds checks, `C_ClientCvarChanged` player guard.
+
+**v2.7.1 (Mar 13) — Code Review Round 2:**
+5 criticals and 8 warnings. Key fix: **shot double-counting** — both button-state detection AND CurWeapon clip-decrement detection were running simultaneously, inflating HLStatsX accuracy stats since extension mode was enabled. Other fixes: SP forward null deref, `dod_weaponlist` OOB, event parser off-by-one, entity leak in `dodx_give_grenade`.
+
+**v2.7.2 (Mar 13) — Code Review Round 3:**
+CLogEvent last-char trim (silently dropped closing `"` on all DoD log events in extension mode), MessageHook_Handler null chain propagation, say/say_team prefix list separation.
+
+### KTPAMXX — ClearPluginLibraries Crash Fix (Mar 14)
+
+`.changemap` command intermittently crashed servers with segfault at page-aligned addresses. Core dump analysis revealed native function pointer `0xea35e000` pointed to `munmap`'d memory. Root cause: `ClearPluginLibraries()` freed executable thunk pages allocated by `register_native()` for cross-plugin natives, but `plugin_natives()` is never re-called during reload. Fix: removed `ClearPluginLibraries()` from the reload path.
+
+### KTPMatchHandler v0.10.91-0.10.100
+
+| Version | Key Changes |
+|---------|-------------|
+| v0.10.91 | Idle command hint (120s interval, suppressed during matches) |
+| **v0.10.92** | **12 fixes**: OT tech budget persistence, auto-DC pause duration, stale state cleanup, pause warning timing |
+| v0.10.93 | OT score display fix (`.score` showed swapped teams), auto-confirm leak |
+| **v0.10.96** | **OT timing fix** (timelimit before restart), **roster SteamID exact match**, pause cache monotonic counter, roster buffer overflow fix |
+| **v0.10.97** | **Deferred match start** — split ~160ms synchronous work into 3 phases across multiple frames |
+| v0.10.98 | Discord channel routing (separate default channel for non-match notifications) |
+| v0.10.99 | Deferred pending phase — confirm command frame reduced by ~15-20ms |
+| **v0.10.100** | **Say hook fast path** — ordinary chat (~99% of say traffic) returns after reading 4 bytes |
+
+### Fleet-Wide Plugin Code Review (Mar 14)
+
+Systematic security/correctness review of all KTP plugins. Seven plugins scanned clean, three required fixes:
+
+| Plugin | Version | Fixes |
+|--------|---------|-------|
+| KTPFileChecker | v2.4 | Command injection via player names in `server_cmd("say")`, task ID collision |
+| KTPGrenadeLoadout | v1.0.6 | `log_amx` format string vuln, map change state reset, task ID safety |
+| KTPPracticeMode | v1.3.1 | Task ID raw player ID → constant offset |
+
+### Other Component Updates
+
+| Component | Version | Key Changes |
+|-----------|---------|-------------|
+| **KTPAmxxCurl** | v1.3.4-1.3.5-ktp | In-flight AMX validity checks, `CURLOPT_COPYPOSTFIELDS` auto-upgrade for async, deferred cleanup, 64KB response cap |
+| **KTPCvarChecker** | v7.18-7.20 | Enforcement accuracy (rate limiter was dropping legitimate events), deferred enforcement queue, Discord task leak (doubled notifications) |
+| **KTPAdminAudit** | v2.7.9-2.7.11 | Slot recycling TOCTOU fix (validates SteamID at execution), deferred ban file flush, task ID safety |
+| **KTPHLTVRecorder** | v1.5.3-1.5.4 | Second half demo cutoff fix, delayed recording task ID, 35s recovery delay (was 5s), concurrent `.hltvrestart` fix |
+| **KTPGrenadeDamage** | v1.0.3 | TK damage incorrectly reduced by damage reduction setting |
+| **KTP-ReHLDS** | v3.22.0.908-909 | Spawn sub-phase profiling (`[KTP_SPAWN]`, `[KTP_WRITESPAWN]` log lines for HLTV connect overhead diagnosis) |
+| **ktp_discord.inc** | v1.3.4 | Embed description truncation fix (383→2200 char buffer), payload buffer 1024→3072 |
+| **KTPHLStatsX** | v0.3.0-0.3.2 | Major performance optimizations (drain-then-process UDP, batched frag UPDATEs, event queue 10→100), per-half stat breakdown, headshot tracking fix |
+| **KTPInfrastructure** | v1.4.1-1.5.0 | Variable server count support (`--num-servers`), co-located HLTV (`--with-hltv`), `noatime` mount option, CPU pinning audit fixes |
+| **KTPFileDistributor** | v1.1.1 | Shutdown Discord notification now uses embed format |
+
+### Infrastructure Updates
+
+- **New York & Chicago rebranded** from "KTPSCRIM" to "KTP" with join password "KTP" (Mar 11)
+- **CPU isolation layout updated** on all baremetals: `isolcpus=2,3,4,5,6,7` (was 2,3,5,6,7), IRQ affinity bitmask 0x03 (was 0x13), game server pinning: 27015→CPU2, 27016→CPU5, 27017→CPU4, 27018→CPU3, 27019→CPU7 (HT-aware)
+- All 5 locations rebooted with updated kernel parameters (Mar 11)
+
+---
+
 ## Related Documentation
 
 > For granular per-version changelogs, see the `CHANGELOG.md` in each project's repository.
@@ -446,4 +535,4 @@ Chicago (KVM VPS, 4 vCPU) has all optimizations except `isolcpus` (insufficient 
 
 ---
 
-*Last updated: 2026-02-28*
+*Last updated: 2026-03-14*
