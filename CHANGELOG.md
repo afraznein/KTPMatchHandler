@@ -6,6 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.106] - 2026-03-24
+
+### Changed
+- **`msg_TeamScore` early exit when no match live** — Hoisted `!g_matchLive` guard to the top of the handler, before any DODX native calls, `log_ktp` writes, or string formatting. Eliminates all work during the ~9000/sec TeamScore storm that fires during DoD intermission, and avoids unnecessary filesystem I/O on every objective capture when no match is active.
+- **Removed debug `log_ktp` from `msg_TeamScore`** — Three `log_ktp` calls (TEAMSCORE_MSG debug dump, TEAMSCORE_ADJUSTED, SCORE_UPDATE) removed from the message handler. These wrote to disk on every flag capture during live play. Score tracking and adjustment still function correctly without the diagnostic logs.
+- **Removed debug `log_ktp` from Discord routing** — `DISCORD_CHANNEL_ROUTE`, `DISCORD_SEND_ATTEMPT`, and `DISCORD_SKIPPED` log calls removed from `ktp_matchhandler_discord.inc`. These fired on every Discord send attempt, writing to disk unnecessarily.
+
+---
+
+## [0.10.105] - 2026-03-24
+
+### Added
+- **`.scrim` duration menu** — `.scrim` now shows a duration selection menu (20 minutes standard / 15 minutes) matching the `.12man` duration menu. Selected duration overrides `mp_timelimit` after map config execution.
+
+### Fixed
+- **`.12man` 1.3 Community Queue ID input can no longer get stuck** — Added 60-second auto-timeout for Queue ID input. If no input is received within 60s, the flow auto-cancels with HUD and chat notification. Timeout is properly cleared on cancel, confirmation, mismatch retry, and captain disconnect. Previously, the flow could hang indefinitely waiting for chat input with no escape besides typing "cancel".
+- **Discord embed JSON truncation with full rosters** — `g_rosterEmbedPayload` buffer increased from 2048 to 4096 bytes. With 12 players and long names, the worst-case JSON payload exceeded 2048 chars, causing `formatex` to silently truncate mid-JSON. The relay received malformed JSON and the embed silently failed to update.
+- **Negative 2nd-half scores displayed in chat** — If `g_firstHalfScore` was stale from a crashed 1st half, the 2nd-half score difference could be negative and displayed to players. Now clamped to 0 minimum.
+- **OT round limit (31) safety exit now fires match end forward** — Previously, hitting the OT round limit called `end_match_cleanup()` without firing `ktp_match_end` forward, so HLStatsX wouldn't flush stats and KTPHLTVRecorder wouldn't stop recording. Now fires `ExecuteForward(g_fwdMatchEnd)` before cleanup.
+- **`save_ot_state_for_next_round` now explicitly saves match ID, map, and team names** — Previously relied on stale-but-correct localinfo from earlier saves. Now writes all four keys explicitly for defense in depth.
+- **Dead variable in `save_ot_context`** — Removed unnecessary `otScoresStr` copy; `generate_ot_scores_string` now writes directly to the log buffer.
+- **Discord embed scores field empty during OT** — `build_scores_field` now shows regulation total and current OT round score instead of raw Allies/Axis with no context.
+- **Discord embed color changed from blue to KTP green** — Initial match embed now uses color 5763719 (KTP green) instead of 3447003 (Discord blue) for visual consistency.
+- **O(n²) `strlen` in roster build loops** — Both `build_roster_with_tags` and `build_roster_from_stored` now track running output length instead of recalculating `strlen(output)` on every iteration.
+- **`discordChannelId` buffer size mismatch** — Local `discordChannelId[32]` buffers in `finalize_abandoned_match` and `finalize_completed_second_half` increased to `[64]` to match the source `g_discordMatchChannelId[64]`.
+
+---
+
+## [0.10.104] - 2026-03-23
+
+### Fixed
+- **Periodic score save caused 5.1ms inter-frame gaps every 30 seconds** — The `task_periodic_score_save` repeating task was firing every 30s during live matches, and each execution's `log_amx()` filesystem I/O caused a 5.1ms gap between `SV_Frame_Internal` calls on isolated CPUs. Fix: increased interval from 30s to 120s, and skip `set_localinfo()` + `log_ktp()` entirely when scores haven't changed since last save. Most ticks now do zero I/O (scores only change on flag captures).
+
+---
+
+## [0.10.103] - 2026-03-19
+
+### Fixed
+- **Timelimit expiry during ready-up caused permanent score log spam** — When `mp_timelimit` expired while a match was in pending/ready-up state (not yet live), the changelevel hook blocked every `pfnChangeLevel` call indefinitely. The game DLL stayed in `g_fGameOver` state, logging `"TeamName" scored "X"` every server frame (~2000 lines/sec), generating multi-GB log files until the next scheduled restart. NY1 incident (2026-03-18): 35M scored lines, 2GB game log + 3.4GB console log over 11 hours. Fix: detect first changelevel call during pending state, cancel the pending match, notify players, and allow the map change to proceed normally.
+
+---
+
+## [0.10.102] - 2026-03-17
+
+### Fixed
+- **Periodic score save repeating task never fired** — The 30-second repeating `PERIODIC_SCORE_SAVE` task was silently dying after the initial 2-second one-shot. Root cause: KTP's SP forward dedup returned the same forward handle when `set_task` was called from within a task callback using the same function name. The one-shot's self-cleanup unregistered the shared forward, killing the repeating task. Fix: split into `task_initial_score_save` (one-shot) and `task_periodic_score_save` (repeating) so each gets its own SP forward. Matches now get ~30-40 score snapshots per half instead of 1.
+- **HLTV recording failed when Practice Mode was active** — Match ID contained `ATL2 -` instead of `ATL2` because `extract_base_hostname` didn't strip ` - PRACTICE` from the hostname suffix, and `get_short_hostname_code` copied trailing non-digit characters (` -`) into the server number. The space in the demo filename (`record ktp_...-ATL2 -_h1`) caused HLTV to reject the command with `Syntax: record <filename>`. Fix: added ` - PRACTICE` to the hostname strip patterns and changed server number extraction to copy only digit characters.
+
+### Changed
+- **Phase 0 frame stall reduction** — Deferred `capture_roster_snapshot()` and `update_server_hostname()` from Phase 0 to Phase 2, removing ~15-40ms of work (player loop + `server_exec()` flush) from the `.ready` command frame. Removed redundant `server_exec()` for 2nd half `amx_nextmap` command (flushed naturally at next engine frame). Net Phase 0 savings: ~25-60ms.
+
+---
+
+## [0.10.101] - 2026-03-16
+
+### Added
+- **Round-state filtering for HLStatsX accuracy** — Hooks `RoundState` engine message to pause DODX stats during round-freeze periods (post-capture freeze, pre-round freeze). Eliminates ~1% phantom kill over-counting vs in-game scoreboard. Three-layer defense:
+  - DODX `dodx_set_stats_paused()` native pauses C++ stat accumulation
+  - `KTP_ROUND_FREEZE`/`KTP_ROUND_LIVE` log events for HLStatsX daemon
+  - Event-driven match context setup (replaces fixed 1.4s/2.0s delays) with 5s safety timeout
+- **Map-change stats pause safety** — `plugin_init()` unconditionally calls `dodx_set_stats_paused(0)` to clear C++ global that persists across map changes
+
+---
+
 ## [0.10.100] - 2026-03-13
 
 ### Changed

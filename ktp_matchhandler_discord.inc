@@ -48,22 +48,12 @@ stock get_discord_channel_id(channelId[], maxlen) {
         }
     }
 
-    // Debug: log channel routing for non-competitive match types
-    // Helps diagnose misrouted Discord embeds
-    if (_:g_matchType != _:MATCH_TYPE_COMPETITIVE) {
-        log_ktp("event=DISCORD_CHANNEL_ROUTE match_type=%d channel=%s", _:g_matchType, channelId[0] ? channelId : "(empty)");
-    }
 }
 
 stock send_discord_message(const message[]) {
-    // Debug: Log that we're attempting to send
-    log_ktp("event=DISCORD_SEND_ATTEMPT msg='%.64s...' disabled=%d", message, g_disableDiscord);
-
     // Skip Discord if disabled (scrim/12man mode)
-    if (g_disableDiscord) {
-        log_ktp("event=DISCORD_SKIPPED reason='disabled'");
+    if (g_disableDiscord)
         return;
-    }
 
     // Get the appropriate channel ID for the current match type
     // NOTE: Using global buffers (g_discord*) to avoid AMX stack overflow (16KB limit)
@@ -298,6 +288,7 @@ stock bool:was_in_first_half(const authid[], team) {
 stock build_roster_with_tags(output[], maxlen, team, &count) {
     output[0] = EOS;
     count = 0;
+    new currentLen = 0;
 
     new players[MAX_PLAYERS], pnum;
     get_players(players, pnum, "ch");
@@ -320,17 +311,16 @@ stock build_roster_with_tags(output[], maxlen, team, &count) {
         }
 
         // Add to roster
-        new currentLen = strlen(output);
         new entryLen = strlen(entry);
         new requiredSpace = entryLen + (count > 0 ? 1 : 0);
 
         if (currentLen + requiredSpace < maxlen) {
             if (count > 0) {
-                new sep[4];
-                formatex(sep, charsmax(sep), "%c", 10);  // newline
-                add(output, maxlen, sep);
+                output[currentLen++] = 10;  // newline
+                output[currentLen] = EOS;
             }
             add(output, maxlen, entry);
+            currentLen += entryLen;
             count++;
         }
     }
@@ -453,6 +443,7 @@ stock get_player_roster_team(id) {
 stock build_roster_from_stored(output[], maxlen, team, &count) {
     output[0] = EOS;
     count = 0;
+    new currentLen = 0;
 
     new roster[MAX_ROSTER_ENTRIES][80];
     new rosterCount;
@@ -483,17 +474,16 @@ stock build_roster_from_stored(output[], maxlen, team, &count) {
         new entry[96];
         formatex(entry, charsmax(entry), "- %s (%s)", name, authid);
 
-        new currentLen = strlen(output);
         new entryLen = strlen(entry);
         new requiredSpace = entryLen + (count > 0 ? 1 : 0);
 
         if (currentLen + requiredSpace < maxlen) {
             if (count > 0) {
-                new sep[4];
-                formatex(sep, charsmax(sep), "%c", 10); // newline
-                add(output, maxlen, sep);
+                output[currentLen++] = 10; // newline
+                output[currentLen] = EOS;
             }
             add(output, maxlen, entry);
+            currentLen += entryLen;
             count++;
         }
     }
@@ -581,7 +571,13 @@ new g_embedScoresField[256];
 stock build_scores_field() {
     g_embedScoresField[0] = EOS;
 
-    if (g_currentHalf == 1) {
+    if (g_inOvertime) {
+        // OT in progress — show regulation total + current OT round score
+        formatex(g_embedScoresField, charsmax(g_embedScoresField),
+            "**Regulation:** %s %d - %d %s^n**OT Round %d:** %d - %d",
+            g_team1Name, g_regulationScore[1], g_regulationScore[2], g_team2Name,
+            g_otRound, g_matchScore[1], g_matchScore[2]);
+    } else if (g_currentHalf == 1) {
         // 1st half in progress - just show current score
         formatex(g_embedScoresField, charsmax(g_embedScoresField),
             "**In Progress**^n%s %d - %d %s",
@@ -694,7 +690,7 @@ stock send_match_embed_create() {
 
     // Build embed JSON - initial version at match start
     formatex(g_rosterEmbedPayload, charsmax(g_rosterEmbedPayload),
-        "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":3447003,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Status^",^"value^":^"1st Half - Match Live^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Map: %s | Server: %s^"}}]}",
+        "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":5763719,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Status^",^"value^":^"1st Half - Match Live^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Map: %s | Server: %s^"}}]}",
         g_discordChannelIdBuf,
         embedTitleEscaped,
         g_team1Name, alliesCount, g_rosterAlliesEscaped,
@@ -781,7 +777,7 @@ stock send_match_embed_update(const status[]) {
 
     // Build edit payload with messageId
     formatex(g_rosterEmbedPayload, charsmax(g_rosterEmbedPayload),
-        "{^"channelId^":^"%s^",^"messageId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":3447003,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Scores^",^"value^":^"%s^",^"inline^":false},{^"name^":^"Status^",^"value^":^"%s^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Map: %s | Server: %s^"}}]}",
+        "{^"channelId^":^"%s^",^"messageId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":5763719,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Scores^",^"value^":^"%s^",^"inline^":false},{^"name^":^"Status^",^"value^":^"%s^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Map: %s | Server: %s^"}}]}",
         channelId,
         g_discordMatchMsgId,
         embedTitleEscaped,
