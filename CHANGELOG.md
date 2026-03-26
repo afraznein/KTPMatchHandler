@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.110] - 2026-03-26
+
+### Fixed
+- **Score persistence broken since v0.10.104 — root cause: `dod_get_team_score()` returns 0 in extension mode** — `update_match_scores_from_dodx()` used `dod_get_team_score()` which reads DODX's message-tracked `AlliesScore`/`AxisScore` variables. In KTPAMXX extension mode, DODX's `Client_TeamScore` message handler never receives TeamScore messages (message dispatch doesn't reach the C++ handler), so these variables stay permanently 0. Switched to `dodx_get_team_score()` which reads team scores directly from gamerules memory — always has correct live values regardless of message dispatch. Also restored `update_match_scores_from_dodx()` call in `save_first_half_scores()` since the gamerules read is safe during changelevel (gamerules isn't zeroed until after the hook chain completes).
+- **Removed v0.10.108 incorrect fix** — The v0.10.108 removal of `update_match_scores_from_dodx()` from `save_first_half_scores()` was based on wrong diagnosis (assumed DODX zeroed scores during changelevel). The real issue was `dod_get_team_score()` always returning 0, not DODX zeroing at changelevel.
+- **Removed v0.10.109 diagnostic logging** — `PERIODIC_SCORE_DEBUG` and `HALFTIME_SCORE_DEBUG` removed now that root cause is confirmed.
+
+---
+
+## [0.10.109] - 2026-03-26
+
+### Added
+- **Diagnostic logging for score tracking** — Unconditional `PERIODIC_SCORE_DEBUG` log in `do_periodic_score_save()` that always prints raw `dod_get_team_score()` values alongside `g_matchScore` state, regardless of whether scores changed. Also added `HALFTIME_SCORE_DEBUG` log in `save_first_half_scores()` to capture raw DODX values at the exact moment of halftime save. Purpose: determine whether DODX native returns 0 during live play (DODX message dispatch broken) or returns correct values (KTPMatchHandler state tracking broken).
+
+---
+
+## [0.10.108] - 2026-03-25
+
+### Fixed
+- **Halftime scores saved as 0-0 — root cause found** — `save_first_half_scores()` called `update_match_scores_from_dodx()` which read scores from DODX via `dod_get_team_score()`. By the time halftime fires (during changelevel processing), DODX has already zeroed its internal scores — so the read returns 0 and overwrites `g_matchScore` that was correctly tracked from `msg_TeamScore` messages. Fix: removed the `update_match_scores_from_dodx()` call from `save_first_half_scores()`. Now uses `g_matchScore` directly, which is kept current by the `msg_TeamScore` handler throughout the half.
+
+---
+
+## [0.10.107] - 2026-03-24
+
+### Fixed
+- **`g_matchScore` tracking moved before `!g_matchLive` gate** — v0.10.106 regression: the early exit in `msg_TeamScore` blocked score tracking during intermission. TeamScore messages with final scores arrive after `g_matchLive` transitions to false but before halftime save runs.
+
+---
+
 ## [0.10.106] - 2026-03-24
 
 ### Changed

@@ -52,7 +52,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.107"
+#define PLUGIN_VERSION "0.10.110"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -400,6 +400,7 @@ public msg_TeamScore() {
     // ALWAYS track scores — even during intermission (g_matchLive may be false
     // but TeamScore still fires with final scores needed for halftime save).
     // The heavy operations (adjustment, localinfo write) are gated below.
+    // v0.10.107 fix: this line was below the !g_matchLive gate in v0.10.106
     g_matchScore[teamId] = originalScore;
 
     // Skip adjustment and localinfo save when no match is live
@@ -1153,8 +1154,12 @@ stock reset_match_scores() {
 // Call this before any score calculations to ensure we have current values
 stock update_match_scores_from_dodx() {
 #if defined HAS_DODX
-    new alliesScore = dod_get_team_score(1);
-    new axisScore = dod_get_team_score(2);
+    // Use dodx_get_team_score (reads gamerules directly) instead of dod_get_team_score
+    // (reads DODX message-tracked AlliesScore/AxisScore). In extension mode, DODX's
+    // Client_TeamScore message handler never receives TeamScore messages, so the
+    // message-tracked values stay 0. Gamerules always has the correct live scores.
+    new alliesScore = dodx_get_team_score(1);
+    new axisScore = dodx_get_team_score(2);
 
     // Only update if scores changed (avoid spam)
     if (alliesScore != g_matchScore[1] || axisScore != g_matchScore[2]) {
@@ -1167,7 +1172,9 @@ stock update_match_scores_from_dodx() {
 
 // Save first half scores (called at half time)
 stock save_first_half_scores() {
-    // First, get current scores from dodx
+    // Read latest scores from gamerules before saving.
+    // Safe to call here because dodx_get_team_score reads gamerules directly
+    // (not the message-tracked AlliesScore/AxisScore which may be zeroed).
     update_match_scores_from_dodx();
 
     // Save scores by team identity (team1 started as Allies, team2 started as Axis)
