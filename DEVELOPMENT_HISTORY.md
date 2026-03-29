@@ -6,8 +6,8 @@
 |--------|-------|
 | **Project Duration** | October 2025 - Present |
 | **Total Repositories** | 17 |
-| **Estimated Development Hours** | 1150-1440 |
-| **Last Updated** | 2026-03-14 |
+| **Estimated Development Hours** | 1210-1520 |
+| **Last Updated** | 2026-03-29 |
 
 ---
 
@@ -32,8 +32,8 @@
 | December 2025 | 300-375 | Feature-complete push - overtime, extension mode, v1.0 releases |
 | January 2026 | 120-150 | Stability, polish, explicit OT, admin tools |
 | February 2026 | 240-320 | Bare metal migration, performance optimization, lag investigation, CPU isolation, bug audit, 2 new server deployments |
-| March 2026 | 160-200 | JIT re-enablement, 3-round KTPAMXX code review (60+ fixes), fleet-wide plugin audit, match system performance |
-| **Total** | **1150-1440** | |
+| March 2026 | 220-280 | JIT re-enablement, 3-round KTPAMXX code review (60+ fixes), fleet-wide plugin audit, match system performance, score persistence fix, engine profiler optimization |
+| **Total** | **1210-1520** | |
 
 ### Repository Breakdown
 
@@ -502,7 +502,7 @@ Systematic security/correctness review of all KTP plugins. Seven plugins scanned
 | KTPGrenadeLoadout | v1.0.6 | `log_amx` format string vuln, map change state reset, task ID safety |
 | KTPPracticeMode | v1.3.1 | Task ID raw player ID → constant offset |
 
-### Other Component Updates
+### Other Component Updates (Mar 7-14)
 
 | Component | Version | Key Changes |
 |-----------|---------|-------------|
@@ -517,11 +517,87 @@ Systematic security/correctness review of all KTP plugins. Seven plugins scanned
 | **KTPInfrastructure** | v1.4.1-1.5.0 | Variable server count support (`--num-servers`), co-located HLTV (`--with-hltv`), `noatime` mount option, CPU pinning audit fixes |
 | **KTPFileDistributor** | v1.1.1 | Shutdown Discord notification now uses embed format |
 
-### Infrastructure Updates
+### Infrastructure Updates (Mar 11)
 
-- **New York & Chicago rebranded** from "KTPSCRIM" to "KTP" with join password "KTP" (Mar 11)
+- **New York & Chicago rebranded** from "KTPSCRIM" to "KTP" with join password "KTP"
 - **CPU isolation layout updated** on all baremetals: `isolcpus=2,3,4,5,6,7` (was 2,3,5,6,7), IRQ affinity bitmask 0x03 (was 0x13), game server pinning: 27015→CPU2, 27016→CPU5, 27017→CPU4, 27018→CPU3, 27019→CPU7 (HT-aware)
-- All 5 locations rebooted with updated kernel parameters (Mar 11)
+- All 5 locations rebooted with updated kernel parameters
+
+### Mar 16-19: KTPMatchHandler v0.10.101-0.10.103
+
+| Version | Key Changes |
+|---------|-------------|
+| **v0.10.101** | **Round-state filtering for HLStatsX** — hooks `RoundState` message to pause DODX stats during freeze periods, eliminating ~1% phantom kill over-counting. Three-layer defense: DODX native, log events, event-driven match context setup with 5s timeout |
+| **v0.10.102** | **Periodic score save fix** — 30s repeating task was silently dying after initial one-shot due to SP forward dedup sharing the same forward handle. Split into separate one-shot/repeating functions |
+| v0.10.102 | **HLTV recording fix** — Practice Mode hostname suffix broke match ID extraction, causing space in demo filename that HLTV rejected |
+| v0.10.102 | **Phase 0 frame stall reduction** — Deferred roster snapshot + hostname update to Phase 2, saving ~25-60ms from `.ready` command frame |
+| **v0.10.103** | **Timelimit expiry during ready-up fix** — If `mp_timelimit` expired during pending state, changelevel hook blocked indefinitely; game DLL logged `"TeamName" scored` every frame (~2000 lines/sec). NY1 incident: 35M scored lines, 5.4GB logs over 11 hours. Now detects and allows map change |
+
+### Mar 19: KTP-ReHLDS v3.22.0.910
+
+- Raised `sv_unlagsamples` cap from 16 to 64 (full `SV_UPDATE_BACKUP` frame buffer). At 1000Hz, the old 16-sample cap only covered 16ms of ping history — insufficient for meaningful smoothing
+- Scaled jitter detection window in `SV_CalcClientTime()` to match the averaging window
+
+### Mar 17: KTPHLTVRecorder v1.5.5
+
+- Recording verification with in-game chat feedback after `record` command
+- Curl timeout for record commands increased from 5s to 8s
+- HLTV API updated to v2.1
+
+### Mar 23-26: KTPMatchHandler v0.10.104-0.10.110
+
+| Version | Key Changes |
+|---------|-------------|
+| **v0.10.104** | **Periodic score save caused 5.1ms inter-frame gaps** every 30s on isolated CPUs from `log_amx()` filesystem I/O. Increased interval to 120s, skip I/O when scores unchanged |
+| **v0.10.105** | **`.scrim` duration menu** — scrims now offer 20min/15min selection like `.12man`. **Queue ID 60s auto-timeout** — prevents stuck 1.3 Community input flow. Discord embed buffer 2048→4096 for 12-player rosters. Negative 2nd-half score clamping. OT round limit (31) now fires match end forward. OT score display fix for Discord embeds. O(n²) `strlen` eliminated in roster builds |
+| v0.10.106 | **`msg_TeamScore` early exit** — hoisted `!g_matchLive` guard before all work, eliminating processing during ~9000/sec intermission storm. Removed debug `log_ktp` calls from message handler and Discord routing |
+| v0.10.107 | **Score tracking regression fix** — v0.10.106 early exit blocked score tracking during intermission when final TeamScore messages arrive |
+| v0.10.108 | Halftime score save fix — removed `update_match_scores_from_dodx()` call (wrong diagnosis, see v0.10.110) |
+| v0.10.109 | Diagnostic logging for score tracking (`PERIODIC_SCORE_DEBUG`, `HALFTIME_SCORE_DEBUG`) |
+| **v0.10.110** | **Score persistence root cause found** — `dod_get_team_score()` returns 0 in extension mode because DODX's `Client_TeamScore` message handler never receives TeamScore messages. Switched to `dodx_get_team_score()` which reads directly from gamerules memory. Removed incorrect v0.10.108 fix and v0.10.109 diagnostics |
+
+### Mar 24: KTPAMXX v2.7.4
+
+| Fix | Details |
+|-----|---------|
+| **Message Hook RemoveHook wrong index** | `m_Forwards.remove(forward)` removed at position `forward` (SP forward ID) instead of position `i` (matched entry). Stale forward IDs accumulated every map change cycle |
+| **Client_ObjScore stale player pointer** | Static `CPlayer*` used across message parse states without revalidation — freed edict between states corrupted memory |
+| **PreThink fallback init removed** | `ENTINDEX()` engine call during early init replaced with hard guard |
+| **CPlayer::Disconnect missing edict free check** | `ignoreBots(pEdict)` dereferenced freed entity flags during crash sequences |
+| **Event/LogEvent dedup O(n) eliminated** | Added `m_HandleId` field for O(1) handle lookup during dedup |
+| **Rank save skipped in extension mode** | Unnecessary file I/O during `ServerDeactivate` |
+| **CTaskMngr::startFrame use-after-realloc** | Cached task reference invalidated if callback called `set_task()` → vector reallocation |
+| **`dodx_set_stats_paused` native added** | Allows plugins to pause/unpause DODX stats collection (used for round-freeze filtering) |
+
+### Mar 24: KTP-ReHLDS v3.22.0.911-912
+
+**v3.22.0.912 — Profiler overhead optimization:**
+- Physics sub-phase timing (separates `pfnStartFrame` from entity loop)
+- Per-client send timing (identifies worst client per frame)
+- Double `Sys_FloatTime()` in SV_RunCmd boundaries eliminated
+- 10 unconditional global writes gated on profiling flag (10,000 cache-dirtying writes/sec eliminated on production)
+- Cvar dereference consolidated into single `g_ktp_profiling_enabled` global (10,000+ reads/sec eliminated)
+- Steam/frame-end profiling blocks merged (redundant syscall removed)
+
+**v3.22.0.911 — Profiling accuracy + pause efficiency:**
+- Pause force-send limited to clients with pending data (was forcing ALL clients every frame at 1000Hz)
+- Rate limiter clock source unified (`Sys_FloatTime()` everywhere)
+- Double `Sys_FloatTime()` eliminated in per-packet profiling
+- String command rate limiter bypass scoped to current client only
+- Interframe average now uses dedicated frame counter
+
+### Mar 24: Fleet-Wide Plugin Hardening Pass
+
+Systematic correctness review and performance optimization across all KTP plugins:
+
+| Component | Version | Key Changes |
+|-----------|---------|-------------|
+| **KTPCvarChecker** | v7.21-7.22 | Trie-based cvar lookup (performance), `rate` locked to exact 100000, `cl_updaterate` max lowered to 120, `ex_interp` range adjusted 0.01-0.05, `lightgamma` floor corrected, `cl_smoothtime` enforcement removed |
+| **KTPFileChecker** | v2.5 | Server broadcast no longer reveals file paths/SteamIDs, `.mdl` case-sensitive compare, `MAX_FILENAME_LEN` 64→128, `plugin_end` cancels pending Discord instead of flushing |
+| **KTPAdminAudit** | v2.7.12 | Ban duration menu shows wrong name if target disconnected (fixed), `task_flush_banlist` accumulation guard, changelevel hook blocked match-end changelevel during countdown (fixed) |
+| **KTPPracticeMode** | v1.3.2 | `client_death` clears noclip engine state, hostname restore race fix (1.5s vs 0.5s), British team support in `.grenade`, repeating task accumulation guard, hostname buffer 64→128 |
+| **KTPHLTVRecorder** | v1.5.6 | Delayed stop preservation fix, `init_curl_headers` use-after-free fix, `g_hltvApiUrl` buffer 128→256, dead port validation guard removed |
+| **KTPAmxxCurl** | v1.3.6-ktp | `curl_global_cleanup` leak on detach, `curl_formadd` params array bounds fix, `OnAmxxDetach` timeout using wall-clock timing, `CurlReset` re-binding WriteCallback |
 
 ---
 
@@ -535,4 +611,4 @@ Systematic security/correctness review of all KTP plugins. Seven plugins scanned
 
 ---
 
-*Last updated: 2026-03-14*
+*Last updated: 2026-03-29*
