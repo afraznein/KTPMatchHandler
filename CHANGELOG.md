@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.111] - 2026-04-03
+
+### Fixed
+- **Pause chat relay broken since KTPAMXX dedup (v2.7.3)** — `handle_pause_chat_relay` was silently dropped because KTPAMXX's command dedup prevents the same plugin from registering two handlers for the same command string ("say"). Both `cmd_say_hook` and `handle_pause_chat_relay` registered for "say" — the second was deduped. Merged pause chat relay logic directly into `cmd_say_hook` and new `cmd_say_team_hook`. Non-command chat (no `.` or `/` prefix) is now relayed via `client_print` during pause with the player's name.
+
+---
+
 ## [0.10.110] - 2026-03-26
 
 ### Fixed

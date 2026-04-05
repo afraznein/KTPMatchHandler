@@ -52,7 +52,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.110"
+#define PLUGIN_VERSION "0.10.111"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -3173,8 +3173,10 @@ public plugin_init() {
     register_clcmd("say_team .technical","cmd_tech_pause");
 
     // Say hook for commands with arguments (register_clcmd only matches exact text)
+    // Also handles pause chat relay (merged — KTPAMXX dedup prevents same plugin
+    // from registering two handlers for the same command string)
     register_clcmd("say", "cmd_say_hook");
-    register_clcmd("say_team", "cmd_say_hook");
+    register_clcmd("say_team", "cmd_say_team_hook");
     register_clcmd("say /draft",           "cmd_start_draft");
     register_clcmd("say_team /draft",      "cmd_start_draft");
     register_clcmd("say .draft",           "cmd_start_draft");
@@ -3370,11 +3372,8 @@ public plugin_init() {
     // read CVARs to apply live values
     ktp_sync_config_from_cvars();
 
-    // Pause chat relay - catches all say/say_team to relay via client_print during pause
-    // Must be registered AFTER specific command handlers (like say .pause)
-    // Normal chat is blocked during pause, but client_print works (same as HUD)
-    register_clcmd("say", "handle_pause_chat_relay");
-    register_clcmd("say_team", "handle_pause_chat_relay_team");
+    // NOTE: Pause chat relay is merged into cmd_say_hook / cmd_say_team_hook above.
+    // KTPAMXX dedup prevents registering two handlers for the same command from the same plugin.
 
     reset_captains();
 
@@ -5127,6 +5126,8 @@ public auto_unpause_request() {
 // ========== MATCH START (PRE-START) COMMANDS ==========
 
 // Hook for say commands with arguments (register_clcmd("say /cmd") only matches exact "/cmd", not "/cmd arg")
+// Also handles pause chat relay — must be in same handler because KTPAMXX dedup
+// prevents the same plugin from registering two handlers for the same command string.
 public cmd_say_hook(id) {
     // Fast path: check if this could be a KTP command or 1.3 input before doing string work.
     // All KTP commands start with '.' or '/', and read_args returns `"text"` (with leading quote).
@@ -5136,6 +5137,9 @@ public cmd_say_hook(id) {
         read_args(raw, charsmax(raw));
         // raw[0] is the leading quote from engine; raw[1] is the first real char
         if (raw[1] != '.' && raw[1] != '/') {
+            // Not a command — relay chat during pause, otherwise pass through
+            if (g_isPaused)
+                return relay_pause_chat(id, false);
             return PLUGIN_CONTINUE;
         }
     }
@@ -5173,6 +5177,52 @@ public cmd_say_hook(id) {
     }
 
     // Check for /setaxis or .setaxis commands
+    if (equali(args, "/setaxis", 8) || equali(args, ".setaxis", 8)) {
+        if (strlen(args) == 8 || args[8] == ' ') {
+            return cmd_setteamaxis(id);
+        }
+    }
+
+    return PLUGIN_CONTINUE;
+}
+
+// say_team variant — identical to cmd_say_hook but relays team chat during pause
+public cmd_say_team_hook(id) {
+    if (g_13InputState == 0 || id != g_13CaptainId) {
+        new raw[4];
+        read_args(raw, charsmax(raw));
+        if (raw[1] != '.' && raw[1] != '/') {
+            if (g_isPaused)
+                return relay_pause_chat(id, true);
+            return PLUGIN_CONTINUE;
+        }
+    }
+
+    new args[128];
+    read_args(args, charsmax(args));
+    remove_quotes(args);
+    trim(args);
+
+    if (g_13InputState > 0 && id == g_13CaptainId && args[0]) {
+        return handle_13_queue_id_input(id, args);
+    }
+
+    if (equali(args, "/ktp", 4) || equali(args, ".ktp", 4)) {
+        if (strlen(args) == 4 || args[4] == ' ') {
+            if (!g_matchLive && !g_preStartPending && !g_matchPending) {
+                g_matchType = MATCH_TYPE_COMPETITIVE;
+                g_disableDiscord = false;
+            }
+            return cmd_match_start(id);
+        }
+    }
+
+    if (equali(args, "/setallies", 10) || equali(args, ".setallies", 10)) {
+        if (strlen(args) == 10 || args[10] == ' ') {
+            return cmd_setteamallies(id);
+        }
+    }
+
     if (equali(args, "/setaxis", 8) || equali(args, ".setaxis", 8)) {
         if (strlen(args) == 8 || args[8] == ' ') {
             return cmd_setteamaxis(id);
