@@ -52,7 +52,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.111"
+#define PLUGIN_VERSION "0.10.112"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -1046,7 +1046,7 @@ stock save_ot_state_for_next_round() {
     set_localinfo(LOCALINFO_REG_SCORES, buf);
 
     // Save all OT round scores
-    new ot_scores[256];
+    new ot_scores[512];  // MAX_OT_ROUNDS(31) x ~12 bytes per round = 372 bytes needed
     new pos = 0;
     for (new r = 1; r < g_otRound; r++) {
         if (pos > 0) ot_scores[pos++] = '|';

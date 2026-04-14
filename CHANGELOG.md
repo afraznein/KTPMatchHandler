@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.112] - 2026-04-02
+
+### Fixed
+- **OT scores buffer overflow** — `ot_scores[256]` was too small for `MAX_OT_ROUNDS` (31) rounds of serialized scores. Each round needs ~12 bytes (`65535,65535|`), requiring up to 372 bytes. Increased to 512. Triggered in extended OT matches (round 16+) causing stack corruption and potentially corrupted localinfo state.
+
+---
+
 ## [0.10.111] - 2026-04-03
 
 ### Fixed
