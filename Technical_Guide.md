@@ -2419,23 +2419,23 @@ discord_channel_id_audit_competitive=5555555555555555555
 
 | Layer    | Repository                                              | Version       | Description                         |
 |----------|---------------------------------------------------------|---------------|-------------------------------------|
-| Engine   | [KTP-ReHLDS](https://github.com/afraznein/KTPReHLDS)    | 3.22.0.912    | Custom ReHLDS with extension loader + frame profiler |
+| Engine   | [KTP-ReHLDS](https://github.com/afraznein/KTPReHLDS)    | 3.22.0.916    | Custom ReHLDS with extension loader + frame profiler |
 | SDK      | [KTP HLSDK](https://github.com/afraznein/KTPhlsdk)      | 1.0.0         | SDK headers with callback support   |
-| Platform | [KTPAMXX](https://github.com/afraznein/KTPAMXX)         | 2.7.4         | AMX Mod X extension mode fork + JIT |
-| Bridge   | [KTP-ReAPI](https://github.com/afraznein/KTPReAPI)      | 5.29.0.363-ktp| ReAPI extension mode fork           |
-| HTTP     | [KTP AMXX Curl](https://github.com/afraznein/KTPAmxxCurl)| 1.3.6-ktp    | Non-blocking HTTP module            |
+| Platform | [KTPAMXX](https://github.com/afraznein/KTPAMXX)         | 2.7.9         | AMX Mod X extension mode fork + JIT |
+| Bridge   | [KTP-ReAPI](https://github.com/afraznein/KTPReAPI)      | 5.29.0.364-ktp| ReAPI extension mode fork           |
+| HTTP     | [KTP AMXX Curl](https://github.com/afraznein/KTPAmxxCurl)| 1.3.7-ktp    | Non-blocking HTTP module            |
 
 ### Application Plugins
 
 | Plugin        | Repository                                                      | Version  | Description                    |
 |---------------|-----------------------------------------------------------------|----------|--------------------------------|
-| Match Handler | [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler) | 0.10.110 | Match workflow + explicit OT + HLStatsX |
+| Match Handler | [KTPMatchHandler](https://github.com/afraznein/KTPMatchHandler) | 0.10.112 | Match workflow + explicit OT + HLStatsX |
 | HLTV Recorder | [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) | 1.5.6    | Auto HLTV demo recording via HTTP API |
 | Cvar Checker  | [KTPCvarChecker](https://github.com/afraznein/KTPCvarChecker)   | 7.22     | Real-time cvar enforcement + deferred pipeline |
-| File Checker  | [KTPFileChecker](https://github.com/afraznein/KTPFileChecker)   | 2.5      | File consistency + Discord     |
+| File Checker  | [KTPFileChecker](https://github.com/afraznein/KTPFileChecker)   | 2.6      | File consistency + Discord     |
 | Admin Audit   | [KTPAdminAudit](https://github.com/afraznein/KTPAdminAudit)     | 2.7.12   | Menu-based kick/ban/changemap + audit |
-| Practice Mode | [KTPPracticeMode](https://github.com/afraznein/KTPPracticeMode) | 1.3.2    | Practice mode with noclip + grenades |
-| Grenades      | [KTPGrenades](https://github.com/afraznein/KTPGrenades)         | 1.0.6/1.0.3 | Grenade loadout + damage reduction |
+| Practice Mode | [KTPPracticeMode](https://github.com/afraznein/KTPPracticeMode) | 1.4.0    | Practice mode with noclip + grenades |
+| Grenades      | [KTPGrenades](https://github.com/afraznein/KTPGrenades)         | 1.0.7/1.0.4 | Grenade loadout + damage reduction |
 | Score Tracker | [KTPScoreTracker](https://github.com/afraznein/KTPScoreTracker) | 1.0.0    | Verbose capture scoring + HLStatsX |
 
 ### Supporting Infrastructure
@@ -2443,8 +2443,8 @@ discord_channel_id_audit_competitive=5555555555555555555
 | Service          | Repository                                                        | Version | Description                |
 |------------------|-------------------------------------------------------------------|---------|----------------------------|
 | Discord Relay    | [Discord Relay](https://github.com/afraznein/discord-relay)       | 1.0.1   | Cloud Run webhook proxy    |
-| HLStatsX         | [KTPHLStatsX](https://github.com/afraznein/KTPHLStatsX)           | 0.3.2   | Per-half stats + batched processing |
-| File Distributor | [KTPFileDistributor](https://github.com/afraznein/KTPFileDistributor) | 1.1.1 | SFTP file distribution + Discord |
+| HLStatsX         | [KTPHLStatsX](https://github.com/afraznein/KTPHLStatsX)           | 0.3.3   | Per-half stats + batched processing |
+| File Distributor | [KTPFileDistributor](https://github.com/afraznein/KTPFileDistributor) | 1.1.2 | SFTP file distribution + Discord |
 | ~~HLTV Kicker~~  | [KTPHLTVKicker](https://github.com/afraznein/KTPHLTVKicker)       | 5.9     | DEFUNCT - replaced by systemd restarts |
 
 ### Upstream Projects

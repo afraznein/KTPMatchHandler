@@ -601,6 +601,63 @@ Systematic correctness review and performance optimization across all KTP plugin
 
 ---
 
+### Apr 3-5: KTPMatchHandler v0.10.111, KTPPracticeMode v1.4.0, KTPAMXX v2.7.5-2.7.6
+
+| Version | Key Changes |
+|---------|-------------|
+| **v0.10.111** | **Pause chat relay fix** — `handle_pause_chat_relay` was silently broken by KTPAMXX's command registration dedup system. `registerCommand()` dedup prevents same plugin from registering two handlers for "say" — merged relay logic into `cmd_say_hook` and `cmd_say_team_hook` |
+| **KTPAMXX v2.7.5** | **DODX extension mode player init** — `g_pFirstEdict` NULL on first map (SV_ActivateServer hook registered too late). Fallback `INDEXENT(0)` init. Also: `isModuleActive()` gate moved after player init in PreThink |
+| **KTPAMXX v2.7.6** | **Discord TLS handshake fix** — 164ms freeze on first Discord notification. Added connection keepalive, DNS caching, prewarm health check |
+| **KTPPracticeMode v1.4.0** | **`.grenade`, `.noclip`, explosion refill fixed** — all broken by DODX CPlayer not initializing on first map. `.grenade` now always calls `dodx_give_grenade` + `dodx_set_grenade_ammo` + `dodx_send_ammox` (game removes weapon entity when last grenade thrown) |
+
+### Apr 13: KTP-ReHLDS v3.22.0.913 (Background Steam Thread)
+
+Steam API calls (`SteamGameServer_RunCallbacks` and `GetNextOutgoingPacket`) moved to a dedicated background thread via lock-free SPSC ring buffer. Previously blocked the main game thread for 3-13ms every 100ms. Now `steam=0.000ms` across all servers. Frag update interval increased from 1s to 5s.
+
+### Apr 14: Full Stack Optimization Pass
+
+#### KTP-ReHLDS v3.22.0.914-916
+
+| Version | Key Changes |
+|---------|-------------|
+| **v914** | **Lag compensation per-packet** — `SV_SetupMove`/`SV_RestoreMove` moved from per-cmd (SV_RunCmd) to per-packet (SV_ParseMove). ~90% reduction in lag comp overhead. **Entity early-break** in SV_SetupMove. **Nodelta during pause** limited to 3 transition frames. **IPTOS_LOWDELAY** always-on. Compiler: `-march=ivybridge -flto -fno-math-errno` |
+| **v915** | **REHLDS_OPT_PEDANTIC re-enabled** with wallbang-safe overrides — `shouldCollide()` kept early, `AddToFullPack` pre-filter removed. Enables: iterative BSP traversal, model hash map, delta JIT, challenge circular buffer, usercmd delta caching, packet entity pre-allocation |
+| **v916** | Per-frame cvar caching (`sv_timeout`) |
+
+#### KTP-ReAPI v5.29.0.364-ktp
+
+Compiler optimizations: `-march=ivybridge -flto -fno-math-errno`.
+
+#### KTPAMXX v2.7.7-2.7.9
+
+| Version | Key Changes |
+|---------|-------------|
+| **v2.7.7** | Compiler: `-O3` (was `-O2`), `-march=ivybridge`, `-flto`, `-fno-math-errno` |
+| **v2.7.8** | `g_putinserver` vector → `uint32_t` bitmask. Module frame callback length cache. DODX TraceLine `strcmp` → `ALLOC_STRING` integer comparison |
+| **v2.7.9** | Event vault pre-allocation (no dynamic growth). `WeaponsCheck` XOR + `__builtin_ctz` (42 iterations → ~2-3). Grenade linked list → 32-entry fixed pool |
+
+#### KTPAmxxCurl v1.3.7-ktp
+
+CMake migration (replaced Premake5). Compiler optimizations. 5 bug fixes: `strcpy` overflow, memory leak catch-all, `SetSock` UB (exception in libcurl callback), `AddCurl` exception safety, detach busy-spin. **Critical: missing `amx_curl_callback_class.cc` in CMakeLists.txt caused `TryInterrupt` undefined symbol — curl module failed to load, breaking all plugins using `ktp_discord.inc`.**
+
+#### KTPMatchHandler v0.10.112
+
+OT scores buffer overflow: `ot_scores[256]` too small for `MAX_OT_ROUNDS` (31) × ~12 bytes = 372 bytes. Increased to 512. Triggered in extended OT (round 16+).
+
+#### KTPFileChecker v2.6
+
+Discord slot reuse race condition (compare authid not slot ID). Log message buffer 256→512. Discord truncation `pos +=` fix.
+
+#### KTPFileDistributor v1.1.2
+
+`ChangeDebouncer` `async void` → `async Task` (crash prevention). `BuildRemotePath` path traversal rejection. `EnsureRemoteDirectoryExists` specific exception catching.
+
+#### Profiler Results (Post-Optimization)
+
+Average frame time: **0.012ms** (12 microseconds). Server FPS: 980+. Steam: 0.000ms. 2 spikes in 5.5 hours (kernel scheduling). Interframe jitter: avg 1.007ms, peak 1.134ms. **98.8% of each frame is idle.**
+
+---
+
 ## Related Documentation
 
 > For granular per-version changelogs, see the `CHANGELOG.md` in each project's repository.
@@ -611,4 +668,4 @@ Systematic correctness review and performance optimization across all KTP plugin
 
 ---
 
-*Last updated: 2026-03-29*
+*Last updated: 2026-04-14*
