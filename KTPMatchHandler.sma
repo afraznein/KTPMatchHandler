@@ -52,7 +52,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.112"
+#define PLUGIN_VERSION "0.10.113"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -359,6 +359,7 @@ new g_task13InputTimeoutId = 55627;         // Task ID for 1.3 Community Queue I
 new g_taskSetMatchIdId = 55620;             // Task ID for delayed dodx_set_match_id after round restart
 new g_taskDeferredStatsId = 55621;          // Task ID for deferred stats flush/reset (phase 1, 0.1s)
 new g_taskDeferredDiscordFwdId = 55622;     // Task ID for deferred Discord + forward (phase 2, 0.2s)
+new g_taskMatchConfigApplyId = 55628;       // Task ID for deferred map-config exec + restartround (phase 0.05s)
 new g_taskRestartHalfStatsId = 55623;       // Task ID for deferred restarthalf stats (phase 1, 0.1s)
 new g_taskRestartHalfDiscordId = 55624;     // Task ID for deferred restarthalf Discord (phase 2, 0.2s)
 new g_taskPendingPhaseId = 55625;           // Task ID for deferred enter_pending_phase after confirm
@@ -6216,6 +6217,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     remove_task(g_taskScoreRestoreId);
     remove_task(g_taskMatchStartLogId);
     remove_task(g_taskSetMatchIdId);
+    remove_task(g_taskMatchConfigApplyId);
     remove_task(g_taskDeferredStatsId);
     remove_task(g_taskDeferredDiscordFwdId);
     remove_task(g_taskRestartHalfStatsId);
@@ -6505,28 +6507,9 @@ public cmd_ready(id) {
 
     // Start match when both teams have enough ready players
     if (alliesReady >= need && axisReady >= need) {
-        // Exec map-specific config first (may or may not find config)
-        exec_map_config();
-
-        // 12man duration override - set mp_timelimit after map config
-        if (g_matchType == MATCH_TYPE_12MAN && g_12manDuration != 20) {
-            server_cmd("mp_timelimit %d", g_12manDuration);
-            log_ktp("event=12MAN_TIMELIMIT duration=%d", g_12manDuration);
-        }
-
-        // Scrim duration override - set mp_timelimit after map config
-        if (g_matchType == MATCH_TYPE_SCRIM && g_scrimDuration != 20) {
-            server_cmd("mp_timelimit %d", g_scrimDuration);
-            log_ktp("event=SCRIM_TIMELIMIT duration=%d", g_scrimDuration);
-        }
-
-        // Draft duration override - 15 minute halves (vs 20 min standard)
-        if (g_matchType == MATCH_TYPE_DRAFT) {
-            server_cmd("mp_timelimit 15");
-            log_ktp("event=DRAFT_TIMELIMIT duration=15");
-        }
-
         // Initialize OT state for explicit OT match types (.ktpOT, .draftOT)
+        // Done SYNC because subsequent logic (halfText branch, OT scoreboard restore)
+        // reads g_inOvertime / g_otRound in this same frame.
         if (g_matchType == MATCH_TYPE_KTP_OT || g_matchType == MATCH_TYPE_DRAFT_OT) {
             g_inOvertime = true;
             g_otRound = 1;
@@ -6543,18 +6526,22 @@ public cmd_ready(id) {
             log_ktp("event=EXPLICIT_OT_INIT match_type=%d ot_round=1", _:g_matchType);
         }
 
-        // OT timelimit override - 5 minutes per OT round
-        // Must be set BEFORE restart round so the timelimit takes effect on the restarted round
-        if (g_inOvertime) {
-            server_cmd("mp_timelimit 5");
-            log_ktp("event=OT_TIMELIMIT duration=5 round=%d", g_otRound);
-        }
-
-        // ALWAYS execute restart round - even if no map config was found
-        // This triggers the match countdown and respawn
-        // Single server_exec() processes all queued commands (timelimit + restart)
-        server_cmd("mp_clan_restartround 1");
-        server_exec();
+        // KTP v0.10.113: Defer the expensive server_cmd + server_exec sequence
+        // (exec_map_config parses a config file with dozens of cvar sets + restart
+        // round broadcast) to +0.05s. Fleet telemetry on 2026-04-18 showed 140-
+        // 162ms KTP_OPCODE spikes on `say .rdy` / `say .ready` — match-start .ready
+        // handlers were synchronously running exec_map_config + restartround inside
+        // the client's clc_stringcmd dispatch, blocking the player's packet frame.
+        // Moving to a deferred task lets cmd_ready return cleanly and puts the
+        // config/restart work on a profile-frame of its own (visible as [KTP_SPIKE]
+        // with no corresponding KTP_OPCODE, which cleanly identifies it).
+        //
+        // The 0.05s delay is invisible to players — the round restart countdown
+        // is ~1s, so a 50ms shift between .rdy response and countdown start is
+        // not perceptible. Phase 1 (stats flush, 0.1s) and Phase 2 (Discord +
+        // roster, 0.2s) still fire after this in the intended order.
+        remove_task(g_taskMatchConfigApplyId);
+        set_task(0.05, "task_apply_match_config_and_start", g_taskMatchConfigApplyId);
 
         // Build captain fields (no team-tag inference)
         new c1n[64], c2n[64];
@@ -6866,6 +6853,58 @@ public task_enter_pending_phase() {
     console_print(0, "[KTP] Pending: need=%d (%s/%s).", get_required_ready_count(), g_teamName[1], g_teamName[2]);
 
     g_pendingPhaseInitiator[0] = EOS;
+}
+
+// =============== Deferred match-config + restartround — Phase 0.5 (0.05s after cmd_ready) ===============
+// Runs the expensive server_cmd + server_exec sequence that the sync path in
+// cmd_ready used to run. 2026-04-18 fleet telemetry showed `say .rdy` /
+// `say .ready` KTP_OPCODE handler times of 140-162ms at match start — the
+// exec_map_config() internal server_exec + the final mp_clan_restartround
+// server_exec was synchronously parsing and processing a map config file with
+// dozens of cvar sets plus broadcasting the restart to all clients, all inside
+// the player's clc_stringcmd dispatch. Moving it here lets cmd_ready return
+// promptly so the client's packet frame isn't stalled by server-side config
+// work that doesn't need to happen before the response.
+//
+// This task reads g_matchType, g_12manDuration, g_scrimDuration, g_inOvertime,
+// and g_otRound — all set BEFORE this task is scheduled by the caller.
+public task_apply_match_config_and_start() {
+    // Guard: if match was reset/aborted in the 0.05s window, abort
+    if (!g_matchLive) return;
+
+    // Exec map-specific config first (may or may not find config)
+    exec_map_config();
+
+    // 12man duration override - set mp_timelimit after map config
+    if (g_matchType == MATCH_TYPE_12MAN && g_12manDuration != 20) {
+        server_cmd("mp_timelimit %d", g_12manDuration);
+        log_ktp("event=12MAN_TIMELIMIT duration=%d", g_12manDuration);
+    }
+
+    // Scrim duration override - set mp_timelimit after map config
+    if (g_matchType == MATCH_TYPE_SCRIM && g_scrimDuration != 20) {
+        server_cmd("mp_timelimit %d", g_scrimDuration);
+        log_ktp("event=SCRIM_TIMELIMIT duration=%d", g_scrimDuration);
+    }
+
+    // Draft duration override - 15 minute halves (vs 20 min standard)
+    if (g_matchType == MATCH_TYPE_DRAFT) {
+        server_cmd("mp_timelimit 15");
+        log_ktp("event=DRAFT_TIMELIMIT duration=15");
+    }
+
+    // OT timelimit override - 5 minutes per OT round
+    // Must be set BEFORE restart round so the timelimit takes effect on the restarted round
+    if (g_inOvertime) {
+        server_cmd("mp_timelimit 5");
+        log_ktp("event=OT_TIMELIMIT duration=5 round=%d", g_otRound);
+    }
+
+    // ALWAYS execute restart round - even if no map config was found
+    // This triggers the match countdown and respawn
+    // Single server_exec() processes all queued commands (timelimit + restart)
+    server_cmd("mp_clan_restartround 1");
+    server_exec();
 }
 
 // =============== Deferred match start — Phase 1 (0.1s after cmd_ready) ===============

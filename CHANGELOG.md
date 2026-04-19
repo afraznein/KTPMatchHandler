@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.113] - 2026-04-19
+
+### Changed
+- **Defer match-start `exec_map_config` + `mp_clan_restartround` server_exec to a +0.05s task** — 2026-04-18 fleet telemetry (NY1 `say ".rdy"` 140.5ms, NY1 `say ".ready"` 162.0ms, and similar on NY2) showed `cmd_ready`'s match-start branch synchronously running a map config file exec and a restartround broadcast inside the player's `clc_stringcmd` dispatch. That blocked the engine's per-packet processing for 140-162ms, which showed up as read-dominant `[KTP_SPIKE]` events and was misidentified as a "frag=0 single heavy packet" engine issue on initial review. Root cause is plugin-side: `exec_map_config()`'s internal `server_exec()` was parsing a ktp_*.cfg with dozens of cvar sets, plus the separate `mp_clan_restartround 1; server_exec()` broadcast to all clients, all synchronously in the handler path.
+  - New `task_apply_match_config_and_start` runs at +0.05s (Phase 0.5, slotted between Phase 0's synchronous state mutations and Phase 1's 0.1s deferred stats flush).
+  - OT state setup stays sync because subsequent code in the same frame reads `g_inOvertime` / `g_otRound`.
+  - 50ms delay between `.rdy` response and restart countdown start is imperceptible (round countdown is ~1s).
+  - Expected telemetry impact after deploy: `[KTP_OPCODE] ... cmd="say .ready" time=Xms` drops from 140-162ms to low single digits; the config/restart work moves to a separate (non-KTP_OPCODE) frame visible via `[KTP_PROFILE]` / `[KTP_SPIKE]` without a corresponding `KTP_OPCODE` line.
+
+---
+
 ## [0.10.112] - 2026-04-02
 
 ### Fixed
