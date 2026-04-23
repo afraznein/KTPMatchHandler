@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.114] - 2026-04-23
+
+### Added
+- **Per-stage AMXX profiling for `cmd_ready` will_start=0 path** — Split the monolithic `cmd_ready` into five discrete public helpers (`_cmd_ready_prechecks`, `_cmd_ready_identity`, `_cmd_ready_track_captain`, `_cmd_ready_update_roster`, `_cmd_ready_broadcast`) so AMXX's built-in function-level profiler will report per-stage execution times when the recurring ~163ms mid-count `.rdy` spike next fires. 0.10.113's defer patch covered only the `will_start=1` match-start branch (verified with 2026-04-22 ATL1 match-start = 4.7ms), but fleet telemetry since 2026-04-17 shows persistent ~163ms ± 0.5ms spikes on NY2/NY3 during `will_start=0` mid-count handling (ORTIN 163.576ms, uuuuuuksiiGp 163.125ms × 2, BurNNNNN's 164.358ms, zG.-- 163.404ms, by! 163.414ms). The tight clustering at ~163ms smells like a deterministic blocking call (sync HTTPS RTT, disk flush, or peer-plugin say hookchain) rather than compute variance — per-stage profiling will name the offender instead of blaming the whole function.
+- No behavior change: the helpers are mechanical cuts of the original code. Once the profiler identifies the offending stage, we'll fix the specific call site and likely re-inline the stages. If NO helper fires ≥50ms on the next spike but `cmd_ready` itself still does, the cost is outside any profiled Pawn function (i.e., a peer-plugin `say` hookchain handler running in the same `clc_stringcmd` dispatch), which will redirect the investigation.
+
+---
+
 ## [0.10.113] - 2026-04-19
 
 ### Changed
