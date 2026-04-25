@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.114** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.115** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -18,7 +18,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **Half Tracking**: Automatic 1st/2nd half detection with map rotation adjustment
 - **Overtime System**: Explicit OT via `.ktpOT`/`.draftOT` commands - 5-min rounds, password-protected
 - **Match Context Persistence**: Match ID, pause counts, tech budget, and OT state survive map changes via localinfo
-- **Unique Match IDs**: Format `KTP-{timestamp}-{map}-{hostname}` for stats correlation (1.3 Community 12mans use `1.3-{queueId}-{map}-{hostname}`)
+- **Unique Match IDs**: Format `{timestamp}-{shortHostname}` for stats correlation (e.g. `1768174986-ATL1`; 1.3 Community 12mans use `1.3-{queueId}-{shortHostname}`)
 - **Captain System**: Team confirmation before ready-up phase
 - **Ready-Up System**: Configurable player count per team (default: 6)
 - **Auto-Config Execution**: Map-specific AND match-type-specific server settings

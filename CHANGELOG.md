@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.115] - 2026-04-24
+
+### Added
+- **KTPAntiCheat API integration (Gap 2 — match_id linkage)** — Plugin now announces match start and end to the KTPAntiCheat API so uploaded AC session ZIPs can be correlated to specific KTP matches. AC client polls the API to learn which match a player is in based on the `server_endpoint` it resolved from the DoD process cmdline.
+  - **New config file** `<configsdir>/ac.ini` with `api_base_url` and `server_secret` keys. **Optional — absent file means AC integration is a silent no-op.** Template at repo root.
+  - **New plugin_cfg initialization**: builds `{ip}:{port}` server endpoint once, loads `ac.ini`, initializes a persistent curl slist with `X-Server-Secret` header (separate from the Discord slist to avoid async header-lifecycle issues — same design as the KTPHLTVRecorder v1.5.1 fix).
+  - **New stocks**: `load_ac_config()`, `send_ac_match_announce(matchId)`, `send_ac_match_end(matchId)`, `ac_callback(curl, code)` — all gated on `#if defined HAS_CURL`.
+  - **Announce call** fires after each `ExecuteForward(g_fwdMatchStart, ...)` (1st half, 2nd half, and each OT round). Idempotent on API side (upsert keyed on `match_id + server_endpoint`), clears `ended_at` so the match row stays active across halves.
+  - **End calls** fire after every `ExecuteForward(g_fwdMatchEnd, ...)` site — 6 total, covering regulation end, OT completion, OT round-limit fallback, 2nd-half-abandoned restoration, OT-abandoned restoration, and alternate cleanup path. API only updates rows with `ended_at IS NULL`, so double-fires are safe no-ops.
+  - Every AC HTTP event emits a `log_ktp("event=AC_*")` line for observability — `AC_CONFIG_LOAD`, `AC_SERVER_ENDPOINT`, `AC_CURL_HEADERS_INIT`, `AC_MATCH_ANNOUNCE_SEND`, `AC_MATCH_END_SEND`, `AC_HTTP_OK`, `AC_HTTP_ERROR`, `AC_CURL_ERROR`.
+  - **Zero behavior change when ac.ini is absent** — existing fleet continues working unchanged until the file is deployed.
+
+### Notes
+- This is Phase 1 of the KTPAntiCheat integration plan documented in `KTPAntiCheat/docs/INTEGRATION_PLAN.md`. Phases 2+ (HWID bans, Discord verdicts, admin bot, .ready enforcement) will follow in subsequent releases.
+- Plugin version visible in logs at `plugin_init`; no user-facing commands added.
+
+---
+
 ## [0.10.114] - 2026-04-23
 
 ### Added

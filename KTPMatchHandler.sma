@@ -52,7 +52,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.114"
+#define PLUGIN_VERSION "0.10.115"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -79,6 +79,18 @@ new g_discordChannelId12man[64];     // Discord channel ID for 12man matches (op
 new g_discordChannelIdScrim[64];     // Discord channel ID for scrim matches (optional)
 new g_discordChannelIdDraft[64];     // Discord channel ID for draft matches (optional)
 new g_discordAuthSecret[128];        // X-Relay-Auth header value
+
+// ---------- KTP Anti-Cheat API Config (loaded from INI, Gap 2 — match_id linkage) ----------
+// Optional — if ac.ini absent or empty, AC integration is a no-op.
+new g_acApiBaseUrl[192];             // e.g. "http://<data-server>:<port>"
+new g_acServerSecret[128];           // X-Server-Secret header value
+new g_acServerSecretHeader[160];     // pre-formatted "X-Server-Secret: ..." (persistent)
+new g_acServerEndpoint[48];          // "ip:port" of THIS server, built at plugin_cfg
+new g_acAnnouncePayload[512];        // JSON body buffer for POST /api/match/announce
+new g_acEndPayload[256];             // JSON body buffer for POST /api/match/end
+#if defined HAS_CURL
+new curl_slist: g_acCurlHeaders = SList_Empty;  // persistent headers slist (never freed — async safety)
+#endif
 
 // ---------- Match Types ----------
 enum MatchType {
@@ -748,6 +760,9 @@ stock bool:process_second_half_end_changelevel() {
     {
         new ret;
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_matchMap, g_matchType, team1Total, team2Total);
+        #if defined HAS_CURL
+        send_ac_match_end(g_matchId);
+        #endif
     }
 
     end_match_cleanup();
@@ -845,6 +860,9 @@ stock bool:process_ot_round_end_changelevel() {
         {
             new ret;
             ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_matchMap, g_matchType, team1Total, team2Total);
+            #if defined HAS_CURL
+            send_ac_match_end(g_matchId);
+            #endif
         }
 
         end_match_cleanup();
@@ -877,6 +895,9 @@ stock bool:process_ot_round_end_changelevel() {
             // Fire match end forward so HLStatsX flushes stats and HLTV stops recording
             new ret;
             ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_matchMap, g_matchType, team1Total, team2Total);
+            #if defined HAS_CURL
+            send_ac_match_end(g_matchId);
+            #endif
 
             end_match_cleanup();
             return false;  // End match — cannot safely continue
@@ -2141,6 +2162,143 @@ stock load_ktp_config() {
     log_ktp("event=KTP_CONFIG_LOAD status=ok loaded=%d season=%s password_set=%s path='%s'",
             loaded, status, g_ktpMatchPassword[0] ? "yes" : "no", path);
 }
+
+// ================= KTP Anti-Cheat API Config (Gap 2) =================
+// Loads KTPAntiCheat API settings from ac.ini. File is optional; absence means AC integration is a no-op.
+// Keys: api_base_url, server_secret
+stock load_ac_config() {
+    new configsDir[128], path[192];
+    get_configsdir(configsDir, charsmax(configsDir));
+    formatex(path, charsmax(path), "%s/ac.ini", configsDir);
+
+    new fp = fopen(path, "rt");
+    if (!fp) {
+        log_ktp("event=AC_CONFIG_LOAD status=skip reason='file_not_found' path='%s' (AC integration disabled)", path);
+        return;
+    }
+
+    new line[256], key[64], val[256];
+    new loaded = 0;
+
+    while (!feof(fp)) {
+        fgets(fp, line, charsmax(line));
+        trim(line);
+        if (!line[0] || line[0] == ';' || line[0] == '#') continue;
+
+        new eq = contain(line, "=");
+        if (eq <= 0) continue;
+
+        copy(key, min(eq, charsmax(key)), line);
+        trim(key);
+        strtolower_inplace(key);
+
+        copy(val, charsmax(val), line[eq + 1]);
+        trim(val);
+
+        if (!key[0] || !val[0]) continue;
+
+        if (equal(key, "api_base_url")) {
+            copy(g_acApiBaseUrl, charsmax(g_acApiBaseUrl), val);
+            // Strip trailing slash for consistent URL joining
+            new len = strlen(g_acApiBaseUrl);
+            if (len > 0 && g_acApiBaseUrl[len - 1] == '/') {
+                g_acApiBaseUrl[len - 1] = EOS;
+            }
+            loaded++;
+        }
+        else if (equal(key, "server_secret")) {
+            copy(g_acServerSecret, charsmax(g_acServerSecret), val);
+            loaded++;
+        }
+    }
+    fclose(fp);
+
+    log_ktp("event=AC_CONFIG_LOAD status=ok loaded=%d api_url_set=%s secret_set=%s path='%s'",
+            loaded,
+            g_acApiBaseUrl[0] ? "yes" : "no",
+            g_acServerSecret[0] ? "yes" : "no",
+            path);
+}
+
+#if defined HAS_CURL
+
+// Shared callback for AC API calls. Same pattern as discord_callback — logs outcome, cleans handle.
+public ac_callback(CURL:curl, CURLcode:code) {
+    if (code != CURLE_OK) {
+        new error[128];
+        curl_easy_strerror(code, error, charsmax(error));
+        log_ktp("event=AC_CURL_ERROR curl_code=%d error='%s'", _:code, error);
+    } else {
+        new httpCode;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, httpCode);
+        if (httpCode >= 200 && httpCode < 300) {
+            log_ktp("event=AC_HTTP_OK http=%d", httpCode);
+        } else {
+            log_ktp("event=AC_HTTP_ERROR http=%d", httpCode);
+        }
+    }
+    curl_easy_cleanup(curl);
+    // g_acCurlHeaders is persistent — never free here (async-safety, same principle as g_curlHeaders).
+}
+
+// Announce a match start to the KTPAntiCheat API.
+// Idempotent on the API side (upsert on match_id + server_endpoint).
+// Safe to call multiple times per match — only updates the row, doesn't duplicate.
+stock send_ac_match_announce(const matchId[]) {
+    if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !matchId[0] || !g_acServerEndpoint[0]) return;
+
+    // Omit startedAt — API defaults to UtcNow when field is missing/default.
+    formatex(g_acAnnouncePayload, charsmax(g_acAnnouncePayload),
+        "{^"matchId^":^"%s^",^"serverEndpoint^":^"%s^"}",
+        matchId, g_acServerEndpoint);
+
+    new url[256];
+    formatex(url, charsmax(url), "%s/api/match/announce", g_acApiBaseUrl);
+
+    new CURL:curl = curl_easy_init();
+    if (!curl) {
+        log_ktp("event=AC_ERROR reason='curl_init_failed' endpoint=announce");
+        return;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_acCurlHeaders);
+    curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_acAnnouncePayload);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
+
+    log_ktp("event=AC_MATCH_ANNOUNCE_SEND match_id=%s endpoint=%s", matchId, g_acServerEndpoint);
+    curl_easy_perform(curl, "ac_callback");
+}
+
+// Mark a match ended on the KTPAntiCheat API. Idempotent — only updates rows with ended_at IS NULL.
+stock send_ac_match_end(const matchId[]) {
+    if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !matchId[0] || !g_acServerEndpoint[0]) return;
+
+    formatex(g_acEndPayload, charsmax(g_acEndPayload),
+        "{^"matchId^":^"%s^",^"serverEndpoint^":^"%s^"}",
+        matchId, g_acServerEndpoint);
+
+    new url[256];
+    formatex(url, charsmax(url), "%s/api/match/end", g_acApiBaseUrl);
+
+    new CURL:curl = curl_easy_init();
+    if (!curl) {
+        log_ktp("event=AC_ERROR reason='curl_init_failed' endpoint=end");
+        return;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_acCurlHeaders);
+    curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_acEndPayload);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
+
+    log_ktp("event=AC_MATCH_END_SEND match_id=%s endpoint=%s", matchId, g_acServerEndpoint);
+    curl_easy_perform(curl, "ac_callback");
+}
+
+#endif  // HAS_CURL
 
 // ================= INI map→cfg =================
 stock load_map_mappings() {
@@ -3424,6 +3582,33 @@ public plugin_cfg() {
     }
     #endif
 
+    // Gap 2: KTPAntiCheat API integration
+    load_ac_config();
+
+    // Build this server's "ip:port" endpoint once. Used in every AC announce/end payload
+    // and as the key AC clients query to resolve their connected match.
+    {
+        new acIp[32];
+        get_cvar_string("ip", acIp, charsmax(acIp));
+        if (!acIp[0]) copy(acIp, charsmax(acIp), "0.0.0.0");
+        new acPort = get_cvar_num("port");
+        if (!acPort) acPort = 27015;
+        formatex(g_acServerEndpoint, charsmax(g_acServerEndpoint), "%s:%d", acIp, acPort);
+        log_ktp("event=AC_SERVER_ENDPOINT endpoint=%s", g_acServerEndpoint);
+    }
+
+    // Persistent curl headers for AC calls — separate from Discord's because auth
+    // scheme is different (X-Server-Secret vs X-Relay-Auth). Never freed.
+    #if defined HAS_CURL
+    if (g_acApiBaseUrl[0] && g_acServerSecret[0]) {
+        g_acCurlHeaders = curl_slist_append(SList_Empty, "Content-Type: application/json");
+        formatex(g_acServerSecretHeader, charsmax(g_acServerSecretHeader),
+                 "X-Server-Secret: %s", g_acServerSecret);
+        g_acCurlHeaders = curl_slist_append(g_acCurlHeaders, g_acServerSecretHeader);
+        log_ktp("event=AC_CURL_HEADERS_INIT persistent=1");
+    }
+    #endif
+
     // KTP: Runtime check for DODX HLStatsX natives
     // These natives may not exist in older DODX builds
     #if defined HAS_DODX
@@ -3951,6 +4136,9 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
         // Fire ktp_match_end forward (first-half scores are best available for 2nd half abandon)
         new ret;
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, savedMap, _:g_matchType, firstHalf1, firstHalf2);
+        #if defined HAS_CURL
+        send_ac_match_end(g_matchId);
+        #endif
     }
     else if (isOvertime) {
         // OT was abandoned - restore regulation scores
@@ -3991,6 +4179,9 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
         // Fire ktp_match_end forward (regulation totals for OT abandon)
         new ret;
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, savedMap, _:g_matchType, regScore1, regScore2);
+        #if defined HAS_CURL
+        send_ac_match_end(g_matchId);
+        #endif
     }
 
     // Reset all match state variables to ensure clean state after abandoned match
@@ -4104,6 +4295,9 @@ stock finalize_completed_second_half() {
     {
         new ret;
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_currentMap, _:g_matchType, team1Total, team2Total);
+        #if defined HAS_CURL
+        send_ac_match_end(g_matchId);
+        #endif
     }
 
     // Note: Caller will clear localinfo after this returns (unless OT triggered)
@@ -7034,6 +7228,12 @@ public task_deferred_discord_fwd() {
         new half = g_inOvertime ? (100 + g_otRound) : g_currentHalf;
         ExecuteForward(g_fwdMatchStart, ret, g_matchId, g_currentMap, g_matchType, half);
         log_ktp("event=FWD_MATCH_START match_id=%s map=%s type=%d half=%d", g_matchId, g_currentMap, g_matchType, half);
+
+        // Gap 2: announce match to KTPAntiCheat API. Idempotent — safe to call on every
+        // half/OT start. Clears any stale ended_at so the row stays active across halves.
+        #if defined HAS_CURL
+        send_ac_match_announce(g_matchId);
+        #endif
     }
 
     // Proactive context save for 1st half
