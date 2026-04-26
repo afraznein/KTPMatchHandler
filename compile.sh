@@ -92,7 +92,7 @@ if [ "$GIT_SHA" != "unknown" ]; then
     fi
 fi
 BUILD_TIME=$(date -u +%Y-%m-%dT%H:%MZ)
-cat > "$TEMP_BUILD/build_info.inc" <<EOF
+cat > "$TEMP_BUILD/include/build_info.inc" <<EOF
 #define KTP_BUILD_SHA "${GIT_SHA}${GIT_DIRTY}"
 #define KTP_BUILD_TIME "$BUILD_TIME"
 EOF
