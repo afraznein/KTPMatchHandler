@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.116] - 2026-04-25
+
+### Added
+- **`amx_ktp_versions` rcon command** via new shared include `ktp_version_reporter` (lives in `KTPAMXX/plugins/include/`). Each KTP plugin that adopts the include calls `KTP_RegisterVersion(PLUGIN_NAME, PLUGIN_VERSION)` from `plugin_init()`. The first-loaded plugin registers the rcon command (ADMIN_RCON); all subsequent plugins append their info to a shared localinfo registry. Output is a fixed-width table: `name | version | build SHA | build time (UTC)`.
+- **Build-time SHA + time injection** — `compile.sh` now generates a temp `build_info.inc` containing `#define KTP_BUILD_SHA "..."` and `#define KTP_BUILD_TIME "..."` from `git rev-parse --short HEAD` + `date -u`. The shared include uses `#tryinclude` with "unknown" fallback so off-toolchain compiles still work. SHA is suffixed `-dirty` if the working tree has uncommitted changes.
+
+### Why
+- First concrete deliverable for the test infrastructure plan (`KTPInfrastructure/TEST_INFRASTRUCTURE_PLAN.md`). Also a Tier 2 prerequisite — pre-deploy integration tests need to assert "the plugin we tested is the plugin that's loaded."
+- Useful standalone for ops: `rcon amx_ktp_versions` answers "is what's actually running what we deployed?" without SSH'ing the host.
+- Distinct from the existing `/ops versions` AdminBot command (which md5sums 3 specific files); this is a per-plugin reporter that scales across the whole KTP plugin set.
+
+### Adoption
+- KTPMatchHandler is the canary (this release). Other KTP plugins (KTPHLTVRecorder, KTPCvarChecker, KTPFileChecker, KTPAdminAudit, KTPGrenades, KTPPracticeMode, KTPScoreTracker) will adopt in subsequent releases — onboarding is two lines: `#include <ktp_version_reporter>` + `KTP_RegisterVersion(PLUGIN_NAME, PLUGIN_VERSION);` in `plugin_init`, plus the compile.sh build_info template.
+
+### Bugfix
+- **`compile.sh` temp-dir nesting fix** — `cp -r "$KTPAMXX_INCLUDES" "$TEMP_BUILD/include"` had `cp -r src dst` semantics that nest the source dir inside `dst` if `dst` already exists. Pre-existing copies of old includes survived from the first-ever run; new shared includes added later landed at `/tmp/ktpbuild/include/include/...` and were invisible to amxxpc. Added `rm -rf "$TEMP_BUILD"` before the first `mkdir`. This bug almost certainly affects every other KTP plugin's compile.sh that follows the same template — apply the same fix when onboarding subsequent plugins to `ktp_version_reporter`.
+
+---
+
 ## [0.10.115] - 2026-04-24
 
 ### Added

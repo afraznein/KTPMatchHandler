@@ -29,6 +29,7 @@
 #include <amxmodx>
 #include <amxmisc>
 #include <ktp_discord>
+#include <ktp_version_reporter>
 
 // KTP: DODX for HLStatsX stats integration
 // Provides: dodx_flush_all_stats(), dodx_reset_all_stats(), dodx_set_match_id()
@@ -52,7 +53,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.115"
+#define PLUGIN_VERSION "0.10.116"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -3217,6 +3218,7 @@ public _native_is_match_active(plugin, params) {
 
 public plugin_init() {
     register_plugin(PLUGIN_NAME, PLUGIN_VERSION, PLUGIN_AUTHOR);
+    KTP_RegisterVersion(PLUGIN_NAME, PLUGIN_VERSION);
 
     // Cancel changelevel watchdogs from previous map — if we reached plugin_init,
     // the map change succeeded and these are no longer needed.
