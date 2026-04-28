@@ -248,6 +248,12 @@ new Float:g_unpauseReminderSecs = 15.0;  // cached from g_cvarUnpauseReminderSec
 const AUTO_REQUEST_MIN_SECS = 60;
 const AUTO_REQUEST_DEFAULT_SECS = 300;
 const AUTO_REQUEST_MAX_SECS = 3600; // 1 hour maximum
+// Auto-DC grace window length. Hard-coded (no cvar) by design — see comments at
+// cmd_tech_pause (~5060) and disconnect_countdown_tick (~2755) for the budget-clock
+// asymmetry between this 30s grace and the 5s `.tech` pre-pause. Auto-DC pauses
+// are "punishment-free" (budget clock starts AFTER the grace), while `.tech`
+// charges the 5s pre-pause to the team's budget. If you change one, reconsider
+// the other.
 const DISCONNECT_COUNTDOWN_SECS = 30;
 const AUTO_CONFIRM_SECS = 60;
 
@@ -2752,7 +2758,18 @@ public disconnect_countdown_tick() {
         // Schedule auto-unpause request
         setup_auto_unpause_request();
 
-        // Record tech pause start time (wall clock) for budget tracking
+        // Record tech pause start time AFTER the 30s grace window has finished.
+        //
+        // INTENTIONAL: auto-DC is "punishment-free" — the disconnected team's
+        // budget clock only starts when the pause actually freezes the server,
+        // NOT when their player dropped 30 seconds ago. The grace window is a
+        // courtesy, not a cost.
+        //
+        // Compare with cmd_tech_pause (~line 5070): manual `.tech` sets
+        // g_techPauseStartTime BEFORE its 5-second pre-pause countdown, so
+        // those 5 seconds DO count against the team's budget. That asymmetry
+        // is by design — see DISCONNECT_COUNTDOWN_SECS const declaration for
+        // the rationale.
         g_techPauseStartTime = get_systime();
 
         // Format who caused the pause
@@ -5054,7 +5071,18 @@ public cmd_tech_pause(id) {
     // Schedule auto-unpause request
     setup_auto_unpause_request();
 
-    // Record pause start time (wall clock) for budget tracking
+    // Record pause start time (wall clock) for budget tracking.
+    //
+    // INTENTIONAL: clock starts NOW, BEFORE the 5-second pre-pause countdown
+    // (ktp_prepause_seconds, default 5) actually freezes the server. This means
+    // those 5 seconds are charged to the team's tech budget — the pre-pause is
+    // part of the "cost" of choosing to pause.
+    //
+    // Compare with disconnect_countdown_tick (~line 2755): auto-DC pauses set
+    // g_techPauseStartTime AFTER the 30s grace window, so the disconnected
+    // team's budget is NOT charged for the grace period. That asymmetry is by
+    // design — `.tech` is a deliberate team-initiated action, auto-DC is
+    // punishment-free since the team didn't choose to pause.
     g_techPauseStartTime = get_systime();
 
     log_ktp("event=TECH_PAUSE player=\'%s\' steamid=%s ip=%s team=%s map=%s budget_remaining=%d",
