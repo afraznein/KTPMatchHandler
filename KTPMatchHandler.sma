@@ -501,71 +501,7 @@ public OnChangeLevel(const map[], const landmark[]) {
     g_changeLevelHandled = true;
     g_changeLevelHandledTime = get_gametime();
 
-    // ========== FIRST HALF END ==========
-    // Save state and redirect changelevel to same map for 2nd half
-    if (g_currentHalf == 1 && !g_inOvertime) {
-        // Debug: Log all relevant state before redirect
-        log_ktp("event=CHANGELEVEL_FIRST_HALF original_map=%s matchId=%s g_matchMap=%s g_currentMap=%s",
-                map, g_matchId, g_matchMap, g_currentMap);
-
-        // Validate g_matchMap before redirect
-        if (!g_matchMap[0]) {
-            log_ktp("event=CHANGELEVEL_ERROR reason=g_matchMap_empty falling_back_to=%s", g_currentMap);
-            copy(g_matchMap, charsmax(g_matchMap), g_currentMap);
-        }
-
-        handle_first_half_end();
-
-        // Redirect changelevel to same map for 2nd half (all match types stay on same map)
-        log_ktp("event=CHANGELEVEL_REDIRECT before_redirect=%s target=%s", map, g_matchMap);
-        SetHookChainArg(1, ATYPE_STRING, g_matchMap);
-        // NOTE: Do NOT reset g_changeLevelHandled - it prevents recursion if hook fires again
-        // The guard will naturally reset on plugin reinit when map loads
-        return HC_CONTINUE;
-    }
-
-    // ========== SECOND HALF END or OT ROUND END ==========
-    // Immediately disable auto-DC pauses (players will be leaving)
-    g_inIntermission = true;
-
-    // Store target map for logging
-    copy(g_pendingChangeMap, charsmax(g_pendingChangeMap), map);
-
-    // Process match end logic (announcements, Discord, cleanup)
-    if (g_inOvertime) {
-        log_ktp("event=CHANGELEVEL_OT_ROUND map=%s otRound=%d matchId=%s", map, g_otRound, g_matchId);
-        new bool:stillTied = process_ot_round_end_changelevel();
-
-        if (stillTied) {
-            // OT continues - REDIRECT changelevel to SAME map instead of next in rotation
-            // Use SetHookChainArg to modify the target map in-place (no recursive changelevel calls)
-            log_ktp("event=OT_REDIRECT_CHANGELEVEL original_target=%s redirecting_to=%s next_round=%d", map, g_matchMap, g_otRound);
-            SetHookChainArg(1, ATYPE_STRING, g_matchMap);
-            // NOTE: Do NOT reset g_changeLevelHandled here - it prevents recursion if hook fires again
-            // The guard will naturally reset on plugin reinit when map loads
-            return HC_CONTINUE;  // Let changelevel proceed with modified map
-        }
-
-        // OT match complete - let changelevel proceed
-        g_changeLevelHandled = false;
-        return HC_CONTINUE;
-    } else {
-        log_ktp("event=CHANGELEVEL_SECOND_HALF map=%s matchId=%s", map, g_matchId);
-        new bool:otTriggered = process_second_half_end_changelevel();
-
-        if (otTriggered) {
-            // OT was triggered - REDIRECT changelevel to SAME map instead of next in rotation
-            // Use SetHookChainArg to modify the target map in-place (no recursive changelevel calls)
-            log_ktp("event=OT_REDIRECT_CHANGELEVEL original_target=%s redirecting_to=%s", map, g_matchMap);
-            SetHookChainArg(1, ATYPE_STRING, g_matchMap);
-            g_changeLevelHandled = false;  // Reset for next map load
-            return HC_CONTINUE;  // Let changelevel proceed with modified map
-        }
-
-        // Match ended normally - let changelevel proceed
-        g_changeLevelHandled = false;
-        return HC_CONTINUE;
-    }
+    return dispatch_changelevel_match_end(map, false);
 }
 
 // ================= PFN_CHANGELEVEL HOOK (KTP-ReHLDS) =================
@@ -650,41 +586,88 @@ public OnPfnChangeLevel(const map[], const landmark[]) {
     g_changeLevelHandled = true;
     g_changeLevelHandledTime = get_gametime();
 
-    // --- FIRST HALF END ---
+    return dispatch_changelevel_match_end(map, true);
+}
+
+// Shared match-end dispatch for OnChangeLevel + OnPfnChangeLevel.
+// Both hooks land here after their per-hook guards (debounce, watchdog,
+// handled-flag) are settled; the actual decision tree (first half /
+// OT round / second half end) is identical.
+//
+// Log-event prefix differs (CHANGELEVEL vs PFN_CHANGELEVEL) so post-mortem
+// log greps can still tell which hook drove the dispatch — preserved
+// verbatim from the pre-refactor implementations to keep parsers stable.
+stock dispatch_changelevel_match_end(const map[], const bool:isPfnHook) {
+    // ----- First half end: redirect to same map for 2nd half -----
     if (g_currentHalf == 1 && !g_inOvertime) {
-        if (!g_matchMap[0]) {
-            copy(g_matchMap, charsmax(g_matchMap), g_currentMap);
+        if (isPfnHook) {
+            if (!g_matchMap[0]) {
+                copy(g_matchMap, charsmax(g_matchMap), g_currentMap);
+            }
+            handle_first_half_end();
+            log_ktp("event=PFN_CHANGELEVEL_REDIRECT_H2 original=%s target=%s", map, g_matchMap);
+        } else {
+            log_ktp("event=CHANGELEVEL_FIRST_HALF original_map=%s matchId=%s g_matchMap=%s g_currentMap=%s",
+                    map, g_matchId, g_matchMap, g_currentMap);
+            if (!g_matchMap[0]) {
+                log_ktp("event=CHANGELEVEL_ERROR reason=g_matchMap_empty falling_back_to=%s", g_currentMap);
+                copy(g_matchMap, charsmax(g_matchMap), g_currentMap);
+            }
+            handle_first_half_end();
+            log_ktp("event=CHANGELEVEL_REDIRECT before_redirect=%s target=%s", map, g_matchMap);
         }
-        handle_first_half_end();
-        log_ktp("event=PFN_CHANGELEVEL_REDIRECT_H2 original=%s target=%s", map, g_matchMap);
         SetHookChainArg(1, ATYPE_STRING, g_matchMap);
+        // Do NOT reset g_changeLevelHandled — guard prevents recursion if hook
+        // re-fires before plugin reinit on the redirected map load.
         return HC_CONTINUE;
     }
 
-    // --- SECOND HALF END or OT ROUND END ---
+    // ----- Second half / OT round end -----
     g_inIntermission = true;
     copy(g_pendingChangeMap, charsmax(g_pendingChangeMap), map);
 
     if (g_inOvertime) {
-        log_ktp("event=PFN_CHANGELEVEL_OT map=%s otRound=%d", map, g_otRound);
+        if (isPfnHook) {
+            log_ktp("event=PFN_CHANGELEVEL_OT map=%s otRound=%d", map, g_otRound);
+        } else {
+            log_ktp("event=CHANGELEVEL_OT_ROUND map=%s otRound=%d matchId=%s",
+                    map, g_otRound, g_matchId);
+        }
         new bool:stillTied = process_ot_round_end_changelevel();
         if (stillTied) {
-            log_ktp("event=PFN_OT_REDIRECT original=%s target=%s round=%d", map, g_matchMap, g_otRound);
+            if (isPfnHook) {
+                log_ktp("event=PFN_OT_REDIRECT original=%s target=%s round=%d",
+                        map, g_matchMap, g_otRound);
+            } else {
+                log_ktp("event=OT_REDIRECT_CHANGELEVEL original_target=%s redirecting_to=%s next_round=%d",
+                        map, g_matchMap, g_otRound);
+            }
             SetHookChainArg(1, ATYPE_STRING, g_matchMap);
+            // Don't reset g_changeLevelHandled — recursion guard until plugin reinit.
             return HC_CONTINUE;
         }
         g_changeLevelHandled = false;
         return HC_CONTINUE;
-    } else {
-        log_ktp("event=PFN_CHANGELEVEL_H2_END map=%s matchId=%s", map, g_matchId);
-        new bool:otTriggered = process_second_half_end_changelevel();
-        if (otTriggered) {
-            log_ktp("event=PFN_OT_REDIRECT original=%s target=%s", map, g_matchMap);
-            SetHookChainArg(1, ATYPE_STRING, g_matchMap);
-        }
-        g_changeLevelHandled = false;
-        return HC_CONTINUE;
     }
+
+    // Regulation second half end (may trigger OT).
+    if (isPfnHook) {
+        log_ktp("event=PFN_CHANGELEVEL_H2_END map=%s matchId=%s", map, g_matchId);
+    } else {
+        log_ktp("event=CHANGELEVEL_SECOND_HALF map=%s matchId=%s", map, g_matchId);
+    }
+    new bool:otTriggered = process_second_half_end_changelevel();
+    if (otTriggered) {
+        if (isPfnHook) {
+            log_ktp("event=PFN_OT_REDIRECT original=%s target=%s", map, g_matchMap);
+        } else {
+            log_ktp("event=OT_REDIRECT_CHANGELEVEL original_target=%s redirecting_to=%s",
+                    map, g_matchMap);
+        }
+        SetHookChainArg(1, ATYPE_STRING, g_matchMap);
+    }
+    g_changeLevelHandled = false;
+    return HC_CONTINUE;
 }
 
 // Process second half end with announcements and delayed changelevel
