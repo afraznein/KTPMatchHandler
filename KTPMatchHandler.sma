@@ -53,7 +53,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.119"
+#define PLUGIN_VERSION "0.10.120"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -730,6 +730,8 @@ stock bool:process_second_half_end_changelevel() {
     announce_all("  (1st Half: %d-%d | 2nd Half: %d-%d)",
             g_firstHalfScore[1], g_firstHalfScore[2], team1SecondHalf, team2SecondHalf);
     announce_all("========================================");
+
+    if (team1Total == team2Total) announce_tie_recovery_hint();
 
     // Brief HUD (3 seconds so scoreboard is visible)
     set_hudmessage(0, 255, 0, -1.0, 0.3, 0, 0.0, 3.0, 0.5, 0.5, -1);
@@ -1490,6 +1492,27 @@ stock announce_all(const fmt[], any:...) {
     new msg[192];
     vformat(msg, charsmax(msg), fmt, 2);
     client_print(0, print_chat, "[KTP] %s", msg);
+}
+
+// Print tie-aftermath recovery hint naming the OT command (and password
+// requirement) for the current match type. No-op for match types that
+// don't have an OT recovery path (scrim, 12man, OT-already-running).
+//
+// Closes the silent-rejection gap from CHI2 2026-04-26 (Issue 2): players
+// retyping `.ktpot pwd` from memory don't always know the exact syntax,
+// and a typo (`.kpt`, `.ktpot ` with trailing space) gets no feedback at
+// all. Surfacing the recovery command at tie-end means players don't
+// have to guess.
+stock announce_tie_recovery_hint() {
+    switch (g_matchType) {
+        case MATCH_TYPE_COMPETITIVE: {
+            client_print(0, print_chat, "[KTP] Match tied. Type .ktpOT <password> to start KTP overtime.");
+            client_print(0, print_chat, "[KTP] Contact a KTP admin if you don't have the password.");
+        }
+        case MATCH_TYPE_DRAFT: {
+            client_print(0, print_chat, "[KTP] Match tied. Type .draftOT to start draft overtime (no password).");
+        }
+    }
 }
 
 stock ktp_sync_config_from_cvars() {
@@ -4295,6 +4318,8 @@ stock finalize_completed_second_half() {
     show_hudmessage(0, "=== MATCH COMPLETE ===^n^n%s^n^n%s %d - %d %s^n^n(1st: %d-%d | 2nd: %d-%d)",
         winner, g_team1Name, team1Total, team2Total, g_team2Name,
         firstHalf1, firstHalf2, team1SecondHalf, team2SecondHalf);
+
+    if (team1Total == team2Total) announce_tie_recovery_hint();
 
     // Update Discord embed
     #if defined HAS_CURL

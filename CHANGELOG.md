@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.120] - 2026-04-28
+
+### Refactored
+- **Extracted `dispatch_changelevel_match_end()` from `OnChangeLevel` + `OnPfnChangeLevel`** — both hooks duplicated the first-half-end / OT-round-end / second-half-end decision tree (`process_*_changelevel` calls, `SetHookChainArg` redirects, `g_changeLevelHandled` reset semantics). The intentional divergence (pfn-only debounce + watchdog + prestart-cancel) stays in the per-hook bodies; only the shared dispatch was hoisted into a single helper that takes an `isPfnHook` flag for log-tag selection. ~70 lines deduplicated. All log-event names preserved verbatim (`CHANGELEVEL_*` from `OnChangeLevel`, `PFN_*` from `OnPfnChangeLevel`) so post-mortem log greps and parsers are unaffected. Closes the deferred item from 0.10.118's review-pass notes.
+
+### Added
+- **Tie-end recovery hint announces the OT command + password syntax** — when a match ends tied (regulation), chat now shows the exact command players need to start overtime: `.ktpOT <password>` for competitive matches, `.draftOT` for draft matches. Prior behavior: `MATCH COMPLETE!  Match tied!` chat block, then silence — players had to remember the exact command and case. Closes Issue 2 of the CHI2 2026-04-26 incident (silent-rejection UX) at the leverage point: players who don't have to guess the syntax are far less likely to mistype it. The deeper "fuzzy-match `.kpt` typos to `.ktp`" gap remains open as documented in TODO; that's `Low` priority and acceptable to defer. Hint also fires from `finalize_completed_second_half` (post-restart recovery path), so a server crash during intermission still surfaces the recovery command on relaunch. No-op for scrim/12man (no OT recovery path).
+
+---
+
 ## [0.10.119] - 2026-04-28
 
 ### Changed
