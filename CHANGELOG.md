@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.119] - 2026-04-28
+
+### Changed
+- **GAME PAUSED HUD moved from left edge (x=0.01) to right side (x=0.55)** — admin reported during 2026-04-27 matchday that AMXX's `.kick` menu (left-side overlay) overlapped the pause HUD when kicking a disconnected player during an auto-DC pause, making both unreadable simultaneously. Right-side positioning clears the menu space. Leading 2-char indents on each HUD line removed since they were left-edge margin and no longer serve a purpose at x=0.55. Very long player names in the "By:" line may clip near the right edge — acceptable trade-off; left-side overlap with the kick menu was the worse failure mode.
+
+### Cleanup (added by amend, same release)
+- **Re-inlined `_cmd_ready_*` stage helpers back into `cmd_ready`** — 0.10.114 (2026-04-23) had split `cmd_ready` into 5 public helpers (`_cmd_ready_prechecks`, `_cmd_ready_identity`, `_cmd_ready_track_captain`, `_cmd_ready_update_roster`, `_cmd_ready_broadcast`) so AMXX's function-level profiler could name the culprit stage on the next ~163ms `will_start=0` `.rdy` spike. 2026-04-28 fleet-wide grep across 96h post-JIT data (including Sunday matchday): **0 events vs ~6 expected at pre-JIT baseline**. Verdict: JIT activation alone (fleet-wide `debug` flag strip 2026-04-23) killed the spikes — the cost was Pawn-compute-dominant (announce_all loop, log formatting, get_ready_counts 32-slot scan), running interpreted, made ~5-10× cheaper by JIT. Helpers were vestigial (the AMXX function profiler is debug-flag-gated and that flag was stripped fleet-wide same day). Re-inlined as a mechanical undo — zero logic change. Engine-level `[KTP_OPCODE]` alerts remain functional on the outer `cmd_ready` if regression ever recurs.
+
+### Notes
+- Other pause-related HUDs (pending HUD x=0.01 line 3093, prestart HUD x=0.01 line 3188, continuation HUD centered line 3177) NOT moved. They run during `.ready` / pre-confirm phases where admin kicks are uncommon. If overlap reports come in for those phases, mirror this change.
+- DoD's centered "Paused" text remains suppressed by `ktp_silent_pause=1` (set in `execute_pause`).
+- `.confirm` path also clean post-JIT — 63 `event=PRECONFIRM` invocations on NY alone in the same 96h window, 0 spike alerts. `cmd_pre_confirm` validated, no further action needed.
+
+---
+
 ## [0.10.118] - 2026-04-28
 
 ### Fixed (post-review pass)

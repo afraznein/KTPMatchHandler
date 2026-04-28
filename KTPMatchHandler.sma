@@ -53,7 +53,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.118"
+#define PLUGIN_VERSION "0.10.119"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -2052,11 +2052,21 @@ stock show_pause_hud_message(const pauseType[]) {
         copy(frozenIndicator, charsmax(frozenIndicator), " [LOCKED]");
     }
 
-    // Clean minimalist design - LEFT side to avoid DoD's centered "Paused" text
-    set_hudmessage(255, 255, 255, 0.01, 0.25, 0, 0.0, 0.6, 0.0, 0.0, -1);
+    // RIGHT side to avoid overlap with AMXX menus (admin .kick menu, etc.) which
+    // display on the left during pauses. DoD's centered "Paused" text is
+    // suppressed by ktp_silent_pause=1 (set in execute_pause), so center is no
+    // longer competing for that space — but we don't use center here anyway
+    // because it overlaps with score/timer in widescreen layouts.
+    //
+    // x=0.55 starts right of center; longest lines (~42 chars after leading-
+    // space trim) extend to roughly 0.95-1.0. Very long player names in the
+    // "By:" line may clip near the right edge — acceptable trade-off for
+    // having the kick menu readable. Leading spaces on each line (formerly 2
+    // chars at x=0.01) removed since they no longer serve as left-edge margin.
+    set_hudmessage(255, 255, 255, 0.55, 0.25, 0, 0.0, 0.6, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "^n  == GAME PAUSED ==^n^n  Type: %s^n  By: %s^n^n  Elapsed: %d:%02d%s  |  Remaining: %d:%02d^n  Extensions: %d/%d^n^n  Pauses Left: A:%d X:%d^n^n%s^n",
+        "== GAME PAUSED ==^nType: %s^nBy: %s^n^nElapsed: %d:%02d%s | Remaining: %d:%02d^nExtensions: %d/%d^n^nPauses Left: A:%d X:%d^n^n%s",
         pauseType,
         pausedByName[0] ? pausedByName : "Server",
         elapsedMin, elapsedSec, frozenIndicator,
@@ -6716,40 +6726,50 @@ public task_restarthalf_discord() {
 
 // ----- Ready / NotReady / Status -----
 
-// ----- cmd_ready stage helpers (per-stage AMXX profiling — v0.10.114) -----
-// See block comment on cmd_ready below for rationale. Each helper is public so
-// the Pawn compiler cannot inline it; the AMXX VM's function profiler reports
-// per-function execution times, letting the next ~163ms spike name the culprit.
+// =============== cmd_ready (re-inlined in 0.10.119, see history below) ===============
+// 0.10.114 (2026-04-23) split this into 5 public helpers (`_cmd_ready_prechecks`,
+// `_cmd_ready_identity`, `_cmd_ready_track_captain`, `_cmd_ready_update_roster`,
+// `_cmd_ready_broadcast`) for AMXX function-level profiler diagnosis of the
+// recurring ~163ms `will_start=0` mid-count `.rdy` spikes (6 events on NY2/NY3
+// clustered tightly at 163ms ± 0.5ms, suspected sync HTTPS / disk / peer-plugin
+// hook).
+//
+// 0.10.119 (2026-04-28) re-inlined them. Verdict: JIT activation alone (fleet-
+// wide `debug` flag strip 2026-04-23 → 03:00 ET 2026-04-24 restart) killed the
+// spikes. 96h post-JIT grep including Sunday 2026-04-27 matchday: 0 events
+// fleet-wide vs ~6 expected at pre-JIT baseline (~1.5/day). Helpers were
+// vestigial — AMXX function profiler is debug-flag-gated and that's stripped
+// fleet-wide; the engine-level [KTP_OPCODE] alert (which IS what generated the
+// pre-JIT data) fires on the outer cmd_ready directly and remains functional
+// if a regression ever reintroduces the spikes.
+//
+// Lesson: this whole episode was a JIT problem masquerading as a Pawn-logic
+// problem. The 163ms cost was Pawn-compute-dominant (announce_all loop, log
+// formatting, get_ready_counts 32-slot scan) running interpreted; JIT made
+// each ~5-10× cheaper, dropping the path well below the alert threshold.
+public cmd_ready(id) {
+    // NOTE: ktp_sync_config_from_cvars() removed here for performance
+    // CVARs are synced at plugin_cfg and when configs are executed
 
-// Stage 1: Entry gates (pending / connected / already-ready).
-// Returns true if cmd_ready should proceed, false to short-circuit the command.
-// Also flips g_ready[id] to true on the success path so downstream stages can
-// rely on it (mirrors pre-refactor behavior where this was done before identity
-// lookup).
-public bool:_cmd_ready_prechecks(id) {
+    // --- Pre-checks: pending / connected / already-ready gates ---
     if (!g_matchPending) {
         client_print(id, print_chat, "[KTP] No pending match. Use .ktp, .draft, .12man, or .scrim to begin.");
-        return false;
+        return PLUGIN_HANDLED;
     }
-    if (!is_user_connected(id)) return false;
+    if (!is_user_connected(id)) return PLUGIN_HANDLED;
     if (g_ready[id]) {
         client_print(id, print_chat, "[KTP] You are already READY.");
-        return false;
+        return PLUGIN_HANDLED;
     }
     g_ready[id] = true;
-    return true;
-}
 
-// Stage 2: Identity lookup + event=READY log.
-// Writes name/sid/ip/team buffers for downstream stages.
-public _cmd_ready_identity(id, name[32], sid[44], ip[32], team[16]) {
+    // --- Identity lookup + READY log ---
+    new name[32], sid[44], ip[32], team[16];
     get_identity(id, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team));
     log_ktp("event=READY player='%s' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, g_currentMap);
-}
 
-// Stage 3: Half-captain tracking (first .ready per team identity this half).
-// 2nd-half uses roster-based team identity; 1st-half uses game team directly.
-public _cmd_ready_track_captain(id, const name[], const sid[]) {
+    // --- Half-captain tracking (first .ready per team identity this half) ---
+    // 2nd-half uses roster-based team identity; 1st-half uses game team directly.
     new tid = get_user_team(id);
     new captainTeamId;
     if (g_secondHalfPending) {
@@ -6762,7 +6782,6 @@ public _cmd_ready_track_captain(id, const name[], const sid[]) {
     } else {
         captainTeamId = tid;
     }
-
     if (captainTeamId == 1 && !g_halfCaptain1_name[0]) {
         copy(g_halfCaptain1_name, charsmax(g_halfCaptain1_name), name);
         copy(g_halfCaptain1_sid, charsmax(g_halfCaptain1_sid), sid);
@@ -6772,70 +6791,28 @@ public _cmd_ready_track_captain(id, const name[], const sid[]) {
         copy(g_halfCaptain2_sid, charsmax(g_halfCaptain2_sid), sid);
         log_ktp("event=HALF_CAPTAIN_SET team=2 player='%s' steamid=%s", name, safe_sid(sid));
     }
-}
 
-// Stage 4: Persistent match roster update. Sides are swapped in 2nd half:
-// Allies (tid=1) -> Team 2, Axis (tid=2) -> Team 1.
-public _cmd_ready_update_roster(id, const name[], const sid[]) {
-    new tid = get_user_team(id);
-    new teamId;
+    // --- Persistent match roster update (sides swapped in 2nd half) ---
+    new rosterTeamId;
     if (g_secondHalfPending || g_currentHalf == 2) {
-        teamId = (tid == 1) ? 2 : 1;
+        rosterTeamId = (tid == 1) ? 2 : 1;
     } else {
-        teamId = tid;
+        rosterTeamId = tid;
     }
-    if (teamId == 1 || teamId == 2) {
-        if (add_to_match_roster(name, sid, teamId)) {
-            log_ktp("event=ROSTER_PLAYER_ADDED player='%s' steamid=%s team=%d (2nd_half=%d)", name, safe_sid(sid), teamId, g_secondHalfPending ? 1 : 0);
+    if (rosterTeamId == 1 || rosterTeamId == 2) {
+        if (add_to_match_roster(name, sid, rosterTeamId)) {
+            log_ktp("event=ROSTER_PLAYER_ADDED player='%s' steamid=%s team=%d (2nd_half=%d)", name, safe_sid(sid), rosterTeamId, g_secondHalfPending ? 1 : 0);
         }
     }
-}
 
-// Stage 5: Count readies, broadcast chat announcement, log READY_CHECK.
-// Returns ready-count outputs by reference so cmd_ready can evaluate will_start.
-public _cmd_ready_broadcast(const name[], const sid[],
-                             &alliesPlayers, &alliesReady,
-                             &axisPlayers, &axisReady, &need) {
+    // --- Count readies, broadcast chat announcement, log READY_CHECK ---
+    new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
-    need = get_required_ready_count();
+    new need = get_required_ready_count();
     announce_all("%s [%s] is READY. Allies %d/%d | Axis %d/%d (need %d each).", name, sid, alliesReady, alliesPlayers, axisReady, axisPlayers, need);
     log_ktp("event=READY_CHECK allies_ready=%d axis_ready=%d need=%d will_start=%d",
             alliesReady, axisReady, need,
             (alliesReady >= need && axisReady >= need) ? 1 : 0);
-}
-
-// =============== cmd_ready split into per-stage publics — v0.10.114 ===============
-// 2026-04-23: Split the will_start=0 mid-count .rdy path into discrete public
-// helpers. AMXX's function-level profiler ("performance issue. Function X
-// executed more than Yms.") reports per-function times — by splitting the
-// monolithic cmd_ready into named stages, the next ~163ms spike will name the
-// culprit stage in the server log instead of blaming the whole function.
-//
-// Why this matters: 0.10.113's defer patch covers only the will_start=1
-// match-start branch. Fleet telemetry since 2026-04-17 shows recurring ~163ms
-// cmd_ready spikes on will_start=0 mid-count `.rdy` handling on NY2/NY3,
-// tightly clustered at ~163ms ± 0.5ms (not compute variance — reads like a
-// deterministic blocking call: sync HTTPS RTT, disk flush, or peer-plugin say
-// hook). No Discord send exists in this path, so "defer Discord" won't help.
-//
-// The helpers are mechanical cuts — zero logic change. Once the profiler names
-// the offending stage, we'll fix the specific call site and likely re-inline
-// the stages. If NO helper fires ≥163ms on the next spike but cmd_ready itself
-// does, the cost is outside any profiled function (peer-plugin `say` hookchain
-// handler running in the same clc_stringcmd dispatch).
-public cmd_ready(id) {
-    // NOTE: ktp_sync_config_from_cvars() removed here for performance
-    // CVARs are synced at plugin_cfg and when configs are executed
-
-    if (!_cmd_ready_prechecks(id)) return PLUGIN_HANDLED;
-
-    new name[32], sid[44], ip[32], team[16];
-    _cmd_ready_identity(id, name, sid, ip, team);
-    _cmd_ready_track_captain(id, name, sid);
-    _cmd_ready_update_roster(id, name, sid);
-
-    new alliesPlayers, axisPlayers, alliesReady, axisReady, need;
-    _cmd_ready_broadcast(name, sid, alliesPlayers, alliesReady, axisPlayers, axisReady, need);
 
     // Start match when both teams have enough ready players
     if (alliesReady >= need && axisReady >= need) {
