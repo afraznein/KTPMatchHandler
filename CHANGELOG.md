@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.118] - 2026-04-28
+
+### Fixed (post-review pass)
+- **Tech budget persistence in 2nd half / OT** — `save_state_to_localinfo()` was guarded behind `if (g_currentHalf == 1)` at two sites where tech-pause budgets get deducted: the unpause-countdown finish path (`KTPMatchHandler.sma:2940`) and `handle_resume_request`'s freeze-on-resume path (`KTPMatchHandler.sma:4633`). For 2nd-half and OT pauses, the deduction lived in-memory only — a server crash between `.resume` and the actual unpause-end returned the spent tech budget to the team. Competitive integrity issue in OT where budgets are tight by design. Removed both guards; localinfo write is cheap (single `set_localinfo`) and now happens unconditionally on each tech-budget mutation.
+- **`escape_for_json` missing tab + control-char handling** (`ktp_matchhandler_discord.inc:185-198`) — escapes `"` / `\` / `\n` and drops `\r`, but tab characters (0x09) fell through verbatim, producing invalid JSON if a player name happened to contain a tab byte (rare, but possible via some client exploits). Added explicit `\t` → `\\t` escape and a defensive filter that silently drops other ASCII control chars (0x01-0x08, 0x0B-0x0C, 0x0E-0x1F). Without this, a single bad name would 400 the entire Discord embed.
+
+### Process notes (no code change)
+A `ktp-code-review` audit pass on 2026-04-28 surfaced 14 candidate findings; 2 were real and fixed above (A3, D2). The other 12 turned out to be agent false-positives — manual verification against the source showed each was either already handled, misread, or based on fabricated AMXX semantics. No regression-worthy issues left from that pass. One real-but-deferred item: `OnChangeLevel` and `OnPfnChangeLevel` share ~50% of their match-end dispatch bodies; the divergence between them is intentional (pfn-only debounce + watchdog) but the shared portion would benefit from extraction. Filed as a separate TODO — too risky for a ride-along commit on a fix branch.
+
+---
+
+## [0.10.117] - 2026-04-28
+
+### Fixed
+- **`.ktpOT <password>` and `.draftOT` silently rejected when typed with arguments** — root-caused 2026-04-26 from CHI2 incident `1777258229-CHI2`: 299-299 tied draft, players spent 6 minutes typing `.ktpot seasonNein` (lowercase, correct password) with zero plugin response. Eventually `.ktpOT seasonNein` (case-correct) worked. Investigation confirmed the bug is broader than case-sensitivity:
+  - `register_clcmd("say .ktpOT", "cmd_start_ktp_ot")` matches `CMD_ARGV(1)` against the registered `.ktpOT` token via `stricmp` — already case-insensitive at the AMXX level.
+  - **But** the engine packages chat content as a single quoted token, so `say ".ktpOT seasonNein"` sets `CMD_ARGV(1)=".ktpOT seasonNein"` (the FULL chat string). `stricmp(".ktpOT", ".ktpOT seasonNein")` ≠ 0 → no match, regardless of case.
+  - The `.ktpOT seasonNein` form that worked at 23:41:55 only triggered through an accidental fallthrough in `cmd_say_hook`'s `.ktp` 4-char prefix check, which then failed its `args[4]==' '` guard and didn't actually fire `cmd_match_start` either. The `PRESTART_BEGIN` at 23:42:02 came from a different code path (still narrowing).
+- **Fix:** route `.ktpot`/`.ktpOT`/`.draftot`/`.draftOT` (and `/ktpot`/`/draftot`) through `cmd_say_hook` and `cmd_say_team_hook` using `equali` prefix matching, the same pattern `.ktp <password>` already uses successfully. Handles all case variants (`.ktpOT`, `.ktpot`, `.KTPOT`, `.KtPoT`, etc.) and both no-args + with-args forms.
+- **Match password comparison made case-insensitive** — `cmd_match_start` previously used `equal()` (case-sensitive) for `.ktp` / `.ktpOT` password validation. Match-day passwords are typed under tournament pressure; capitalization mistakes (`seasonNein` vs `seasonneiN` vs `Seasonnein`) shouldn't gate the entire OT flow. Now uses `equali()`. ktp.ini's `match_password` value remains the canonical form for documentation; any case variant accepted at runtime. Same chichi 2026-04-26 incident — beyond the case-sensitive command name, the password attempts also varied in case (`seasonneiN`, `seasonnein`, etc) and would all silently fail; this side of the fix removes that source of confusion too.
+- **Out of scope (filed for follow-up):** silent-rejection UX for malformed `.kt*`/`.draft*` commands, and the `.ktpOT` continuation-vs-fresh-start semantics question. See TODO.md "KTPMatchHandler: `.ktpOT` UX issues" for issues 2 and 3.
+
+### Notes
+- Pre-existing `register_clcmd("say .ktpOT", ...)` and `.ktpot` lines kept for the no-args bare-command case (which works correctly since `CMD_ARGV(1)=".ktpOT"` exactly). They're now redundant for chat (cmd_say_hook handles both cases) but cover console invocations and don't hurt.
+
+---
+
 ## [0.10.116] - 2026-04-25
 
 ### Added

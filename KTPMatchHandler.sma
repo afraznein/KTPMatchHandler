@@ -53,7 +53,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.116"
+#define PLUGIN_VERSION "0.10.118"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -2936,10 +2936,13 @@ public OnPausedHUDUpdate() {
                         g_otTechBudget[teamId] = g_techBudget[teamId];
                     }
 
-                    // Persist tech budget to localinfo for 2nd half restoration
-                    if (g_currentHalf == 1) {
-                        save_state_to_localinfo();
-                    }
+                    // Persist tech budget to localinfo unconditionally (v0.10.118).
+                    // Previously gated on g_currentHalf == 1, which left 2nd-half + OT
+                    // tech-budget deductions in-memory only. A server crash between
+                    // .resume and the actual unpause-end returned spent tech budget
+                    // to the team — competitive integrity issue in OT where budgets
+                    // are tight. save_state_to_localinfo is cheap (single set_localinfo).
+                    save_state_to_localinfo();
 
                     // Announce tech pause duration and remaining budget
                     new buf1[16], buf2[16];
@@ -4629,10 +4632,8 @@ stock handle_resume_request(id, const name[], const sid[], const team[], teamId)
                 g_otTechBudget[g_pauseOwnerTeam] = g_techBudget[g_pauseOwnerTeam];
             }
 
-            // Persist tech budget to localinfo for 2nd half restoration
-            if (g_currentHalf == 1) {
-                save_state_to_localinfo();
-            }
+            // Persist unconditionally — see countdown-finished branch above for rationale.
+            save_state_to_localinfo();
 
             new buf[16];
             fmt_seconds(g_techBudget[g_pauseOwnerTeam], buf, charsmax(buf));
@@ -5351,6 +5352,39 @@ public cmd_say_hook(id) {
         return handle_13_queue_id_input(id, args);
     }
 
+    // ---- KTP overtime: .ktpOT / .ktpot / /ktpOT / /ktpot (case-insensitive) ----
+    // Routed through here (not the register_clcmd handlers above) because chat
+    // commands send the engine `say "<full content>"` as a single quoted token,
+    // so AMXX's CMD_ARGV(1) is the WHOLE chat string ("/.ktpOT seasonNein") —
+    // register_clcmd's stricmp(argument, arg) cannot match a fixed prefix
+    // against the variable-length full chat. Confirmed via 2026-04-26 CHI2
+    // incident where lowercase ".ktpot seasonNein" was silently dropped while
+    // the case-correct ".ktpOT seasonNein" only worked because it accidentally
+    // routed through this hook via the .ktp 4-char prefix check below — and
+    // even that didn't actually match (args[4]='O', not space). The TIE_DETECTED
+    // recovery path was completely broken for both cases. Check OT prefixes
+    // BEFORE the .ktp check so the longer match wins.
+    if (equali(args, "/ktpot", 6) || equali(args, ".ktpot", 6)) {
+        if (strlen(args) == 6 || args[6] == ' ') {
+            if (!g_matchLive && !g_preStartPending && !g_matchPending) {
+                g_matchType = MATCH_TYPE_KTP_OT;
+                g_disableDiscord = false;
+            }
+            return cmd_match_start(id);
+        }
+    }
+
+    // ---- Draft overtime: .draftOT / .draftot (case-insensitive, no password) ----
+    if (equali(args, "/draftot", 8) || equali(args, ".draftot", 8)) {
+        if (strlen(args) == 8 || args[8] == ' ') {
+            if (!g_matchLive && !g_preStartPending && !g_matchPending) {
+                g_matchType = MATCH_TYPE_DRAFT_OT;
+                g_disableDiscord = false;
+            }
+            return cmd_match_start(id);
+        }
+    }
+
     // Check for /ktp or .ktp commands (with potential password argument)
     if (equali(args, "/ktp", 4) || equali(args, ".ktp", 4)) {
         // Must be exactly /ktp or have a space after for password
@@ -5402,6 +5436,27 @@ public cmd_say_team_hook(id) {
 
     if (g_13InputState > 0 && id == g_13CaptainId && args[0]) {
         return handle_13_queue_id_input(id, args);
+    }
+
+    // Mirror cmd_say_hook OT routing — see comment block there for rationale.
+    if (equali(args, "/ktpot", 6) || equali(args, ".ktpot", 6)) {
+        if (strlen(args) == 6 || args[6] == ' ') {
+            if (!g_matchLive && !g_preStartPending && !g_matchPending) {
+                g_matchType = MATCH_TYPE_KTP_OT;
+                g_disableDiscord = false;
+            }
+            return cmd_match_start(id);
+        }
+    }
+
+    if (equali(args, "/draftot", 8) || equali(args, ".draftot", 8)) {
+        if (strlen(args) == 8 || args[8] == ' ') {
+            if (!g_matchLive && !g_preStartPending && !g_matchPending) {
+                g_matchType = MATCH_TYPE_DRAFT_OT;
+                g_disableDiscord = false;
+            }
+            return cmd_match_start(id);
+        }
     }
 
     if (equali(args, "/ktp", 4) || equali(args, ".ktp", 4)) {
@@ -5494,7 +5549,11 @@ public cmd_match_start(id) {
             return PLUGIN_HANDLED;
         }
 
-        if (!equal(password, g_ktpMatchPassword)) {
+        // Case-insensitive password comparison (v0.10.117). Match-day passwords
+        // are typed under tournament pressure; capitalization mistakes shouldn't
+        // gate the entire OT flow. ktp.ini's `match_password` value is the
+        // canonical form for documentation, but any case variant accepted.
+        if (!equali(password, g_ktpMatchPassword)) {
             client_print(id, print_chat, "[KTP] Invalid match password.");
 
             // Log failed attempt

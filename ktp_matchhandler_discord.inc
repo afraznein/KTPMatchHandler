@@ -186,12 +186,20 @@ stock escape_for_json(const input[], output[], maxlen) {
     new j = 0;
     new inputLen = strlen(input);
     for (new i = 0; i < inputLen && j < maxlen - 2; i++) {
-        switch (input[i]) {
+        new ch = input[i];
+        switch (ch) {
             case '"': { output[j++] = 92; output[j++] = '"'; }   // escape quote
             case 92:  { output[j++] = 92; output[j++] = 92; }    // escape backslash
             case 10:  { output[j++] = 92; output[j++] = 'n'; }   // escape newline
             case 13:  { } // skip carriage return
-            default:  { output[j++] = input[i]; }
+            case 9:   { output[j++] = 92; output[j++] = 't'; }   // escape tab (v0.10.118)
+            default:  {
+                // v0.10.118: drop other ASCII control chars (0x01-0x08, 0x0B-0x0C, 0x0E-0x1F)
+                // that would produce invalid JSON. Player names with such bytes are rare but
+                // possible via client exploits and would 400 the entire Discord embed otherwise.
+                if (ch < 32) continue;
+                output[j++] = ch;
+            }
         }
     }
     output[j] = EOS;
