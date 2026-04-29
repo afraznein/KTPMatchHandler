@@ -1,0 +1,53 @@
+# KTP Tier 1 — config-parse tests (per-plugin)
+#
+# Validates the in-repo schemas of the configs this plugin ships:
+#   - ktp_maps.ini             (map → config/name/type lookup loaded by the plugin)
+#   - documents/discord.ini.example (template the operator copies server-side)
+#
+# Pure stdlib, no external deps beyond pytest. ~5s per run.
+#
+# Sister to KTPInfrastructure's central tests/config_parse/ which guards the
+# composite online/local profile configs (plugins.ini, modules.ini, the
+# central discord.ini, hltv_recorder.ini, dodserver.cfg). This workflow
+# guards the per-plugin schemas KTPInfrastructure can't see.
+
+name: config tests
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'ktp_maps.ini'
+      - 'documents/*.ini.example'
+      - 'tests/config_parse/**'
+      - '.github/workflows/config-tests.yml'
+  pull_request:
+    paths:
+      - 'ktp_maps.ini'
+      - 'documents/*.ini.example'
+      - 'tests/config_parse/**'
+      - '.github/workflows/config-tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  config-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pytest
+        run: pip install --quiet pytest
+
+      - name: Run config-parse tests
+        run: pytest tests/config_parse/ -v
