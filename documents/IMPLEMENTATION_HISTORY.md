@@ -1,11 +1,14 @@
-# KTPMatchHandler TODO
+# KTPMatchHandler Implementation History (v0.6 → v0.9)
 
 > **Created:** 2025-12-16
-> **Last Updated:** 2025-12-20
-> **Current Version:** 0.9.1 (Discord Embed Roster + Score Persistence Fix)
+> **Last Updated:** 2025-12-20 (frozen — see note below)
+> **Snapshot version at creation:** 0.9.1 (Discord Embed Roster + Score Persistence Fix)
 
-This document tracks planned features and improvements for KTPMatchHandler.
-Use this to maintain context across conversation resets.
+This document is a **historical implementation record** of how KTPMatchHandler grew from v0.6.0 → v0.9.1: release summaries, the multi-phase HLStatsX:CE integration plan that became `KTPHLStatsX`, resolved design questions, and fixed bugs from late 2025. It was originally named `documents/TODO.md` while v0.6 → v0.9 work was in flight; renamed in April 2026 to reflect what it actually is now that all of that work has shipped.
+
+For **active TODOs**, see `N:\Nein_\KTP Git Projects\TODO.md` (project-root canonical TODO list, established Feb 2026 onward) and per-plugin `CHANGELOG.md` entries for shipped work since v0.10.
+
+The "Priority 2: Potential Enhancements" section near the bottom retains 2 unfinished feature ideas (`/matchhistory` command, admin force-ready/force-start) — speculative, not actively prioritized; pull into project-root TODO.md if/when they become real work items.
 
 ---
 
