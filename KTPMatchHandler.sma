@@ -53,7 +53,7 @@ new bool:g_hasDodxStatsNatives = false;
 #endif
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.120"
+#define PLUGIN_VERSION "0.10.121"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -383,6 +383,8 @@ new g_taskRestartHalfStatsId = 55623;       // Task ID for deferred restarthalf 
 new g_taskRestartHalfDiscordId = 55624;     // Task ID for deferred restarthalf Discord (phase 2, 0.2s)
 new g_taskPendingPhaseId = 55625;           // Task ID for deferred enter_pending_phase after confirm
 new g_taskRoundLiveTimeoutId = 55626;      // Task ID for roundlive timeout fallback
+new g_taskContinuationAnnounceId = 55629;  // Task ID for deferred 2nd-half/OT announce (clients reconnect window)
+new g_taskContinuationReminderId = 55630;  // Task ID base for early ".ready" chat reminders (uses +1 for 2nd reminder)
 
 // Delayed match start log data (for HLStatsX UDP timing issue)
 new g_delayedMatchId[64];                   // Match ID for delayed log
@@ -3211,6 +3213,61 @@ public prestart_hud_tick() {
     );
 }
 
+// Deferred 2nd-half/OT announce: fires the full restoration banner block at
+// +3s after `restore_match_context_from_localinfo`. Synchronous in plugin_cfg
+// would broadcast before clients have reconnected to the new map (HL1 chat
+// is not replayed for late arrivals). At +3s the median client is connected
+// and rendering chat. Players in DoD's role-select VGUI menu still see chat
+// since chat overlays the menu; the pending HUD does not.
+public task_continuation_announce() {
+    if (!g_matchPending) return;  // Match started before deferred fire — skip
+
+    if (g_inOvertime) {
+        new team1OtTotal = 0, team2OtTotal = 0;
+        for (new r = 1; r < g_otRound; r++) {
+            team1OtTotal += g_otScores[r][1];
+            team2OtTotal += g_otScores[r][2];
+        }
+        announce_all("========================================");
+        announce_all("  OVERTIME ROUND %d - Match ID: %s", g_otRound, g_matchId);
+        announce_all("========================================");
+        announce_all("Regulation: %s %d - %d %s",
+                g_team1Name, g_regulationScore[1], g_regulationScore[2], g_team2Name);
+        if (team1OtTotal + team2OtTotal > 0) {
+            announce_all("OT Total: %s %d - %d %s",
+                    g_team1Name, team1OtTotal, team2OtTotal, g_team2Name);
+        }
+        announce_all("%s = %s | %s = %s",
+                g_otTeam1StartsAs == 1 ? "Allies" : "Axis", g_team1Name,
+                g_otTeam1StartsAs == 1 ? "Axis" : "Allies", g_team2Name);
+        announce_all(">>> Type .ready to start OT round %d <<<", g_otRound);
+        announce_all("[HLTV] Verify HLTV is still connected before resuming.");
+    } else if (g_secondHalfPending) {
+        announce_all("=== 2nd HALF - Match ID: %s ===", g_matchId);
+        announce_all("1st Half: %s %d - %d %s",
+                g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
+        announce_all("Tactical pauses used: %s %d/1, %s %d/1",
+                g_teamName[1], g_pauseCountTeam[1],
+                g_teamName[2], g_pauseCountTeam[2]);
+        announce_all(">>> Type .ready to start 2nd half <<<");
+        announce_all("[HLTV] Verify HLTV is still connected before resuming.");
+    }
+}
+
+// Early ".ready" chat reminder for 2nd-half/OT pending phase. Fires twice
+// (~13s and ~23s after restoration) before the standard 30s
+// `unready_reminder_tick` cadence kicks in. Catches players still working
+// through DoD's role-select VGUI menu, where the pending HUD is obscured
+// but chat is visible.
+public task_continuation_reminder() {
+    if (!g_matchPending) return;
+    if (g_inOvertime) {
+        announce_all(">>> Type .ready to start OT round %d <<<", g_otRound);
+    } else if (g_secondHalfPending) {
+        announce_all(">>> Type .ready to start 2nd half <<<");
+    }
+}
+
 stock prestart_reset() {
     g_preStartPending = false;
     g_preConfirmAllies = false;
@@ -3845,12 +3902,16 @@ stock restore_match_context_from_localinfo() {
                 g_matchId, g_matchMap, stateBuf, g_firstHalfScore[1], g_firstHalfScore[2], g_team1Name, g_team2Name,
                 g_matchRosterTeam1Count, g_matchRosterTeam2Count);
 
-        // Announce 2nd half continuation
-        announce_all("=== 2nd HALF - Match ID: %s ===", g_matchId);
-        announce_all("1st Half: %s %d - %d %s", g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
-        announce_all("Tactical pauses used: %s %d/1, %s %d/1", g_teamName[1], g_pauseCountTeam[1], g_teamName[2], g_pauseCountTeam[2]);
-        announce_all(">>> Type .ready to start 2nd half <<<");
-        announce_all("[HLTV] Verify HLTV is still connected before resuming.");
+        // Defer the announce + reminders — see task_continuation_announce header
+        // comment for why synchronous `announce_all` here would reach nobody.
+        // The "=== 2nd HALF DETECTED ===" set_hudmessage stays synchronous
+        // (8s holdtime survives through to most players spawning).
+        remove_task(g_taskContinuationAnnounceId);
+        remove_task(g_taskContinuationReminderId);
+        remove_task(g_taskContinuationReminderId + 1);
+        set_task(3.0,  "task_continuation_announce", g_taskContinuationAnnounceId);
+        set_task(13.0, "task_continuation_reminder", g_taskContinuationReminderId);
+        set_task(23.0, "task_continuation_reminder", g_taskContinuationReminderId + 1);
 
         // HUD alert for 2nd half detection with team swap info
         set_hudmessage(255, 255, 0, -1.0, 0.25, 0, 0.0, 8.0, 0.5, 0.5, -1);
@@ -3917,19 +3978,16 @@ stock restore_match_context_from_localinfo() {
                 g_matchId, g_otRound, g_regulationScore[1], g_regulationScore[2],
                 team1OtTotal, team2OtTotal, g_otTeam1StartsAs, g_team1Name, g_team2Name);
 
-        // Announce OT continuation
-        announce_all("========================================");
-        announce_all("  OVERTIME ROUND %d - Match ID: %s", g_otRound, g_matchId);
-        announce_all("========================================");
-        announce_all("Regulation: %s %d - %d %s", g_team1Name, g_regulationScore[1], g_regulationScore[2], g_team2Name);
-        if (numPrevRounds > 0) {
-            announce_all("OT Total: %s %d - %d %s", g_team1Name, team1OtTotal, team2OtTotal, g_team2Name);
-        }
-        announce_all("%s = %s | %s = %s",
-            g_otTeam1StartsAs == 1 ? "Allies" : "Axis", g_team1Name,
-            g_otTeam1StartsAs == 1 ? "Axis" : "Allies", g_team2Name);
-        announce_all(">>> Type .ready to start OT round %d <<<", g_otRound);
-        announce_all("[HLTV] Verify HLTV is still connected before resuming.");
+        // Defer announce + reminders — clients still reconnecting at this point
+        // would miss synchronous broadcasts. Mirror the 2nd-half restoration
+        // pattern; task_continuation_announce branches on g_inOvertime to print
+        // the OT-flavored block.
+        remove_task(g_taskContinuationAnnounceId);
+        remove_task(g_taskContinuationReminderId);
+        remove_task(g_taskContinuationReminderId + 1);
+        set_task(3.0,  "task_continuation_announce", g_taskContinuationAnnounceId);
+        set_task(13.0, "task_continuation_reminder", g_taskContinuationReminderId);
+        set_task(23.0, "task_continuation_reminder", g_taskContinuationReminderId + 1);
 
         // Set flag indicating OT round is pending (similar to g_secondHalfPending)
         g_secondHalfPending = true;  // Reuse this flag for OT pending
@@ -3965,6 +4023,9 @@ public plugin_end() {
     remove_task(g_taskUnreadyReminderId);
     remove_task(g_taskScoreSaveId);
     remove_task(g_taskHalftimeWatchdogId);
+    remove_task(g_taskContinuationAnnounceId);
+    remove_task(g_taskContinuationReminderId);
+    remove_task(g_taskContinuationReminderId + 1);
 
     // Note: Match state finalization is now handled by OnChangeLevel() hook
     // which fires BEFORE plugin_end on KTP-ReHLDS servers.

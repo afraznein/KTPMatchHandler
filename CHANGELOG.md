@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.121] - 2026-04-28
+
+### Fixed
+- **2nd-half / OT continuation `.ready` prompt missed by players in role-select VGUI** — investigation triggered by user-reported "spotty .ready HUD" on NY1 04/26 dod_armory_b6 match (Play4Fun vs nein2five). Restoration timeline forensic on the engine log showed the bug clearly: `restore_match_context_from_localinfo` runs synchronously inside `plugin_cfg`, which fires **before** any client has reconnected to the new map (`entered the game` events come 1-3s later in the engine log). The previous code's `announce_all` block ("=== 2nd HALF ===" / "Type .ready" / etc.) was broadcast into a server with zero connected clients — and HL1/DoD chat is not replayed for late arrivals, so nobody ever saw it. Players then auto-rejoined teams (engine memory) and landed in DoD's **role-select VGUI menu**, which obscures the pending HUD at `y=0.15`. Result: until a player picked a class and spawned in, they had no surface telling them to type `.ready`. Time-from-restore-to-first-ready stretched to **48s on match 4** and **54s on match 5** (vs 8-11s on matches with faster role-pickers).
+- **Fix:** defer the announce block to `+3s` post-restoration via two new public callbacks (`task_continuation_announce` for the full banner, `task_continuation_reminder` for shorter "Type .ready" pings). Schedule additional reminders at `+13s` and `+23s` so a player still cycling through role-select gets at least 3 chat hits before the standard 30s `unready_reminder_tick` cadence kicks in. Chat overlays VGUI menus in DoD even when HUDs don't, so chat is the reliable surface during the role-select window. Both 2nd-half and OT-round restoration paths get the same treatment (the OT path's announce block was longer — regulation score, OT total, side-mapping line, ".ready for OT round X" — but suffered identically from the synchronous-broadcast-into-empty-server timing). The "=== 2nd HALF DETECTED ===" `set_hudmessage` (8s holdtime) stays synchronous; if the player is still in role-select 8s in, the chat path covers them.
+- New task IDs `g_taskContinuationAnnounceId = 55629` and `g_taskContinuationReminderId = 55630` (uses +1 for the second reminder slot). All three removed in `plugin_end` to prevent leaks across plugin reloads.
+
+### Notes
+- This does **not** alter the synchronous in-engine state restoration (matchPending=1, roster, scores, captains, Discord IDs, tech budgets, etc.) — those still happen at `plugin_cfg` time exactly as before. Only the player-visible `announce_all` chat is deferred. State restoration is plugin-internal and happens correctly regardless of client connection state.
+- Investigation forensics (75 fleet 2nd halves audited; 4 zero-ready abandoned, all NewYork weekday 1.3 Community 12mans; deep dive on user's NY1 04/26 16:40:13 match showing the team-rejoin-then-stuck-in-role-select pattern) captured in the conversation that produced this fix. The earlier suspect — `PFN_CHANGELEVEL_CANCEL_PENDING` watchdog spuriously firing during 2nd-half pending — was empirically disproved (zero `pending=1` fires fleet-wide, 7-day window).
+
+---
+
 ## [0.10.120] - 2026-04-28
 
 ### Refactored
