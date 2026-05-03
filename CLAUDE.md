@@ -1,7 +1,8 @@
 # KTPMatchHandler - Claude Code Context
 
 ## Compile Command
-To compile this plugin, use:
+
+**Production build:**
 ```bash
 wsl bash -c "cd '/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler' && bash compile.sh"
 ```
@@ -10,6 +11,13 @@ This will:
 1. Compile `KTPMatchHandler.sma` using KTPAMXX compiler
 2. Output to `compiled/KTPMatchHandler.amxx`
 3. Auto-stage to `N:\Nein_\KTP Git Projects\KTP DoD Server\serverfiles\dod\addons\ktpamx\plugins\`
+
+**Test-mode build** (KTPInfrastructure Tier 2 integration tests; 0.10.122+):
+```bash
+wsl bash -c "cd '/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler' && KTP_TEST_MODE=1 bash compile.sh"
+```
+
+Outputs to `compiled/test/KTPMatchHandler.amxx`, NOT staged to production. Adds `amx_ktp_test_*` rcons for state-machine driving + readback. Production-mode binary byte-identical to no-flag build (test-mode block is `#if defined KTP_TEST_MODE`-gated).
 
 ## Project Structure
 - `KTPMatchHandler.sma` - Main plugin source

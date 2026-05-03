@@ -52,8 +52,30 @@ new bool:g_hasDodxStatsNatives = false;
     #define HAS_CURL 1
 #endif
 
+// Test-mode build (-DKTP_TEST_MODE on amxxpc cmdline) — adds RCON commands
+// that drive the match-flow state machine directly + read back internal
+// state, for the KTPInfrastructure Tier 2 match-flow integration tests.
+//
+// Production servers run KTPAMXX in REHLDS extension mode (no Metamod); the
+// only modules loaded in production are amxxcurl, reapi, dodx (per
+// configs/modules.ini). fakemeta is NOT loaded in extension mode, so the
+// test-mode block is restricted to AMXX core + DODX + ReAPI surface — same
+// modules the production code path uses.
+//
+// Design choice: rather than synthesize fake clients (which would require
+// fakemeta's CreateFakeClient + ClientPutInServer), the test-mode rcons set
+// the internal state machine directly with synthetic captain identities and
+// fire the same multi-forwards production code fires. Integration tests
+// assert on forward-firing + state transitions; chat-layer routing is out
+// of scope for Tier 2 v1 (Tier 1 smoke covers plugin-load and rcon path
+// directly).
+//
+// NEVER enabled for production deploys; compile.sh emits these binaries to
+// compiled/test/ rather than compiled/. Production builds compile to byte-
+// identical output as before this flag landed (verified at v0.10.122).
+
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.121"
+#define PLUGIN_VERSION "0.10.122"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -71,6 +93,11 @@ new g_cvarPauseExtension;     // pause extension seconds (ktp_pause_extension)
 new g_cvarMaxExtensions;      // max pause extensions (ktp_pause_max_extensions)
 new g_cvarUnreadyReminderSec; // unready reminder interval (ktp_unready_reminder_secs)
 new g_cvarUnpauseReminderSec; // unpause reminder interval (ktp_unpause_reminder_secs)
+
+#if defined KTP_TEST_MODE
+new g_cvarTestSkipReadyCount; // test-mode: when 1, get_required_ready_count() returns 1 so
+                              // a single fake client can drive match-start (ktp_test_skip_ready_count)
+#endif
 
 // ---------- Discord Config (loaded from INI) ----------
 new g_discordRelayUrl[256];          // Discord relay endpoint URL
@@ -3633,6 +3660,32 @@ public plugin_init() {
 
     // Start idle command hint (repeating chat message when no match active)
     set_task(IDLE_HINT_INTERVAL, "task_idle_hint", g_taskIdleHintId, _, _, "b");
+
+#if defined KTP_TEST_MODE
+    // ===== Test-mode RCON commands (KTP_TEST_MODE only — production no-op) =====
+    // Drives the match-flow state machine directly (no fake clients, no
+    // fakemeta dependency). See cmd_test_* handlers near bottom of this file.
+    // Cvar registered here so get_required_ready_count() can read it via
+    // get_pcvar_num().
+    g_cvarTestSkipReadyCount = register_cvar("ktp_test_skip_ready_count", "0");
+
+    register_concmd("amx_ktp_test_setup_match",   "cmd_test_setup_match",   ADMIN_RCON,
+        "[TEST-MODE] <matchType> [<map>] — set up PRESTART with synthetic captains; matchType 0..5");
+    register_concmd("amx_ktp_test_advance_pending", "cmd_test_advance_pending", ADMIN_RCON,
+        "[TEST-MODE] PRESTART -> PENDING via enter_pending_phase()");
+    register_concmd("amx_ktp_test_advance_live",  "cmd_test_advance_live",  ADMIN_RCON,
+        "[TEST-MODE] <half> — PENDING -> LIVE; fires ktp_match_start forward");
+    register_concmd("amx_ktp_test_end_match",     "cmd_test_end_match",     ADMIN_RCON,
+        "[TEST-MODE] <s1> <s2> — fire ktp_match_end forward + KTP_MATCH_END log line");
+    register_concmd("amx_ktp_test_reset",         "cmd_test_reset",         ADMIN_RCON,
+        "[TEST-MODE] reset all match state to idle (test teardown helper)");
+    register_concmd("amx_ktp_test_get_state",     "cmd_test_get_state",     ADMIN_RCON,
+        "[TEST-MODE] print current match state as one-line JSON for test assertions");
+    register_concmd("amx_ktp_test_get_localinfo", "cmd_test_get_localinfo", ADMIN_RCON,
+        "[TEST-MODE] <key> — print get_localinfo(key) value (inspect _ktp_h1 etc.)");
+
+    log_amx("[KTP-TEST-MODE] test-mode RCON commands registered (KTP_TEST_MODE build)");
+#endif
 }
 
 public task_idle_hint() {
@@ -4630,6 +4683,15 @@ stock get_ready_counts(&alliesPlayers, &axisPlayers, &alliesReady, &axisReady) {
 stock get_required_ready_count() {
     if (g_readyOverride)
         return 1;
+
+#if defined KTP_TEST_MODE
+    // Test-mode: cvar-bypass so a single fake client per team can drive
+    // match-start without spawning 12 bots. Cvar default is 0 (no bypass);
+    // integration tests set ktp_test_skip_ready_count 1 before driving the
+    // .ready chat injection.
+    if (get_pcvar_num(g_cvarTestSkipReadyCount))
+        return 1;
+#endif
 
     switch (g_matchType) {
         case MATCH_TYPE_COMPETITIVE, MATCH_TYPE_KTP_OT:
@@ -7573,3 +7635,255 @@ public cmd_ktpconfig(id) {
     return PLUGIN_HANDLED;
 }
 
+// ============================================================================
+// TEST-MODE COMMAND HANDLERS (KTP_TEST_MODE build only — production no-op)
+// ============================================================================
+// All handlers below compile to ZERO BYTES when -DKTP_TEST_MODE is not passed
+// to amxxpc. This block exists exclusively to support
+// KTPInfrastructure/tests/integration/ — no production codepath calls into it.
+//
+// Design: state-machine direct manipulation with synthetic captains. NO fake
+// clients, NO chat-layer routing, NO new module dependencies (extension mode
+// only loads amxxcurl + reapi + dodx; fakemeta is unavailable). The rcons
+// drive the same internal state vars production code mutates and fire the
+// same multi-forwards (`ktp_match_start`, `ktp_match_end`) — integration
+// tests assert on those forwards and on state-readback rcons rather than on
+// chat-layer dispatch (which Tier 1 smoke + production runtime cover).
+//
+// Threat surface: each handler is gated ADMIN_RCON so chat-connected clients
+// cannot reach them — only RCON callers (test harness over UDP).
+//
+// State observability:
+//   - amx_ktp_test_get_state: one-line JSON via console_print, short keys
+//     (`mt`/`h`/`l`/`p`/`id`/`s1`/`s2`/`tb1`/`tb2`/`pn`/`c1`/`c2`/`rc`) to
+//     fit the console_print ~256-char line cap.
+//   - amx_ktp_test_get_localinfo: thin wrapper over get_localinfo() so tests
+//     can inspect _ktp_h1, _ktp_state, _ktp_otst etc. without log-scraping.
+//
+// See KTPInfrastructure/TEST_INFRASTRUCTURE_PLAN.md § Tier 2 for the
+// integration-test roadmap that depends on this surface.
+#if defined KTP_TEST_MODE
+
+// Set up the match state machine to PRESTART with synthetic captains.
+//
+// Args: <matchType> [<map>]
+//   matchType: integer 0..5 matching MatchType enum (0=COMP, 1=SCRIM, 2=12MAN,
+//              3=DRAFT, 4=KTP_OT, 5=DRAFT_OT)
+//   map:       optional map name; defaults to current map.
+//
+// Sets: g_matchType, g_preStartPending=true, synthetic captain1/2 identities,
+// g_matchMap (so HALF_START / KTP_MATCH_START log lines have a map field).
+// The match_id is computed from get_systime() + a synthetic short-host suffix
+// so it has the production shape (`<ts>-TEST`).
+public cmd_test_setup_match(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    new mtArg[4], mapArg[32];
+    read_argv(1, mtArg, charsmax(mtArg));
+    read_argv(2, mapArg, charsmax(mapArg));
+    new mt = str_to_num(mtArg);
+    if (mt < 0 || mt > 5) {
+        console_print(id, "KTP_TEST_SETUP: ERROR invalid_matchType=%d (expected 0..5)", mt);
+        return PLUGIN_HANDLED;
+    }
+
+    g_matchType = MatchType:mt;
+    g_preStartPending = true;
+    g_matchPending = false;
+    g_matchLive = false;
+
+    // Synthetic captains — names + sids that look real to log greps but are
+    // unmistakably test data. Captain teams 1=Allies, 2=Axis (matches the
+    // tid values cmd_pre_confirm assigns from get_user_team()).
+    g_captain1_team = 1;
+    copy(g_captain1_name, charsmax(g_captain1_name), "test_captain_allies");
+    copy(g_captain1_sid,  charsmax(g_captain1_sid),  "STEAM_0:0:11111111");
+    g_captain2_team = 2;
+    copy(g_captain2_name, charsmax(g_captain2_name), "test_captain_axis");
+    copy(g_captain2_sid,  charsmax(g_captain2_sid),  "STEAM_0:0:22222222");
+
+    if (mapArg[0]) {
+        copy(g_matchMap, charsmax(g_matchMap), mapArg);
+        copy(g_currentMap, charsmax(g_currentMap), mapArg);
+    }
+
+    // Build a production-shaped match_id with a TEST suffix so log greps don't
+    // confuse this with real matches. Uses the same `<systime>-<shortHost>`
+    // pattern documented in CLAUDE.md.
+    formatex(g_matchId, charsmax(g_matchId), "%d-TEST", get_systime());
+
+    log_ktp("event=TEST_SETUP matchType=%d map=%s match_id=%s", mt, g_currentMap, g_matchId);
+    console_print(id, "KTP_TEST_SETUP: matchType=%d match_id=%s map=%s", mt, g_matchId, g_currentMap);
+    return PLUGIN_HANDLED;
+}
+
+// Advance from PRESTART → PENDING by calling the same enter_pending_phase()
+// helper production uses (cmd_pre_confirm → task_enter_pending_phase →
+// enter_pending_phase). Bypasses the .confirm chat dispatch + the 0.1s
+// task_enter_pending_phase delay.
+public cmd_test_advance_pending(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+    if (!g_preStartPending) {
+        console_print(id, "KTP_TEST_PENDING: ERROR not_in_prestart");
+        return PLUGIN_HANDLED;
+    }
+
+    log_ktp("event=TEST_ADVANCE_PENDING match_id=%s map=%s", g_matchId, g_currentMap);
+    enter_pending_phase("test_harness");
+    console_print(id, "KTP_TEST_PENDING: ok match_id=%s", g_matchId);
+    return PLUGIN_HANDLED;
+}
+
+// Advance from PENDING → LIVE for a given half (1=h1, 2=h2, 101+=OT round).
+// Fires `ktp_match_start` multi-forward with (matchId, map, matchType, half) —
+// the same shape KTPHLTVRecorder + the witness plugin observe in production.
+//
+// Doesn't call the full task_deferred_stats / task_deferred_discord_fwd
+// pipeline (those need real DODX state); the test only needs the forward to
+// fire so KTPWitness writes its JSONL row.
+public cmd_test_advance_live(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    new halfArg[4];
+    read_argv(1, halfArg, charsmax(halfArg));
+    new half = str_to_num(halfArg);
+    if (half < 1) {
+        console_print(id, "KTP_TEST_LIVE: ERROR invalid_half=%d (expected 1+)", half);
+        return PLUGIN_HANDLED;
+    }
+
+    g_matchPending = false;
+    g_matchLive = true;
+    g_currentHalf = half;
+    set_localinfo(LOCALINFO_LIVE, "1");
+
+    log_ktp("event=TEST_ADVANCE_LIVE match_id=%s half=%d map=%s matchType=%d",
+        g_matchId, half, g_currentMap, _:g_matchType);
+
+    new ret;
+    ExecuteForward(g_fwdMatchStart, ret, g_matchId, g_currentMap, g_matchType, half);
+
+    console_print(id, "KTP_TEST_LIVE: ok match_id=%s half=%d", g_matchId, half);
+    return PLUGIN_HANDLED;
+}
+
+// Fire `ktp_match_end` multi-forward with the supplied scores, log
+// KTP_MATCH_END for HLStatsX parity, and clear core state vars so subsequent
+// test_setup_match calls start clean.
+//
+// Args: <team1Score> <team2Score>
+public cmd_test_end_match(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    new s1Arg[8], s2Arg[8];
+    read_argv(1, s1Arg, charsmax(s1Arg));
+    read_argv(2, s2Arg, charsmax(s2Arg));
+    new s1 = str_to_num(s1Arg);
+    new s2 = str_to_num(s2Arg);
+
+    log_ktp("event=TEST_END_MATCH match_id=%s final=%d-%d", g_matchId, s1, s2);
+    log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"test^")",
+        g_matchId, g_currentMap);
+
+    new ret;
+    ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_currentMap, g_matchType, s1, s2);
+
+    g_matchLive = false;
+    g_preStartPending = false;
+    g_matchPending = false;
+    g_currentHalf = 0;
+
+    console_print(id, "KTP_TEST_END: ok match_id=%s final=%d-%d", g_matchId, s1, s2);
+    return PLUGIN_HANDLED;
+}
+
+// Reset all match state to idle. Used by test teardown / setup-between-tests
+// to guarantee a clean slate. Mirrors the cleanup ktp_forcereset performs
+// without the confirmation dance.
+public cmd_test_reset(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+    g_matchType = MATCH_TYPE_COMPETITIVE;
+    g_preStartPending = false;
+    g_matchPending = false;
+    g_matchLive = false;
+    g_currentHalf = 0;
+    g_matchId[0] = EOS;
+    g_matchMap[0] = EOS;
+    g_matchScore[1] = 0;
+    g_matchScore[2] = 0;
+    g_captain1_team = 0;
+    g_captain1_name[0] = EOS;
+    g_captain1_sid[0] = EOS;
+    g_captain2_team = 0;
+    g_captain2_name[0] = EOS;
+    g_captain2_sid[0] = EOS;
+    set_localinfo(LOCALINFO_LIVE, "0");
+    log_ktp("event=TEST_RESET");
+    console_print(id, "KTP_TEST_RESET: ok");
+    return PLUGIN_HANDLED;
+}
+
+// Print current match-flow state as one-line JSON. Keys short to fit the
+// console_print line cap.
+//
+// Field reference:
+//   mt   = matchType enum int (0=COMP, 1=SCRIM, 2=12MAN, 3=DRAFT, 4=KTP_OT, 5=DRAFT_OT)
+//   h    = currentHalf (0=none, 1/2=regulation, 101+=OT)
+//   l    = matchLive (0/1)
+//   p    = isPaused (0/1)
+//   id   = matchId string
+//   s1   = current Allies score
+//   s2   = current Axis score
+//   tb1  = tech budget remaining (allies, seconds)
+//   tb2  = tech budget remaining (axis, seconds)
+//   pn   = matchPending (0/1)
+//   c1   = captain1 "name|sid"
+//   c2   = captain2 "name|sid"
+//   rc   = required ready count (post-bypass cvar)
+public cmd_test_get_state(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    new c1[80], c2[80];
+    formatex(c1, charsmax(c1), "%s|%s",
+        g_captain1_name[0] ? g_captain1_name : "",
+        g_captain1_sid[0]  ? g_captain1_sid  : "");
+    formatex(c2, charsmax(c2), "%s|%s",
+        g_captain2_name[0] ? g_captain2_name : "",
+        g_captain2_sid[0]  ? g_captain2_sid  : "");
+
+    console_print(id,
+        "KTP_TEST_STATE: {^"mt^":%d,^"h^":%d,^"l^":%d,^"p^":%d,^"id^":^"%s^",^"s1^":%d,^"s2^":%d,^"tb1^":%d,^"tb2^":%d,^"pn^":%d,^"c1^":^"%s^",^"c2^":^"%s^",^"rc^":%d}",
+        _:g_matchType,
+        g_currentHalf,
+        g_matchLive ? 1 : 0,
+        g_isPaused ? 1 : 0,
+        g_matchId,
+        g_matchScore[1],
+        g_matchScore[2],
+        g_techBudget[1],
+        g_techBudget[2],
+        g_matchPending ? 1 : 0,
+        c1,
+        c2,
+        get_required_ready_count());
+    return PLUGIN_HANDLED;
+}
+
+// Pass-through for get_localinfo(). Tests use this to inspect persisted
+// match-context keys (_ktp_mid, _ktp_h1, _ktp_state, _ktp_otst, etc.).
+public cmd_test_get_localinfo(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    new key[64], val[256];
+    read_argv(1, key, charsmax(key));
+    if (!key[0]) {
+        console_print(id, "KTP_TEST_LOCALINFO: ERROR missing_key");
+        return PLUGIN_HANDLED;
+    }
+
+    get_localinfo(key, val, charsmax(val));
+    console_print(id, "KTP_TEST_LOCALINFO: key=%s value=%s", key, val);
+    return PLUGIN_HANDLED;
+}
+
+#endif // KTP_TEST_MODE

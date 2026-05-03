@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.122] - 2026-05-02
+
+### Added
+- **Test-mode build flag (`-DKTP_TEST_MODE`)** — adds RCON commands that drive the match-flow state machine directly + read back internal state. Disabled in production builds. Required for KTPInfrastructure Tier 2 match-flow integration tests.
+  - **Design:** state-machine direct manipulation with synthetic captains, NO fake clients. Production servers run KTPAMXX in REHLDS extension mode (no Metamod) with only `amxxcurl` / `reapi` / `dodx` modules loaded; fakemeta is unavailable, so `EngFunc_CreateFakeClient` / `DLLFunc_ClientPutInServer` are off-limits. The test-mode rcons set `g_matchType` / `g_preStartPending` / `g_matchLive` / `g_currentHalf` / synthetic `g_captain1_*` + `g_captain2_*` directly and fire the same `ktp_match_start` + `ktp_match_end` multi-forwards production code fires. Integration tests assert on forward-firing + state transitions; chat-layer routing is out of scope for Tier 2 v1 (Tier 1 smoke covers plugin-load + rcon path).
+  - `compile.sh` accepts `KTP_TEST_MODE=1` env var. When set, passes `KTP_TEST_MODE=1` positional arg to amxxpc and outputs to `compiled/test/KTPMatchHandler.amxx`. Default (no env var) byte-identical to prior behavior; production deploys remain unaffected.
+  - **State-machine rcons:** `amx_ktp_test_setup_match <matchType> [<map>]` (sets PRESTART + synthetic captains + match_id `<systime>-TEST`), `amx_ktp_test_advance_pending` (calls `enter_pending_phase("test_harness")`), `amx_ktp_test_advance_live <half>` (sets matchLive + fires `ktp_match_start`), `amx_ktp_test_end_match <s1> <s2>` (fires `ktp_match_end` + logs `KTP_MATCH_END`), `amx_ktp_test_reset` (clears all state for test teardown).
+  - **State readback rcons:** `amx_ktp_test_get_state` (one-line JSON of `matchType`/`currentHalf`/`matchLive`/`isPaused`/`matchId`/`score1`/`score2`/`techBudget1`/`techBudget2`/`matchPending`/`captain1`/`captain2`/`readyCount`), `amx_ktp_test_get_localinfo <key>` (read-through to `get_localinfo` for `_ktp_h1`/`_ktp_state`/`_ktp_otst` inspection).
+  - **Test-mode cvar:** `ktp_test_skip_ready_count` (default 0; `1` → `get_required_ready_count()` returns 1 — only relevant if a future test exercises chat-layer ready dispatch via real clients).
+  - All rcons gated `ADMIN_RCON` so they cannot be issued from chat. Test-mode block compiles to zero bytes when `-DKTP_TEST_MODE` is not defined; production binary is byte-identical to 0.10.121's pre-flag state.
+
+---
+
 ## [0.10.121] - 2026-04-28
 
 ### Fixed

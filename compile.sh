@@ -1,11 +1,30 @@
 #!/bin/bash
 # KTPMatchHandler Plugin Compiler - WSL/Linux version
 # Mirrors compile.bat functionality
+#
+# Production build (default):
+#   bash compile.sh
+#   → output: compiled/KTPMatchHandler.amxx (also auto-staged to KTP DoD Server)
+#
+# Test-mode build (for KTPInfrastructure Tier 2 integration tests):
+#   KTP_TEST_MODE=1 bash compile.sh
+#   → output: compiled/test/KTPMatchHandler.amxx (NOT staged to production)
+#   → enables amx_ktp_test_* RCON commands per CHANGELOG 0.10.122. Production
+#     binary remains unaffected — both builds are reproducible from the same
+#     source tree.
 
 set -e  # Exit on error
 
+# Test-mode flag — read once at top so the rest of the script can branch.
+# Empty string = production build; "1" = test-mode build.
+TEST_MODE="${KTP_TEST_MODE:-}"
+
 echo "========================================"
-echo "KTPMatchHandler Plugin Compiler (WSL)"
+if [ "$TEST_MODE" = "1" ]; then
+    echo "KTPMatchHandler Plugin Compiler (TEST-MODE)"
+else
+    echo "KTPMatchHandler Plugin Compiler (WSL)"
+fi
 echo "========================================"
 echo
 
@@ -24,7 +43,11 @@ else
     SCRIPT_DIR="/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler"
 fi
 PLUGIN_NAME="KTPMatchHandler"
-OUTPUT_DIR="$SCRIPT_DIR/compiled"
+if [ "$TEST_MODE" = "1" ]; then
+    OUTPUT_DIR="$SCRIPT_DIR/compiled/test"
+else
+    OUTPUT_DIR="$SCRIPT_DIR/compiled"
+fi
 STAGE_DIR="/mnt/n/Nein_/KTP Git Projects/KTP DoD Server/serverfiles/dod/addons/ktpamx/plugins"
 
 TEMP_BUILD="/tmp/ktpbuild"
@@ -98,9 +121,16 @@ cat > "$TEMP_BUILD/include/build_info.inc" <<EOF
 EOF
 echo "[INFO] build_info: SHA=${GIT_SHA}${GIT_DIRTY} BUILD_TIME=$BUILD_TIME"
 
-# Compile
+# Compile. amxxpc accepts trailing positional NAME=VALUE args as injected
+# `#define`s; KTP_TEST_MODE=1 enables the test-mode block in KTPMatchHandler.sma
+# (introduced in 0.10.122 — see CHANGELOG).
 cd "$TEMP_BUILD"
-./amxxpc "$PLUGIN_NAME.sma" -i./include -i. -o"$PLUGIN_NAME.amxx"
+if [ "$TEST_MODE" = "1" ]; then
+    echo "[INFO] Building with -DKTP_TEST_MODE — adds amx_ktp_test_* RCON commands"
+    ./amxxpc "$PLUGIN_NAME.sma" -i./include -i. -o"$PLUGIN_NAME.amxx" KTP_TEST_MODE=1
+else
+    ./amxxpc "$PLUGIN_NAME.sma" -i./include -i. -o"$PLUGIN_NAME.amxx"
+fi
 
 if [ $? -ne 0 ]; then
     echo
@@ -123,14 +153,23 @@ echo
 # ============================================
 # Stage to Server
 # ============================================
+# Test-mode binaries do NOT auto-stage. They consume from
+# KTPInfrastructure/tests/integration/ via docker-compose volume mount on the
+# data-server runner. Auto-staging into production would risk a test build
+# bleeding into a production deploy via the .new auto-swap path on next restart.
 
-echo "[INFO] Staging to server..."
-if [ ! -d "$STAGE_DIR" ]; then
-    echo "[WARN] Stage directory does not exist: $STAGE_DIR"
-    echo "       Skipping staging."
+if [ "$TEST_MODE" = "1" ]; then
+    echo "[INFO] Test-mode build — staging skipped (binaries are consumed by"
+    echo "       KTPInfrastructure integration-test docker-compose mount)."
 else
-    cp "$OUTPUT_DIR/$PLUGIN_NAME.amxx" "$STAGE_DIR/$PLUGIN_NAME.amxx"
-    echo "[OK] Staged: $STAGE_DIR/$PLUGIN_NAME.amxx"
+    echo "[INFO] Staging to server..."
+    if [ ! -d "$STAGE_DIR" ]; then
+        echo "[WARN] Stage directory does not exist: $STAGE_DIR"
+        echo "       Skipping staging."
+    else
+        cp "$OUTPUT_DIR/$PLUGIN_NAME.amxx" "$STAGE_DIR/$PLUGIN_NAME.amxx"
+        echo "[OK] Staged: $STAGE_DIR/$PLUGIN_NAME.amxx"
+    fi
 fi
 
 echo
