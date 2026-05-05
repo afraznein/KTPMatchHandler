@@ -6,6 +6,84 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.130] - 2026-05-05
+
+### Added
+- **Test-mode `amx_ktp_test_forcereset` rcon** — bypasses the production `.forcereset` chat-confirmation flow (which requires the admin to type the command twice within 10s) and calls `execute_force_reset()` (KTPMatchHandler.sma:6513-6703) directly with synthetic admin metadata ("test_admin"/STEAM_0:0:99999999/127.0.0.1). Unblocks Tier 2 Match-flow Session 4b admin-recovery tests.
+- **Test-mode `amx_ktp_test_restarthalf` rcon** — bypasses the `.restarthalf` chat-confirmation flow and calls `execute_restart_half()` (KTPMatchHandler.sma:6772-6834). Enforces production preconditions (live, half=2, not-OT) at the rcon layer with `KTP_TEST_RESTARTHALF: ERROR <reason>` responses for clean test failures.
+
+### Notes
+- Production-mode binary BYTE-IDENTICAL to 0.10.129 except for the version string. Both new rcons + handlers are inside `#if defined KTP_TEST_MODE`-gated blocks; production builds (no flag) compile to zero bytes.
+- KTPInfrastructure Tier 2 Session 4b consumes these — see `tests/integration/test_match_flow_admin_recovery.py`.
+
+---
+
+## [0.10.129] - 2026-05-05
+
+### Changed
+- **Test-mode `cmd_test_setup_match` now sets `g_disableDiscord` per match type** — mirrors production:
+  - `MATCH_TYPE_SCRIM` → `g_disableDiscord = true` (matches `cmd_start_scrim` line 5850; Discord notifications skipped entirely for scrim)
+  - All other types (`COMPETITIVE`, `12MAN`, `DRAFT`, `KTP_OT`, `DRAFT_OT`) → `g_disableDiscord = false`
+- Unblocks Tier 2 Match-flow Session 4 alt-match-type tests (`test_match_flow_match_types.py`): scrim now correctly produces zero Discord POSTs in test mode (it didn't before — the flag stayed at the prior test's value, leading to spurious posts when running scrim after a non-scrim test).
+
+### Notes
+- Production-mode binary BYTE-IDENTICAL to 0.10.128 except for the version string. The new logic is inside `cmd_test_setup_match` which is wrapped in `#if defined KTP_TEST_MODE`-gated blocks; production builds (no flag) compile to zero bytes.
+
+---
+
+## [0.10.128] - 2026-05-05
+
+### Added
+- **Test-mode `cmd_test_end_match` now calls `send_ac_match_end(g_matchId)`** — mirrors production match-end (`KTPMatchHandler.sma:785`). Unblocks Tier 2 Match-flow Session 3 Phase 2c test 17 (AC `/api/match/end` POST). FakeRelay 2026-05-05 added the `/api/match/end` route to support this.
+
+### Notes
+- Production-mode binary BYTE-IDENTICAL to 0.10.127 except for the version string. The new `send_ac_match_end()` call is inside `cmd_test_end_match` which is wrapped in `#if defined KTP_TEST_MODE`-gated blocks; production builds (no flag) compile to zero bytes.
+
+---
+
+## [0.10.127] - 2026-05-05
+
+### Added
+- **Test-mode `amx_ktp_test_fire_match_start_log` rcon** — emits the `KTP_MATCH_START` `log_message` (HLStatsX UDP + L*.log) and `event=ROUNDLIVE_MATCH_START_LOG` `log_ktp` line that production fires from `task_roundlive_match_context()` (`KTPMatchHandler.sma:1480-1499`) on engine round-live. The production task gates on the engine's `RoundState=1` event which doesn't fire in test environment without a real round; this rcon lets Tier 2 tests assert the log-line emission directly. Half-text format mirrors production: "1st"/"2nd"/"OTN".
+- **Unblocks Tier 2 Match-flow Session 3 Phase 2b test 8** (HLStatsX `KTP_MATCH_START` log line via log_tail). Test 7 (DODX `event=FWD_MATCH_START` log_ktp) needs no plugin change — production's `task_deferred_discord_fwd` (already scheduled by `cmd_test_advance_live`) emits it.
+
+### Notes
+- Production-mode binary BYTE-IDENTICAL to 0.10.126 except for the version string. The new rcon and its handler are inside `#if defined KTP_TEST_MODE`-gated blocks; production builds (no flag) compile to zero bytes.
+
+---
+
+## [0.10.126] - 2026-05-05
+
+### Added
+- **Test-mode `amx_ktp_test_abandon_match` rcon** — emits the production-shape 2nd-half-abandon Discord embed update ("MATCH ENDED (2nd half) - 1st half: %s %d - %d %s" — `KTPMatchHandler.sma:4284-4288`) using the currently-set `g_team1Name`/`g_team2Name`/`g_firstHalfScore[1/2]` state. Unblocks Tier 2 Match-flow Session 3 Phase 2a test 16 (abandon-shape embed assertion). The full localinfo-driven abandon-detection path (production runs from `plugin_cfg`/map-load) is too complex to drive from a single test rcon; the player-visible Discord-update side-effect — which is what test 16 pins — is shipped here. HLStatsX `abandoned_2nd_half` log + `dodx_flush_all_stats() type=abandoned_2nd_half` flushing remain operator-checked manually during real matchday recovery drills.
+
+### Notes
+- Production-mode binary BYTE-IDENTICAL to 0.10.125 except for the version string. The new rcon and its handler are inside `#if defined KTP_TEST_MODE`-gated blocks; production builds (no flag) compile to zero bytes.
+
+---
+
+## [0.10.125] - 2026-05-05
+
+### Added
+- **Test-mode `amx_ktp_test_end_first_half <s1> <s2>` rcon** — drives the production `handle_first_half_end()` path (`KTPMatchHandler.sma:939-1023`) with the supplied half-1 scores. Sets `g_firstHalfScore[1/2]`, calls `handle_first_half_end()` to emit the "1st Half Complete - Score: X-Y" Discord embed update + KTP_HALF_END HLStatsX log + `dod_stats_flush(id)` per-client via `dodx_flush_all_stats()`, then immediately `remove_task()`s the halftime watchdog so the test environment doesn't get a forced map reload after 10s. Unblocks Tier 2 tests 13/14 (half-transition Discord embed assertions).
+
+### Notes
+- Production-mode binary BYTE-IDENTICAL to 0.10.124 except for the version string. The new rcon and its handler are inside `#if defined KTP_TEST_MODE`-gated blocks (registration at line 3680, handler near `cmd_test_end_match`); production builds (no flag) compile to zero bytes.
+- KTPInfrastructure Tier 2 Match-flow Session 3 Phase 2a tests 13/14/15 consume this — see `tests/integration/test_match_flow_discord.py`.
+
+---
+
+## [0.10.124] - 2026-05-05
+
+### Changed
+- **Test-mode `amx_ktp_test_end_match` now calls `dodx_flush_all_stats()`** — mirrors the production match-end flow per CLAUDE.md "Match Flow" section, which calls the native at half/match end to fire `dod_stats_flush(id)` per connected player for HLStatsX correlation. Previously the test rcon only fired `g_fwdMatchEnd` but left the DODX side untouched, which meant the Tier 2 `test_dod_stats_flush_fires_on_match_end` integration test had no way to drive that forward without a separate dispatch primitive. Test-mode-only behavior change — `cmd_test_end_match` is fully gated by `#if defined KTP_TEST_MODE`, so production binary stays byte-identical to 0.10.123 (only the version string differs).
+
+### Notes
+- Production-mode binary BYTE-IDENTICAL to 0.10.123 except for the version string. `dodx_flush_all_stats()` call is inside `cmd_test_end_match` which is wrapped in `#if defined KTP_TEST_MODE` — production builds (no flag) compile to zero bytes for the entire test-mode block.
+- KTPInfrastructure Tier 2 Phase 4 (DODX forward-firing) consumes this — see `tests/integration/DODX_FORWARD_FIRING_DESIGN.md`.
+
+---
+
 ## [0.10.123] - 2026-05-05
 
 ### Changed

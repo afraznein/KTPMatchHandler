@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.123"
+#define PLUGIN_VERSION "0.10.130"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -3677,6 +3677,16 @@ public plugin_init() {
         "[TEST-MODE] <half> — PENDING -> LIVE; fires ktp_match_start forward");
     register_concmd("amx_ktp_test_end_match",     "cmd_test_end_match",     ADMIN_RCON,
         "[TEST-MODE] <s1> <s2> — fire ktp_match_end forward + KTP_MATCH_END log line");
+    register_concmd("amx_ktp_test_end_first_half", "cmd_test_end_first_half", ADMIN_RCON,
+        "[TEST-MODE] <s1> <s2> — call handle_first_half_end() with the supplied half-1 scores; emits 1st Half Complete embed update");
+    register_concmd("amx_ktp_test_abandon_match", "cmd_test_abandon_match", ADMIN_RCON,
+        "[TEST-MODE] — emit production-shape 2nd-half-abandon embed update (MATCH ENDED) using current g_team1Name/g_team2Name/g_firstHalfScore");
+    register_concmd("amx_ktp_test_fire_match_start_log", "cmd_test_fire_match_start_log", ADMIN_RCON,
+        "[TEST-MODE] — emit KTP_MATCH_START log_message + ROUNDLIVE_MATCH_START_LOG log_ktp event (mirrors task_roundlive_match_context)");
+    register_concmd("amx_ktp_test_forcereset", "cmd_test_forcereset", ADMIN_RCON,
+        "[TEST-MODE] — bypass .forcereset confirmation; call execute_force_reset() directly with synthetic admin metadata");
+    register_concmd("amx_ktp_test_restarthalf", "cmd_test_restarthalf", ADMIN_RCON,
+        "[TEST-MODE] — bypass .restarthalf confirmation; call execute_restart_half() directly with synthetic admin metadata (requires live h2)");
     register_concmd("amx_ktp_test_reset",         "cmd_test_reset",         ADMIN_RCON,
         "[TEST-MODE] reset all match state to idle (test teardown helper)");
     register_concmd("amx_ktp_test_get_state",     "cmd_test_get_state",     ADMIN_RCON,
@@ -7694,6 +7704,21 @@ public cmd_test_setup_match(id) {
     g_matchPending = false;
     g_matchLive = false;
 
+    // Mirror production per-type Discord-flag setting. Production:
+    //   - SCRIM (cmd_start_scrim, line 5850) sets g_disableDiscord=true
+    //     (Discord notifications skipped entirely for scrim)
+    //   - 12MAN (line 6078), DRAFT (line 6097), COMPETITIVE (line 5684),
+    //     KTP_OT, DRAFT_OT all set g_disableDiscord=false; they emit to
+    //     their type-specific channel via get_discord_channel_id().
+    // Without this mirror, test_scrim_* would see Discord POSTs that
+    // would never happen in production (scrim setup-via-menu always
+    // disables Discord).
+    if (g_matchType == MATCH_TYPE_SCRIM) {
+        g_disableDiscord = true;
+    } else {
+        g_disableDiscord = false;
+    }
+
     // Synthetic captains — names + sids that look real to log greps but are
     // unmistakably test data. Captain teams 1=Allies, 2=Axis (matches the
     // tid values cmd_pre_confirm assigns from get_user_team()).
@@ -7781,6 +7806,184 @@ public cmd_test_advance_live(id) {
     return PLUGIN_HANDLED;
 }
 
+// Drive the production half-1-end logic (handle_first_half_end at line
+// ~939) with the supplied scores. This:
+//   - sets g_firstHalfScore[1/2] to the test scores so the embed update
+//     has meaningful values
+//   - calls handle_first_half_end() which emits the "1st Half Complete -
+//     Score: %d-%d" Discord embed update (KTPMatchHandler.sma:1010), logs
+//     KTP_HALF_END for HLStatsX, persists match context to localinfo,
+//     and fires `dod_stats_flush(id)` per connected client via
+//     dodx_flush_all_stats()
+//   - immediately remove_task()s the halftime watchdog (line 1022) so the
+//     test environment doesn't get a forced map reload after 10s
+//
+// Args: <team1Score> <team2Score>
+public cmd_test_end_first_half(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    new s1Arg[8], s2Arg[8];
+    read_argv(1, s1Arg, charsmax(s1Arg));
+    read_argv(2, s2Arg, charsmax(s2Arg));
+    new s1 = str_to_num(s1Arg);
+    new s2 = str_to_num(s2Arg);
+
+    g_firstHalfScore[1] = s1;
+    g_firstHalfScore[2] = s2;
+
+    log_ktp("event=TEST_END_FIRST_HALF match_id=%s scores=%d-%d", g_matchId, s1, s2);
+
+    handle_first_half_end();
+
+    // Production path schedules a 10s watchdog (task_halftime_watchdog,
+    // KTPMatchHandler.sma:1022) that force-reloads the map if changelevel
+    // doesn't complete in time. In the test environment we don't want a
+    // map reload mid-suite — kill the timer immediately. The state set by
+    // handle_first_half_end() (g_secondHalfPending=true, scores saved,
+    // localinfo populated, embed update sent) all stays in place.
+    remove_task(g_taskHalftimeWatchdogId);
+
+    console_print(id, "KTP_TEST_END_HALF1: ok match_id=%s scores=%d-%d", g_matchId, s1, s2);
+    return PLUGIN_HANDLED;
+}
+
+// Bypass the chat-confirmation flow on `.forcereset` and call the stock
+// `execute_force_reset()` helper directly with synthetic admin metadata.
+// Production's cmd_forcereset (KTPMatchHandler.sma:6461-6511) requires
+// the admin to type the command twice within 10s; for tests we want to
+// exercise the cleanup path itself without the confirmation dance.
+//
+// The state guard (line 6474 — must have *something* to reset) is also
+// bypassed: tests may want to call this on a clean state to verify it's
+// idempotent / doesn't crash (defensive).
+public cmd_test_forcereset(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    log_ktp("event=TEST_FORCERESET match_id=%s prev_state_live=%d pending=%d prestart=%d h2pending=%d",
+        g_matchId, g_matchLive ? 1 : 0, g_matchPending ? 1 : 0,
+        g_preStartPending ? 1 : 0, g_secondHalfPending ? 1 : 0);
+
+    execute_force_reset(id, "test_admin", "STEAM_0:0:99999999", "127.0.0.1");
+
+    console_print(id, "KTP_TEST_FORCERESET: ok");
+    return PLUGIN_HANDLED;
+}
+
+// Bypass the chat-confirmation flow on `.restarthalf` and call the stock
+// `execute_restart_half()` helper directly. Production's cmd_restarthalf
+// (KTPMatchHandler.sma:6710-6770) requires confirmation AND validates
+// state preconditions (live h2, not OT). The test rcon enforces the
+// preconditions itself so the test failure is at the rcon layer (cleaner
+// error messages) rather than inside execute_restart_half.
+public cmd_test_restarthalf(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    if (!g_matchLive) {
+        console_print(id, "KTP_TEST_RESTARTHALF: ERROR not_live");
+        return PLUGIN_HANDLED;
+    }
+    if (g_currentHalf != 2) {
+        console_print(id, "KTP_TEST_RESTARTHALF: ERROR not_half2 (current_half=%d)", g_currentHalf);
+        return PLUGIN_HANDLED;
+    }
+    if (g_inOvertime) {
+        console_print(id, "KTP_TEST_RESTARTHALF: ERROR in_overtime");
+        return PLUGIN_HANDLED;
+    }
+
+    log_ktp("event=TEST_RESTARTHALF match_id=%s h1=%d-%d",
+        g_matchId, g_firstHalfScore[1], g_firstHalfScore[2]);
+
+    execute_restart_half(id, "test_admin", "STEAM_0:0:99999999", "127.0.0.1");
+
+    console_print(id, "KTP_TEST_RESTARTHALF: ok match_id=%s", g_matchId);
+    return PLUGIN_HANDLED;
+}
+
+// Emit `KTP_MATCH_START` (log_message → HLStatsX UDP + L*.log) and
+// `event=ROUNDLIVE_MATCH_START_LOG` (log_ktp) using the current match
+// state. Mirrors what production's `task_roundlive_match_context()`
+// (KTPMatchHandler.sma:1480-1499) emits when the engine fires round-live
+// after match start. The production task is gated on `g_matchLive` and
+// the engine `RoundState=1` event, neither of which fires in the test
+// environment without a real round; this rcon lets Tier 2 tests assert
+// the log line emission directly.
+//
+// Half text format mirrors production: "1st" for half 1, "2nd" for
+// half 2, "OT N" for OT round N (matches task_advance_live's halfText
+// derivation).
+public cmd_test_fire_match_start_log(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    new halfText[8];
+    if (g_currentHalf == 1) {
+        copy(halfText, charsmax(halfText), "1st");
+    } else if (g_currentHalf == 2) {
+        copy(halfText, charsmax(halfText), "2nd");
+    } else if (g_currentHalf >= 100) {
+        formatex(halfText, charsmax(halfText), "OT%d", g_currentHalf - 100);
+    } else {
+        formatex(halfText, charsmax(halfText), "%d", g_currentHalf);
+    }
+
+    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")",
+        g_matchId, g_currentMap, halfText);
+    log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s",
+        g_matchId, g_currentMap, halfText);
+
+    console_print(id, "KTP_TEST_ROUNDLIVE_LOG: ok match_id=%s half=%s", g_matchId, halfText);
+    return PLUGIN_HANDLED;
+}
+
+// Emit the production-shape 2nd-half-abandon Discord embed update
+// (KTPMatchHandler.sma:4284-4288 — "MATCH ENDED (2nd half) - 1st half: %s %d - %d %s").
+// The full production abandon-detection path runs in plugin_cfg / map-load
+// and reads localinfo to reconstruct match context after a server restart
+// during a 2nd-half match — too complex to drive from a single test rcon.
+// Instead, this rcon uses the current `g_team1Name`/`g_team2Name`/
+// `g_firstHalfScore[1/2]` state (populated by the test driver chain
+// `setup_match → advance_pending → advance_live → end_first_half`) and
+// emits the production-shape status string directly.
+//
+// What this DOES validate:
+//   - The abandon-shape Discord embed update format is correct
+//   - The /edit POST round-trips through Discord Relay with the right text
+//   - send_match_embed_update() handles a "MATCH ENDED" status correctly
+//
+// What this DOES NOT validate:
+//   - The localinfo-driven abandon-detection logic itself
+//     (KTPMatchHandler.sma:4260-4298, lives in plugin_cfg / map-load path)
+//   - HLStatsX `KTP_MATCH_END (status "abandoned_2nd_half")` log emission
+//   - dodx_flush_all_stats() type=abandoned_2nd_half flushing
+//
+// Those gaps are documented in SESSION_3_DISCORD_EMISSION_AUDIT.md § Test
+// 16 deferral notes; the matchday-time abandon recovery path is exercised
+// manually rather than test-driven.
+public cmd_test_abandon_match(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    log_ktp("event=TEST_ABANDON_MATCH match_id=%s h1=%d-%d team1=%s team2=%s",
+        g_matchId, g_firstHalfScore[1], g_firstHalfScore[2], g_team1Name, g_team2Name);
+
+    #if defined HAS_CURL
+    if (!g_disableDiscord) {
+        new abandonedStatus[128];
+        formatex(abandonedStatus, charsmax(abandonedStatus),
+            "MATCH ENDED (2nd half) - 1st half: %s %d - %d %s",
+            g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
+        send_match_embed_update(abandonedStatus);
+    }
+    #endif
+
+    g_matchLive = false;
+    g_preStartPending = false;
+    g_matchPending = false;
+
+    console_print(id, "KTP_TEST_ABANDON: ok match_id=%s h1=%d-%d",
+        g_matchId, g_firstHalfScore[1], g_firstHalfScore[2]);
+    return PLUGIN_HANDLED;
+}
+
 // Fire `ktp_match_end` multi-forward with the supplied scores, log
 // KTP_MATCH_END for HLStatsX parity, emit the production-shape match-end
 // Discord embed update (a /edit POST against `g_discordMatchMsgId`, mirrors
@@ -7824,6 +8027,30 @@ public cmd_test_end_match(id) {
 
     new ret;
     ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_currentMap, g_matchType, s1, s2);
+
+    // Production match-end fires DODX stats flush (per CLAUDE.md "Match Flow"
+    // section — `dodx_flush_all_stats()` at half/match end). Mirroring it
+    // here means the test-mode end-match path exercises the same DODX
+    // forward chain (`dod_stats_flush(id)`) as production, which lets the
+    // Tier 2 `test_dod_stats_flush_fires_on_match_end` test assert the
+    // forward fires for connected bots without needing a separate dispatch
+    // primitive. Test-mode-only — `cmd_test_end_match` is fully gated by
+    // `#if defined KTP_TEST_MODE`, so production binary stays byte-identical.
+    // HAS_DODX guard mirrors production discipline (e.g. line 707/948/1169);
+    // CI image strip-down or pre-DODX fork should fail-soft, not refuse to
+    // compile.
+    #if defined HAS_DODX
+    dodx_flush_all_stats();
+    #endif
+
+    // Production match-end (KTPMatchHandler.sma:785) also fires the AC
+    // match-end POST. Mirror it here so the Tier 2 `test_17_ac_match_end_*`
+    // test can assert the POST lands in FakeRelay's `received_ac_match_end`.
+    // Test-mode-only by virtue of the `#if defined KTP_TEST_MODE` block
+    // wrapping this entire function — production binary stays byte-identical.
+    #if defined HAS_CURL
+    send_ac_match_end(g_matchId);
+    #endif
 
     g_matchLive = false;
     g_preStartPending = false;
