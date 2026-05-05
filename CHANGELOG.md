@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.123] - 2026-05-05
+
+### Changed
+- **Test-mode `amx_ktp_test_advance_live` now schedules the production Phase-2 deferred-fwd task** — previously the rcon fired `ExecuteForward(g_fwdMatchStart, ...)` inline and explicitly skipped `task_deferred_discord_fwd`, on the theory that the deferred path needed real DODX state. Confirmed safe to schedule on an empty server: `capture_roster_snapshot()` no-ops with zero connected players, `update_server_hostname()` is pure string-ops, and `send_match_embed_create()` is the path KTPInfrastructure integration test 9 needs to assert on. The rcon now `set_task(0.2, "task_deferred_discord_fwd", ...)` and removes the inline `ExecuteForward` (the deferred task fires it on line 7426 — keeping both would double-fire the multi-forward and double-log to KTPWitness JSONL). `task_deferred_stats` still skipped (real DODX context required for `dodx_flush_all_stats` / `dodx_reset_all_stats`).
+- **Test-mode `amx_ktp_test_advance_pending` now emits `PENDING_BEGIN` log line for production-shape parity** — the real production event lives inside `task_enter_pending_phase` (line 7287), which the test rcon bypasses (it calls `enter_pending_phase()` directly to avoid the 0.1s deferred delay). Downstream log scrapers + integration test 4 gate on the `PENDING_BEGIN` event name; previously the rcon only emitted `PENDING_ENFORCE`, leaving test 4 timing out on a log line that was never logged in the test path.
+- **Test-mode `amx_ktp_test_end_match` now emits the production-shape match-end Discord embed update** — calls `send_match_embed_update("MATCH COMPLETE - Final: %d-%d - %s")` mirroring `KTPMatchHandler.sma:776`. The update is gated on `g_discordMatchMsgId` being set (no-op with `event=DISCORD_EDIT_SKIP reason=no_msg_id` if create-side hasn't run first). Required for KTPInfrastructure integration test 9b (paired create+edit assertion).
+- **Test-mode `amx_ktp_test_reset` now resets Discord-emission globals** — sets `g_disableDiscord = false` (insulates Discord-emission tests from match-type ordering — `.scrim` sets `g_disableDiscord = true`, and without an explicit reset a SCRIM-before-COMPETITIVE test order would silently lose the embed POST) and clears `g_discordMatchMsgId` + `g_discordMatchChannelId` (prevents a stale message ID from a prior test's create-side from accidentally PATCHing through the next test's `send_match_embed_update`).
+
+### Added
+- **Test-mode `amx_ktp_test_reload_discord_config` rcon** — calls `load_discord_config()` to pick up a swapped `discord.ini` without a full plugin_init re-fire (which requires changelevel + ~15s round trip). Intended for integration test 9c (auth-secret rotation negative-path), but discovered during 0.10.123 wiring that secret rotation at runtime is structurally blocked: `g_curlHeaders` is a persistent curl slist (`KTPMatchHandler.sma:3728-3730`, built once at plugin_init, never freed for UAF safety per memory `amxxcurl_shutdown_race_2026-05-04`). The rcon DOES correctly re-read the file into globals — it's just that the X-Relay-Auth header in the slist stays frozen at the boot-time secret. Test 9c is now skip-marked with that explanation; auth-rejection routing is covered by the 11 FakeRelay mock-side smokes in `tests/integration/test_fake_relay.py`. Rcon useful for future tests that swap channel IDs or relay URLs (those don't hit the slist freeze).
+
+### Notes
+- **Production binary byte-identical** to 0.10.122 — every change lives entirely inside the `#if defined KTP_TEST_MODE`-gated block (line 7665-7889 + the test-mode rcon registrations at lines 3664-3688 in `KTPMatchHandler.sma`).
+- **Test consumers must allow ~200ms post-rcon polling** for the forward-fire side-effects (KTPWitness JSONL row, `log_ktp event=FWD_MATCH_START` line, Discord embed POST). Existing `wait_for_witness_event` and `wait_for_log_event` use ≥3s timeouts so they tolerate the delay; `EXPECTED_KTPMATCHHANDLER_VERSION` in `tests/integration/test_match_flow_spine.py` bumped to 0.10.123.
+- **Test 9b also requires waiting for async msg-ID capture** — the `/reply` POST returns a fake message ID in the response body, and `discord_embed_callback` parses it into `g_discordMatchMsgId` on the next frame after curl resolves. Tests poll on the `_ktp_dmsg` localinfo mirror to know when capture has completed, then trigger end_match.
+
+### Result
+- **Tier 2 integration suite: 17 passed, 1 skipped** (test 9c the documented skip). Spine tests 1/3/4/6 + Discord tests 9/9b green end-to-end against real `hlds_linux` on WSL ext4. First fully-validated Tier 2 run in the project's history.
+
+---
+
 ## [0.10.122] - 2026-05-02
 
 ### Added

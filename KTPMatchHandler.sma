@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.122"
+#define PLUGIN_VERSION "0.10.123"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -3683,6 +3683,8 @@ public plugin_init() {
         "[TEST-MODE] print current match state as one-line JSON for test assertions");
     register_concmd("amx_ktp_test_get_localinfo", "cmd_test_get_localinfo", ADMIN_RCON,
         "[TEST-MODE] <key> — print get_localinfo(key) value (inspect _ktp_h1 etc.)");
+    register_concmd("amx_ktp_test_reload_discord_config", "cmd_test_reload_discord_config", ADMIN_RCON,
+        "[TEST-MODE] re-run load_discord_config() to pick up a swapped discord.ini");
 
     log_amx("[KTP-TEST-MODE] test-mode RCON commands registered (KTP_TEST_MODE build)");
 #endif
@@ -7721,6 +7723,11 @@ public cmd_test_setup_match(id) {
 // helper production uses (cmd_pre_confirm → task_enter_pending_phase →
 // enter_pending_phase). Bypasses the .confirm chat dispatch + the 0.1s
 // task_enter_pending_phase delay.
+//
+// Emits `PENDING_BEGIN` log_ktp line for production-shape parity — the real
+// production event lives inside `task_enter_pending_phase` (line 7287) which
+// this rcon bypasses. Downstream log scrapers + integration test 4 gate on
+// this event name.
 public cmd_test_advance_pending(id) {
     if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
     if (!g_preStartPending) {
@@ -7729,18 +7736,25 @@ public cmd_test_advance_pending(id) {
     }
 
     log_ktp("event=TEST_ADVANCE_PENDING match_id=%s map=%s", g_matchId, g_currentMap);
+    log_ktp("event=PENDING_BEGIN map=%s need=%d", g_currentMap, get_required_ready_count());
     enter_pending_phase("test_harness");
     console_print(id, "KTP_TEST_PENDING: ok match_id=%s", g_matchId);
     return PLUGIN_HANDLED;
 }
 
 // Advance from PENDING → LIVE for a given half (1=h1, 2=h2, 101+=OT round).
-// Fires `ktp_match_start` multi-forward with (matchId, map, matchType, half) —
-// the same shape KTPHLTVRecorder + the witness plugin observe in production.
 //
-// Doesn't call the full task_deferred_stats / task_deferred_discord_fwd
-// pipeline (those need real DODX state); the test only needs the forward to
-// fire so KTPWitness writes its JSONL row.
+// Schedules `task_deferred_discord_fwd` (200ms post-rcon) — the same Phase 2
+// path production uses. That task fires `ktp_match_start` multi-forward
+// (KTPWitness/KTPHLTVRecorder observe) AND emits the Discord embed via
+// send_match_embed_create() / send_match_embed_update() — required by
+// integration test 9. Skips `task_deferred_stats` since stats flush needs
+// real DODX match context the test harness doesn't synthesize.
+//
+// Test consumers that observe the forward (KTPWitness JSONL, log_ktp
+// FWD_MATCH_START line) must allow ~200ms post-rcon polling — both
+// `wait_for_witness_event` and `wait_for_log_event` already use generous
+// timeouts (≥3s).
 public cmd_test_advance_live(id) {
     if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
 
@@ -7760,16 +7774,18 @@ public cmd_test_advance_live(id) {
     log_ktp("event=TEST_ADVANCE_LIVE match_id=%s half=%d map=%s matchType=%d",
         g_matchId, half, g_currentMap, _:g_matchType);
 
-    new ret;
-    ExecuteForward(g_fwdMatchStart, ret, g_matchId, g_currentMap, g_matchType, half);
+    remove_task(g_taskDeferredDiscordFwdId);
+    set_task(0.2, "task_deferred_discord_fwd", g_taskDeferredDiscordFwdId);
 
     console_print(id, "KTP_TEST_LIVE: ok match_id=%s half=%d", g_matchId, half);
     return PLUGIN_HANDLED;
 }
 
 // Fire `ktp_match_end` multi-forward with the supplied scores, log
-// KTP_MATCH_END for HLStatsX parity, and clear core state vars so subsequent
-// test_setup_match calls start clean.
+// KTP_MATCH_END for HLStatsX parity, emit the production-shape match-end
+// Discord embed update (a /edit POST against `g_discordMatchMsgId`, mirrors
+// the production path at KTPMatchHandler.sma:776), and clear core state
+// vars so subsequent test_setup_match calls start clean.
 //
 // Args: <team1Score> <team2Score>
 public cmd_test_end_match(id) {
@@ -7784,6 +7800,27 @@ public cmd_test_end_match(id) {
     log_ktp("event=TEST_END_MATCH match_id=%s final=%d-%d", g_matchId, s1, s2);
     log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"test^")",
         g_matchId, g_currentMap);
+
+    // Production-shape match-end embed update — only fires if create-side
+    // ran first (g_discordMatchMsgId set). send_match_embed_update no-ops
+    // cleanly when msgId is empty (logs DISCORD_EDIT_SKIP). Status string
+    // matches the production format at line 776.
+    #if defined HAS_CURL
+    if (!g_disableDiscord) {
+        new finalStatus[128];
+        new winner[64];
+        if (s1 > s2) {
+            formatex(winner, charsmax(winner), "%s wins!", g_team1Name);
+        } else if (s2 > s1) {
+            formatex(winner, charsmax(winner), "%s wins!", g_team2Name);
+        } else {
+            copy(winner, charsmax(winner), "Match tied!");
+        }
+        formatex(finalStatus, charsmax(finalStatus),
+            "MATCH COMPLETE - Final: %d-%d - %s", s1, s2, winner);
+        send_match_embed_update(finalStatus);
+    }
+    #endif
 
     new ret;
     ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_currentMap, g_matchType, s1, s2);
@@ -7818,8 +7855,32 @@ public cmd_test_reset(id) {
     g_captain2_name[0] = EOS;
     g_captain2_sid[0] = EOS;
     set_localinfo(LOCALINFO_LIVE, "0");
+    // Insulate Discord-emission tests from match-type ordering — `.scrim` sets
+    // g_disableDiscord=true, and without an explicit reset here a test that
+    // ran SCRIM before COMPETITIVE would silently lose the embed POST.
+    g_disableDiscord = false;
+    // Discord persistent-embed state: cleared so a subsequent test_9b match-end
+    // edit doesn't try to PATCH a stale message ID from a previous test run.
+    g_discordMatchMsgId[0] = EOS;
+    g_discordMatchChannelId[0] = EOS;
     log_ktp("event=TEST_RESET");
     console_print(id, "KTP_TEST_RESET: ok");
+    return PLUGIN_HANDLED;
+}
+
+// Re-run load_discord_config() so a test that just swapped discord.ini on
+// disk picks up the new values without a full plugin_init re-fire (which
+// requires a changelevel — ~15s round trip). Used by test 9c which writes
+// a deliberately wrong-secret discord.ini to verify auth-rejection routing.
+public cmd_test_reload_discord_config(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+    #if defined HAS_CURL
+    load_discord_config();
+    log_ktp("event=TEST_RELOAD_DISCORD_CONFIG status=ok");
+    console_print(id, "KTP_TEST_RELOAD_DISCORD_CONFIG: ok");
+    #else
+    console_print(id, "KTP_TEST_RELOAD_DISCORD_CONFIG: ERROR no_curl");
+    #endif
     return PLUGIN_HANDLED;
 }
 
