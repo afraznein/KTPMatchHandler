@@ -7863,6 +7863,12 @@ public cmd_test_reset(id) {
     // edit doesn't try to PATCH a stale message ID from a previous test run.
     g_discordMatchMsgId[0] = EOS;
     g_discordMatchChannelId[0] = EOS;
+    // Score-change guards used by task_periodic_score_save (sma:1290) — reset
+    // to sentinel -1 so the first score event in the next test fires the
+    // embed-update path instead of being suppressed as "no change" from a
+    // stale prior-test value (e.g., 100/50 leftover from end_match).
+    g_lastEmbedScore[1] = -1;
+    g_lastEmbedScore[2] = -1;
     log_ktp("event=TEST_RESET");
     console_print(id, "KTP_TEST_RESET: ok");
     return PLUGIN_HANDLED;
