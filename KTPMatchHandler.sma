@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.130"
+#define PLUGIN_VERSION "0.10.131"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -7830,6 +7830,23 @@ public cmd_test_end_first_half(id) {
 
     g_firstHalfScore[1] = s1;
     g_firstHalfScore[2] = s2;
+    g_matchScore[1] = s1;
+    g_matchScore[2] = s2;
+
+    // Set the gamerules score too. handle_first_half_end() calls
+    // save_first_half_scores() which calls update_match_scores_from_dodx()
+    // — that READS from gamerules and OVERWRITES g_firstHalfScore[]. Without
+    // this dodx_set_team_score(), the test-supplied scores get clobbered to
+    // 0-0 (gamerules is empty in test mode since no actual rounds were
+    // played). Surfaced by Tier 2 first run 2026-05-06 — test_13 / test_16
+    // / restarthalf all asserted 3-1 / 7-4 / 3-1 scores but saw 0-0 because
+    // of this overwrite.
+    #if defined HAS_DODX
+    if (g_hasDodxStatsNatives && dodx_has_gamerules()) {
+        dodx_set_team_score(1, s1);
+        dodx_set_team_score(2, s2);
+    }
+    #endif
 
     log_ktp("event=TEST_END_FIRST_HALF match_id=%s scores=%d-%d", g_matchId, s1, s2);
 
@@ -7929,6 +7946,17 @@ public cmd_test_fire_match_start_log(id) {
     log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")",
         g_matchId, g_currentMap, halfText);
     log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s",
+        g_matchId, g_currentMap, halfText);
+
+    // Mirror the KTP_MATCH_START line into the AMXX log directory so
+    // tests/integration/log_tail.py can find it via wait_for_log_substring
+    // (which polls dod/addons/ktpamx/logs/ — log_message writes to engine
+    // dod/logs/ which the test infrastructure doesn't read). Production is
+    // unaffected: the engine path remains the load-bearing route to
+    // HLStatsX UDP via logaddress_add. Surfaced 2026-05-06 first Tier 2
+    // run — test_8 timed out waiting on a substring that lived in a
+    // different log dir.
+    log_amx("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") [test-mode mirror]",
         g_matchId, g_currentMap, halfText);
 
     console_print(id, "KTP_TEST_ROUNDLIVE_LOG: ok match_id=%s half=%s", g_matchId, halfText);

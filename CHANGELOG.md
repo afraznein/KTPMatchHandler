@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.131] - 2026-05-06
+
+### `tests`: Tier 2 first-fire fixes — score-propagation + log_message-mirror
+
+Two test-mode rcon bug fixes surfaced by the first end-to-end Tier 2 run on the newly-registered self-hosted runner. **Production-mode binary unaffected** (all changes inside `#if defined KTP_TEST_MODE`-gated blocks).
+
+**1. `cmd_test_end_first_half` score clobber.** The rcon set `g_firstHalfScore[]` from args then called `handle_first_half_end()` → `save_first_half_scores()` → `update_match_scores_from_dodx()`, which **read from gamerules and overwrote** the test-supplied scores. Test gamerules score is 0-0 (no actual rounds played), so `g_firstHalfScore[]` got clobbered to 0 between the test driver call and the resulting embed. Tier 2 first-fire log evidence: `event=TEST_END_FIRST_HALF match_id=… scores=3-1` followed by `event=TEST_RESTARTHALF match_id=… h1=0-0` — same match_id, different scores within seconds. Affected tests 13 / 16 / restarthalf-resets — all asserted on h1 scores (3-1, 7-4, 3-1) and saw 0-0.
+
+Fix: in test-mode `cmd_test_end_first_half`, also call `dodx_set_team_score(1, s1)` and `dodx_set_team_score(2, s2)` BEFORE `handle_first_half_end()` so the gamerules read-back returns the test-supplied values. Bonus: also pre-set `g_matchScore[]` for the same reason.
+
+**2. `cmd_test_fire_match_start_log` log dir mismatch.** The rcon called `log_message("KTP_MATCH_START …")` which writes to the engine log directory `dod/logs/L*.log`. But `tests/integration/log_tail.py:_logs_dir` polls the AMXX log directory `dod/addons/ktpamx/logs/L*.log`. Production is fine (the engine path is the load-bearing route to HLStatsX UDP via `logaddress_add`); the test was looking in the wrong dir.
+
+Fix: `cmd_test_fire_match_start_log` now ALSO calls `log_amx("KTP_MATCH_START …")` so the same line lands in the AMXX log dir that `wait_for_log_substring` polls. Append `[test-mode mirror]` suffix on the log_amx variant so an operator reading both logs concurrently can tell them apart.
+
+#### Cross-references
+
+- KTPInfrastructure Tier 2 first-fire artifacts (uploaded as `tier2-failure-artifacts-25454115479` on 2026-05-06)
+- KTPInfrastructure `tests/integration/test_match_flow_spine.py:42` — version pin bumped 0.10.130 → 0.10.131 in lockstep
+
+---
+
 ## [0.10.130] - 2026-05-05
 
 ### Added
