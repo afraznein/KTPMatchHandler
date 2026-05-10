@@ -14,19 +14,15 @@
 name: config tests
 
 on:
+  # No `paths:` filter — `config-tests` is a required status check on
+  # `main` (gh api .../branches/main/protection/required_status_checks).
+  # A path-filtered workflow is silently skipped on irrelevant PRs, which
+  # leaves the required check un-reported and the PR un-mergeable without
+  # `--admin` override. Workflow fires on all pushes/PRs; the job's first
+  # step decides whether to run pytest based on what actually changed.
   push:
     branches: ['**']
-    paths:
-      - 'ktp_maps.ini'
-      - 'documents/*.ini.example'
-      - 'tests/config_parse/**'
-      - '.github/workflows/config-tests.yml'
-  pull_request:
-    paths:
-      - 'ktp_maps.ini'
-      - 'documents/*.ini.example'
-      - 'tests/config_parse/**'
-      - '.github/workflows/config-tests.yml'
+  pull_request: {}
   workflow_dispatch:
 
 concurrency:
@@ -40,14 +36,39 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # need diff against base for PR relevance check
+
+      - name: Detect relevant changes
+        id: changes
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+            echo "Non-PR event ${{ github.event_name }}; will run pytest."
+            exit 0
+          fi
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          if git diff --name-only "$base" "$head" \
+              | grep -qE '^(ktp_maps\.ini$|documents/.*\.ini\.example$|tests/config_parse/|\.github/workflows/config-tests\.yml$)'; then
+            echo "run=1" >> "$GITHUB_OUTPUT"
+            echo "Relevant files changed; will run pytest."
+          else
+            echo "run=0" >> "$GITHUB_OUTPUT"
+            echo "::notice::No config-relevant files changed in this PR; skipping pytest (job still passes so the required check is satisfied)."
+          fi
 
       - name: Setup Python 3.12
+        if: steps.changes.outputs.run == '1'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       - name: Install pytest
+        if: steps.changes.outputs.run == '1'
         run: pip install --quiet pytest
 
       - name: Run config-parse tests
+        if: steps.changes.outputs.run == '1'
         run: pytest tests/config_parse/ -v
