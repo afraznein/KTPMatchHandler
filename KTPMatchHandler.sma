@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.131"
+#define PLUGIN_VERSION "0.10.132"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -154,6 +154,30 @@ new g_13CaptainId = 0;                          // Player ID of captain entering
 // ---------- Force Reset Confirmation ----------
 new g_forceResetPending = 0;                    // Player ID who initiated force reset (0 = none)
 new Float:g_forceResetTime = 0.0;               // Time when force reset was initiated (expires after 10s)
+
+// ---------- Score Persistence (mid-match disconnect/rejoin) ----------
+// v1 scope: frags + deaths + DoD score column. Reads/writes m_iScore + m_iDeaths
+// in pvPrivateData via DODX dodx_get/set_user_* natives; reads pev->frags via
+// AMXX get_user_frags / set_entvar. In-memory only; cleared at end_match_cleanup
+// + .forcereset. Steam-ID keyed.
+//
+// VALIDATION GATE 2026-05-21: at SAVE time, compare dodx_get_user_deaths (pdata
+// offset) vs dodx_get_observed_deaths (DODX-internal counter, incremented from
+// engine DeathMsg broadcasts). Mismatch -> log + skip persist + clear slot.
+// Validated flag persists into the saved row so RESTORE refuses to write back
+// from un-validated rows. Guards against silent wrong-value SAVE that happened
+// when the spike v1.2 mis-read offsets (5/21 incident: SAVE captured score=2
+// deaths=0 vs scoreboard score=3 deaths=2).
+//
+// Capacity 16 = max 12 players + spare slots for churn during a match.
+#define SAVED_SCORE_MAX 16
+new g_savedScoreSid[SAVED_SCORE_MAX][44];
+new g_savedScoreTeam[SAVED_SCORE_MAX];
+new g_savedScoreFrags[SAVED_SCORE_MAX];
+new g_savedScoreDeaths[SAVED_SCORE_MAX];
+new g_savedScoreScore[SAVED_SCORE_MAX];     // DoD's per-player Score column (caps + kills + bonus aggregate)
+new bool:g_savedScoreValidated[SAVED_SCORE_MAX];  // Offset-validation result; sticky for row lifetime
+new g_savedScoreCount = 0;
 
 // ---------- Restart Half Confirmation ----------
 new g_restartHalfPending = 0;                   // Player ID who initiated restart half (0 = none)
@@ -4212,6 +4236,9 @@ stock end_match_cleanup() {
     // Clear persistent roster (match is over)
     clear_match_roster();
 
+    // Clear saved score state (match is over; no more rejoins to restore for)
+    clear_saved_scores();
+
     // Reset match type and Discord flag for next match
     g_matchType = MATCH_TYPE_COMPETITIVE;
     g_disableDiscord = false;
@@ -4556,6 +4583,194 @@ stock bool:is_in_intermission() {
     return false;
 }
 
+// ================= Score persistence (v1: frags + deaths) =================
+// Captures pev->frags + pev->deaths at disconnect, restores at rejoin if the
+// same Steam ID + team comes back. Designed for the common case where a
+// player drops with intention to rejoin (flaky connection, brief crash).
+//
+// Mechanism:
+//   1. on_client_left -> save_player_score(id) snapshots into g_savedScore* by sid
+//   2. client_putinserver -> set_task(1.5, "task_restore_player_score", id)
+//      (deferred so Steam validation + pev settle before we read/write)
+//   3. task_restore_player_score: lookup by sid, gate on same team, then
+//      set_user_frags + set_pev(deaths) + ScoreInfo broadcast for scoreboards
+//
+// What this does NOT restore (DoD-specific, requires DODX native expansion):
+//   - DoD per-player Score column (the cap + kill + bonus aggregate)
+//   - CP captures count column
+// Both stored in DoD game DLL pdata; no read/write native today. Filed as v2.
+//
+// Cleared by: end_match_cleanup, execute_force_reset.
+
+stock find_saved_score_slot(const sid[]) {
+    for (new i = 0; i < g_savedScoreCount; i++) {
+        if (equal(g_savedScoreSid[i], sid)) return i;
+    }
+    return -1;
+}
+
+stock find_or_alloc_score_slot(const sid[]) {
+    new idx = find_saved_score_slot(sid);
+    if (idx >= 0) return idx;
+    if (g_savedScoreCount >= SAVED_SCORE_MAX) return -1;
+    idx = g_savedScoreCount;
+    // Explicit row size (44 - 1 = 43) — earlier `charsmax(g_savedScoreSid[])`
+    // with empty index was ambiguous Pawn syntax and stored 0 bytes,
+    // silently breaking find_saved_score_slot's equal() lookup.
+    copy(g_savedScoreSid[idx], 43, sid);
+    g_savedScoreCount++;
+    return idx;
+}
+
+stock clear_saved_scores() {
+    if (g_savedScoreCount == 0) return;
+    log_ktp("event=SCORE_PERSIST_CLEAR count=%d", g_savedScoreCount);
+    for (new i = 0; i < g_savedScoreCount; i++) {
+        g_savedScoreSid[i][0] = EOS;
+        g_savedScoreTeam[i] = 0;
+        g_savedScoreFrags[i] = 0;
+        g_savedScoreDeaths[i] = 0;
+        g_savedScoreScore[i] = 0;
+        g_savedScoreValidated[i] = false;
+    }
+    g_savedScoreCount = 0;
+}
+
+stock bool:save_player_score(id) {
+    if (!g_matchLive || g_matchEnded) return false;
+    if (is_user_bot(id) || is_user_hltv(id)) return false;
+    new tid = get_user_team_id(id);
+    if (tid != 1 && tid != 2) return false;
+
+    new sid[44]; get_user_authid(id, sid, charsmax(sid));
+    if (!sid[0] || equal(sid, "STEAM_ID_PENDING") || equal(sid, "BOT")) return false;
+
+    new idx = find_or_alloc_score_slot(sid);
+    if (idx < 0) {
+        log_ktp("event=SCORE_PERSIST_SAVE_OVERFLOW sid=%s count=%d", sid, g_savedScoreCount);
+        return false;
+    }
+
+    // VALIDATION GATE: compare pdata-offset read vs engine-observed counter.
+    // If they disagree, score_deaths_offset is wrong for the current dod_i386.so
+    // (likely a new OS bump shifted the struct). Refuse to persist; clear any
+    // stale validated data in this slot to prevent a previous-row's RESTORE.
+    // Both natives return 0 for not-yet-had-an-event players — that case
+    // passes validation trivially and is also the case with nothing meaningful
+    // to persist (player had no deaths).
+    new offsetDeaths   = dodx_get_user_deaths(id);
+    new observedDeaths = dodx_get_observed_deaths(id);
+    if (offsetDeaths != observedDeaths) {
+        log_ktp("event=SCORE_DEATHS_OFFSET_MISMATCH sid=%s offset=%d observed=%d - NOT persisting",
+                sid, offsetDeaths, observedDeaths);
+        // Mark the row unvalidated so RESTORE refuses to write back, and
+        // zero the SID so a fresh save_player_score call won't pick this
+        // stale row up via find_saved_score_slot.
+        g_savedScoreValidated[idx] = false;
+        g_savedScoreSid[idx][0] = EOS;
+        return false;
+    }
+
+    // AMXX core for frags (pev->frags float, extension-mode safe). DoD per-player
+    // Score column read via DODX dodx_get_user_score (pdata access; m_iScore at
+    // STEAM_PDOFFSET_SCORE — validated for this player above through the deaths
+    // adjacency invariant). Note: get_user_deaths AMXX builtin is unreliable on
+    // DoD (its ScoreInfo hook doesn't track DoD's death broadcasts), so we use
+    // the offset-based dodx_get_user_deaths value (== observedDeaths post-gate).
+    new frags  = get_user_frags(id);
+    new score  = dodx_get_user_score(id);
+
+    g_savedScoreTeam[idx]      = tid;
+    g_savedScoreFrags[idx]     = frags;
+    g_savedScoreDeaths[idx]    = offsetDeaths;  // == observedDeaths after validation
+    g_savedScoreScore[idx]     = score;
+    g_savedScoreValidated[idx] = true;
+    log_ktp("event=SCORE_PERSIST_SAVE sid=%s team=%d frags=%d deaths=%d score=%d validated=1",
+            sid, tid, frags, offsetDeaths, score);
+    return true;
+}
+
+stock score_refresh_broadcast(id) {
+    new msgid = get_user_msgid("ScoreInfo");
+    if (msgid <= 0) return;
+
+    new frags  = get_user_frags(id);
+    new deaths = get_user_deaths(id);
+    new team   = get_user_team_id(id);
+
+    // 5-field ScoreInfo: player_id, frags, deaths, class, team. We don't
+    // track per-player class for restoration purposes — pass 0; DoD's
+    // scoreboard doesn't render class from this message.
+    message_begin(MSG_ALL, msgid);
+    write_byte(id);
+    write_short(frags);
+    write_short(deaths);
+    write_short(0);
+    write_short(team);
+    message_end();
+}
+
+public task_restore_player_score(id) {
+    if (!is_user_connected(id)) return;
+    if (!g_matchLive || g_matchEnded) return;
+    if (is_user_bot(id) || is_user_hltv(id)) return;
+
+    new sid[44]; get_user_authid(id, sid, charsmax(sid));
+    if (!sid[0] || equal(sid, "STEAM_ID_PENDING") || equal(sid, "BOT")) return;
+
+    new idx = find_saved_score_slot(sid);
+    if (idx < 0) return;
+
+    // VALIDATION GATE: refuse RESTORE on rows where SAVE failed the offset
+    // check. Without this, an unvalidated row would write garbage to pdata
+    // via dodx_set_user_deaths / dodx_set_user_score (the same set natives
+    // that READ wrong on un-validated builds). Frags side via set_entvar
+    // is independent of the offset issue and would technically be safe,
+    // but the full triple-field restore is the atomic intent — partial
+    // restore (frags only, no deaths/score) wouldn't match what the
+    // player sees on their scoreboard and is more confusing than no
+    // restore at all.
+    if (!g_savedScoreValidated[idx]) {
+        log_ktp("event=SCORE_PERSIST_RESTORE_UNVALIDATED sid=%s - skipping (SAVE failed validation)", sid);
+        return;
+    }
+
+    new tid = get_user_team_id(id);
+    if (tid != g_savedScoreTeam[idx]) {
+        log_ktp("event=SCORE_PERSIST_RESTORE_TEAM_MISMATCH sid=%s saved_team=%d cur_team=%d",
+                sid, g_savedScoreTeam[idx], tid);
+        return;
+    }
+
+    // v1.3 scope: full triple-field restore.
+    //   - Frags via ReAPI set_entvar(var_frags) — engine-level entvar.
+    //   - Deaths + Score via DODX dodx_set_user_deaths / dodx_set_user_score
+    //     (writes to DoD game-DLL pdata at STEAM_PDOFFSET_DEATHS/_SCORE).
+    //     v1.1's attempt at set_member(m_iDeaths) was blocked by ReGameDll
+    //     being Counter-Strike-only; the new DODX natives provide the
+    //     DoD-compatible path.
+    //
+    // The score_refresh_broadcast() helper that previously lived in this
+    // file used AMX message_begin / write_byte / message_end (Pawn natives)
+    // which crashed ATL:27019 on 5/21 RESTORE (vtable lookup in AMXX's
+    // message_begin implementation segfaulted at ktpamx_i386.so+0x561c3).
+    // CLAUDE.md documented this exact failure mode since v0.10.20.
+    //
+    // dodx_broadcast_scoreboard (new in this KTPAMXX rev) uses the same
+    // direct engine-func MESSAGE_BEGIN pattern as dodx_broadcast_team_score
+    // (proven safe). Format matches DoD's native ScoreShort broadcast site
+    // in CDoDTeamPlay::PlayerKilled (BYTE id + SHORT score + SHORT frags +
+    // SHORT deaths + BYTE 1), so the message looks indistinguishable from
+    // what the engine itself sends on every death — clients render it the
+    // same way and the scoreboard refreshes immediately.
+    set_entvar(id, var_frags, float(g_savedScoreFrags[idx]));
+    dodx_set_user_deaths(id, g_savedScoreDeaths[idx]);
+    dodx_set_user_score(id,  g_savedScoreScore[idx]);
+    dodx_broadcast_scoreboard(id);
+    log_ktp("event=SCORE_PERSIST_RESTORE sid=%s team=%d frags=%d deaths=%d score=%d",
+            sid, tid, g_savedScoreFrags[idx], g_savedScoreDeaths[idx], g_savedScoreScore[idx]);
+}
+
 // Shared handler
 stock on_client_left(id) {
     if (id >= 1 && id <= MAX_PLAYERS) {
@@ -4619,6 +4834,10 @@ stock on_client_left(id) {
             }
         }
     }
+
+    // Snapshot frags + deaths for potential mid-match rejoin. No-op outside
+    // live match / for bots / for spectators (gated inside save_player_score).
+    save_player_score(id);
 }
 
 // Use the newer forward when available; fall back for older AMXX
@@ -4635,6 +4854,28 @@ public client_putinserver(id) {
 
     // Delayed version and status announcement (5 seconds)
     set_task(5.0, "fn_version_display", id);
+
+    // Score restore is NOT triggered here anymore — at client_putinserver time
+    // the player is still on team 0 (team picker menu), so the same-team gate
+    // in task_restore_player_score would always fail. Restore now fires from
+    // dod_client_changeteam below, which is the right semantic moment (player
+    // has actually picked Allies/Axis and is rejoining the match for real).
+}
+
+// Restore frags + deaths when a rejoining player picks a team that matches
+// what they had at disconnect. dod_client_changeteam fires on F1/F2 team-pick
+// after rejoin (oldteam=0 -> team=1 or 2) AND on subsequent team switches;
+// the same-team gate inside task_restore_player_score keeps both cases safe
+// (mismatch -> log + no-op, match -> restore).
+//
+// Validated v1.0 on ATL:27019 2026-05-11: client_putinserver defer fired
+// 1.5s after rejoin with cur_team=0, hit RESTORE_TEAM_MISMATCH; moving the
+// trigger to dod_client_changeteam closes that gap.
+public dod_client_changeteam(id, team, oldteam) {
+    if (!g_matchLive || g_matchEnded) return;
+    if (team != 1 && team != 2) return;        // skip spectator/unassigned picks
+    if (is_user_bot(id) || is_user_hltv(id)) return;
+    task_restore_player_score(id);
 }
 
 public fn_version_display(id) {
@@ -6541,6 +6782,9 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
         g_disconnectedPlayerTeam = 0;
         g_disconnectedPlayerSteamId[0] = EOS;
     }
+
+    // Clear any saved per-player score state from prior rejoins this match
+    clear_saved_scores();
 
     // Clear pre-start state
     g_preStartPending = false;

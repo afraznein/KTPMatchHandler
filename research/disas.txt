@@ -1,0 +1,770 @@
+Disassembly of dod_i386.so (md5 4f4727b2390d3a0ed6f5ad862dd6d4be)
+Generated 2026-05-21T03:25:17Z
+
+============================================================
+== AddFrags__11CBasePlayerii
+============================================================
+
+/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler/research/dod_i386.so.atl-24.04:     file format elf32-i386
+
+
+Disassembly of section .init:
+
+Disassembly of section .plt:
+
+Disassembly of section .text:
+
+000f3870 <AddFrags__11CBasePlayerii>:
+   f3870:	55                   	push   ebp
+   f3871:	89 e5                	mov    ebp,esp
+   f3873:	83 ec 1c             	sub    esp,0x1c
+   f3876:	57                   	push   edi
+   f3877:	56                   	push   esi
+   f3878:	53                   	push   ebx
+   f3879:	e8 00 00 00 00       	call   f387e <AddFrags__11CBasePlayerii+0xe>
+   f387e:	5b                   	pop    ebx
+   f387f:	81 c3 7a 29 0b 00    	add    ebx,0xb297a
+   f3885:	8b b3 cc 15 00 00    	mov    esi,DWORD PTR [ebx+0x15cc]
+   f388b:	8b 06                	mov    eax,DWORD PTR [esi]
+   f388d:	83 c4 f4             	add    esp,0xfffffff4
+   f3890:	8b 10                	mov    edx,DWORD PTR [eax]
+   f3892:	50                   	push   eax
+   f3893:	8b 82 40 01 00 00    	mov    eax,DWORD PTR [edx+0x140]
+   f3899:	8b 7d 08             	mov    edi,DWORD PTR [ebp+0x8]
+   f389c:	ff d0                	call   eax
+   f389e:	83 c4 10             	add    esp,0x10
+   f38a1:	84 c0                	test   al,al
+   f38a3:	74 1b                	je     f38c0 <AddFrags__11CBasePlayerii+0x50>
+   f38a5:	8b 06                	mov    eax,DWORD PTR [esi]
+   f38a7:	83 c4 f4             	add    esp,0xfffffff4
+   f38aa:	8b 10                	mov    edx,DWORD PTR [eax]
+   f38ac:	50                   	push   eax
+   f38ad:	8b 82 44 01 00 00    	mov    eax,DWORD PTR [edx+0x144]
+   f38b3:	ff d0                	call   eax
+   f38b5:	83 c4 10             	add    esp,0x10
+   f38b8:	84 c0                	test   al,al
+   f38ba:	0f 84 9f 00 00 00    	je     f395f <AddFrags__11CBasePlayerii+0xef>
+   f38c0:	db 45 0c             	fild   DWORD PTR [ebp+0xc]
+   f38c3:	8b 07                	mov    eax,DWORD PTR [edi]
+   f38c5:	d8 80 64 01 00 00    	fadd   DWORD PTR [eax+0x164]
+   f38cb:	d9 98 64 01 00 00    	fstp   DWORD PTR [eax+0x164]
+   f38d1:	83 7d 10 00          	cmp    DWORD PTR [ebp+0x10],0x0
+   f38d5:	0f 84 84 00 00 00    	je     f395f <AddFrags__11CBasePlayerii+0xef>
+   f38db:	8b 83 a4 22 00 00    	mov    eax,DWORD PTR [ebx+0x22a4]
+   f38e1:	8b 93 0c 13 00 00    	mov    edx,DWORD PTR [ebx+0x130c]
+   f38e7:	8b 00                	mov    eax,DWORD PTR [eax]
+   f38e9:	6a 00                	push   0x0
+   f38eb:	6a 00                	push   0x0
+   f38ed:	50                   	push   eax
+   f38ee:	6a 02                	push   0x2
+   f38f0:	8b 82 b8 00 00 00    	mov    eax,DWORD PTR [edx+0xb8]
+   f38f6:	ff d0                	call   eax
+   f38f8:	83 c4 10             	add    esp,0x10
+   f38fb:	83 c4 f4             	add    esp,0xfffffff4
+   f38fe:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   f3904:	8b 07                	mov    eax,DWORD PTR [edi]
+   f3906:	83 c4 f4             	add    esp,0xfffffff4
+   f3909:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   f390f:	50                   	push   eax
+   f3910:	8b 86 1c 01 00 00    	mov    eax,DWORD PTR [esi+0x11c]
+   f3916:	ff d0                	call   eax
+   f3918:	83 c4 10             	add    esp,0x10
+   f391b:	50                   	push   eax
+   f391c:	8b 86 c0 00 00 00    	mov    eax,DWORD PTR [esi+0xc0]
+   f3922:	ff d0                	call   eax
+   f3924:	8b 07                	mov    eax,DWORD PTR [edi]
+   f3926:	83 c4 f4             	add    esp,0xfffffff4
+   f3929:	d9 80 64 01 00 00    	fld    DWORD PTR [eax+0x164]
+   f392f:	d9 7d fa             	fnstcw WORD PTR [ebp-0x6]
+   f3932:	66 8b 55 fa          	mov    dx,WORD PTR [ebp-0x6]
+   f3936:	66 81 ca 00 0c       	or     dx,0xc00
+   f393b:	66 89 55 f8          	mov    WORD PTR [ebp-0x8],dx
+   f393f:	d9 6d f8             	fldcw  WORD PTR [ebp-0x8]
+   f3942:	db 5d fc             	fistp  DWORD PTR [ebp-0x4]
+   f3945:	8b 45 fc             	mov    eax,DWORD PTR [ebp-0x4]
+   f3948:	d9 6d fa             	fldcw  WORD PTR [ebp-0x6]
+   f394b:	50                   	push   eax
+   f394c:	8b 86 c8 00 00 00    	mov    eax,DWORD PTR [esi+0xc8]
+   f3952:	ff d0                	call   eax
+   f3954:	8b 86 bc 00 00 00    	mov    eax,DWORD PTR [esi+0xbc]
+   f395a:	83 c4 20             	add    esp,0x20
+   f395d:	ff d0                	call   eax
+   f395f:	8d 65 d8             	lea    esp,[ebp-0x28]
+   f3962:	5b                   	pop    ebx
+   f3963:	5e                   	pop    esi
+   f3964:	5f                   	pop    edi
+   f3965:	89 ec                	mov    esp,ebp
+   f3967:	5d                   	pop    ebp
+   f3968:	c3                   	ret
+
+Disassembly of section .fini:
+
+============================================================
+== AddObjScore__11CBasePlayerii
+============================================================
+
+/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler/research/dod_i386.so.atl-24.04:     file format elf32-i386
+
+
+Disassembly of section .init:
+
+Disassembly of section .plt:
+
+Disassembly of section .text:
+
+000f396c <AddObjScore__11CBasePlayerii>:
+   f396c:	55                   	push   ebp
+   f396d:	89 e5                	mov    ebp,esp
+   f396f:	83 ec 0c             	sub    esp,0xc
+   f3972:	57                   	push   edi
+   f3973:	56                   	push   esi
+   f3974:	53                   	push   ebx
+   f3975:	e8 00 00 00 00       	call   f397a <AddObjScore__11CBasePlayerii+0xe>
+   f397a:	5b                   	pop    ebx
+   f397b:	81 c3 7e 28 0b 00    	add    ebx,0xb287e
+   f3981:	8b b3 cc 15 00 00    	mov    esi,DWORD PTR [ebx+0x15cc]
+   f3987:	8b 06                	mov    eax,DWORD PTR [esi]
+   f3989:	83 c4 f4             	add    esp,0xfffffff4
+   f398c:	8b 10                	mov    edx,DWORD PTR [eax]
+   f398e:	50                   	push   eax
+   f398f:	8b 82 40 01 00 00    	mov    eax,DWORD PTR [edx+0x140]
+   f3995:	8b 7d 08             	mov    edi,DWORD PTR [ebp+0x8]
+   f3998:	ff d0                	call   eax
+   f399a:	83 c4 10             	add    esp,0x10
+   f399d:	84 c0                	test   al,al
+   f399f:	74 17                	je     f39b8 <AddObjScore__11CBasePlayerii+0x4c>
+   f39a1:	8b 06                	mov    eax,DWORD PTR [esi]
+   f39a3:	83 c4 f4             	add    esp,0xfffffff4
+   f39a6:	8b 10                	mov    edx,DWORD PTR [eax]
+   f39a8:	50                   	push   eax
+   f39a9:	8b 82 44 01 00 00    	mov    eax,DWORD PTR [edx+0x144]
+   f39af:	ff d0                	call   eax
+   f39b1:	83 c4 10             	add    esp,0x10
+   f39b4:	84 c0                	test   al,al
+   f39b6:	74 75                	je     f3a2d <AddObjScore__11CBasePlayerii+0xc1>
+   f39b8:	8b 45 0c             	mov    eax,DWORD PTR [ebp+0xc]
+   f39bb:	01 87 80 07 00 00    	add    DWORD PTR [edi+0x780],eax
+   f39c1:	83 7d 10 00          	cmp    DWORD PTR [ebp+0x10],0x0
+   f39c5:	74 66                	je     f3a2d <AddObjScore__11CBasePlayerii+0xc1>
+   f39c7:	8b 83 ac 22 00 00    	mov    eax,DWORD PTR [ebx+0x22ac]
+   f39cd:	8b 93 0c 13 00 00    	mov    edx,DWORD PTR [ebx+0x130c]
+   f39d3:	8b 00                	mov    eax,DWORD PTR [eax]
+   f39d5:	6a 00                	push   0x0
+   f39d7:	6a 00                	push   0x0
+   f39d9:	50                   	push   eax
+   f39da:	6a 02                	push   0x2
+   f39dc:	8b 82 b8 00 00 00    	mov    eax,DWORD PTR [edx+0xb8]
+   f39e2:	ff d0                	call   eax
+   f39e4:	83 c4 10             	add    esp,0x10
+   f39e7:	83 c4 f4             	add    esp,0xfffffff4
+   f39ea:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   f39f0:	8b 07                	mov    eax,DWORD PTR [edi]
+   f39f2:	83 c4 f4             	add    esp,0xfffffff4
+   f39f5:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   f39fb:	50                   	push   eax
+   f39fc:	8b 86 1c 01 00 00    	mov    eax,DWORD PTR [esi+0x11c]
+   f3a02:	ff d0                	call   eax
+   f3a04:	83 c4 10             	add    esp,0x10
+   f3a07:	50                   	push   eax
+   f3a08:	8b 86 c0 00 00 00    	mov    eax,DWORD PTR [esi+0xc0]
+   f3a0e:	ff d0                	call   eax
+   f3a10:	83 c4 f4             	add    esp,0xfffffff4
+   f3a13:	8b 87 80 07 00 00    	mov    eax,DWORD PTR [edi+0x780]
+   f3a19:	50                   	push   eax
+   f3a1a:	8b 86 c8 00 00 00    	mov    eax,DWORD PTR [esi+0xc8]
+   f3a20:	ff d0                	call   eax
+   f3a22:	8b 86 bc 00 00 00    	mov    eax,DWORD PTR [esi+0xbc]
+   f3a28:	83 c4 20             	add    esp,0x20
+   f3a2b:	ff d0                	call   eax
+   f3a2d:	8d 65 e8             	lea    esp,[ebp-0x18]
+   f3a30:	5b                   	pop    ebx
+   f3a31:	5e                   	pop    esi
+   f3a32:	5f                   	pop    edi
+   f3a33:	89 ec                	mov    esp,ebp
+   f3a35:	5d                   	pop    ebp
+   f3a36:	c3                   	ret
+
+Disassembly of section .fini:
+
+============================================================
+== AddPoints__11CBasePlayerii
+============================================================
+
+/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler/research/dod_i386.so.atl-24.04:     file format elf32-i386
+
+
+Disassembly of section .init:
+
+Disassembly of section .plt:
+
+Disassembly of section .text:
+
+000f3a38 <AddPoints__11CBasePlayerii>:
+   f3a38:	55                   	push   ebp
+   f3a39:	89 e5                	mov    ebp,esp
+   f3a3b:	83 ec 1c             	sub    esp,0x1c
+   f3a3e:	57                   	push   edi
+   f3a3f:	56                   	push   esi
+   f3a40:	53                   	push   ebx
+   f3a41:	e8 00 00 00 00       	call   f3a46 <AddPoints__11CBasePlayerii+0xe>
+   f3a46:	5b                   	pop    ebx
+   f3a47:	81 c3 b2 27 0b 00    	add    ebx,0xb27b2
+   f3a4d:	8b b3 cc 15 00 00    	mov    esi,DWORD PTR [ebx+0x15cc]
+   f3a53:	8b 7d 0c             	mov    edi,DWORD PTR [ebp+0xc]
+   f3a56:	8b 06                	mov    eax,DWORD PTR [esi]
+   f3a58:	83 c4 f4             	add    esp,0xfffffff4
+   f3a5b:	8b 10                	mov    edx,DWORD PTR [eax]
+   f3a5d:	50                   	push   eax
+   f3a5e:	8b 82 40 01 00 00    	mov    eax,DWORD PTR [edx+0x140]
+   f3a64:	ff d0                	call   eax
+   f3a66:	83 c4 10             	add    esp,0x10
+   f3a69:	84 c0                	test   al,al
+   f3a6b:	74 1b                	je     f3a88 <AddPoints__11CBasePlayerii+0x50>
+   f3a6d:	8b 06                	mov    eax,DWORD PTR [esi]
+   f3a6f:	83 c4 f4             	add    esp,0xfffffff4
+   f3a72:	8b 10                	mov    edx,DWORD PTR [eax]
+   f3a74:	50                   	push   eax
+   f3a75:	8b 82 44 01 00 00    	mov    eax,DWORD PTR [edx+0x144]
+   f3a7b:	ff d0                	call   eax
+   f3a7d:	83 c4 10             	add    esp,0x10
+   f3a80:	84 c0                	test   al,al
+   f3a82:	0f 84 00 01 00 00    	je     f3b88 <AddPoints__11CBasePlayerii+0x150>
+   f3a88:	85 ff                	test   edi,edi
+   f3a8a:	7d 5b                	jge    f3ae7 <AddPoints__11CBasePlayerii+0xaf>
+   f3a8c:	83 7d 10 00          	cmp    DWORD PTR [ebp+0x10],0x0
+   f3a90:	75 55                	jne    f3ae7 <AddPoints__11CBasePlayerii+0xaf>
+   f3a92:	8b 45 08             	mov    eax,DWORD PTR [ebp+0x8]
+   f3a95:	8b 10                	mov    edx,DWORD PTR [eax]
+   f3a97:	d9 ee                	fldz
+   f3a99:	d8 9a 64 01 00 00    	fcomp  DWORD PTR [edx+0x164]
+   f3a9f:	df e0                	fnstsw ax
+   f3aa1:	80 e4 45             	and    ah,0x45
+   f3aa4:	0f 84 de 00 00 00    	je     f3b88 <AddPoints__11CBasePlayerii+0x150>
+   f3aaa:	89 f8                	mov    eax,edi
+   f3aac:	f7 d8                	neg    eax
+   f3aae:	89 45 fc             	mov    DWORD PTR [ebp-0x4],eax
+   f3ab1:	db 45 fc             	fild   DWORD PTR [ebp-0x4]
+   f3ab4:	d9 82 64 01 00 00    	fld    DWORD PTR [edx+0x164]
+   f3aba:	d8 d1                	fcom   st(1)
+   f3abc:	df e0                	fnstsw ax
+   f3abe:	80 e4 05             	and    ah,0x5
+   f3ac1:	dd d9                	fstp   st(1)
+   f3ac3:	74 20                	je     f3ae5 <AddPoints__11CBasePlayerii+0xad>
+   f3ac5:	d9 e0                	fchs
+   f3ac7:	d9 7d fa             	fnstcw WORD PTR [ebp-0x6]
+   f3aca:	66 8b 55 fa          	mov    dx,WORD PTR [ebp-0x6]
+   f3ace:	66 81 ca 00 0c       	or     dx,0xc00
+   f3ad3:	66 89 55 f8          	mov    WORD PTR [ebp-0x8],dx
+   f3ad7:	d9 6d f8             	fldcw  WORD PTR [ebp-0x8]
+   f3ada:	db 5d fc             	fistp  DWORD PTR [ebp-0x4]
+   f3add:	8b 7d fc             	mov    edi,DWORD PTR [ebp-0x4]
+   f3ae0:	d9 6d fa             	fldcw  WORD PTR [ebp-0x6]
+   f3ae3:	eb 02                	jmp    f3ae7 <AddPoints__11CBasePlayerii+0xaf>
+   f3ae5:	dd d8                	fstp   st(0)
+   f3ae7:	8b 55 08             	mov    edx,DWORD PTR [ebp+0x8]
+   f3aea:	8b 02                	mov    eax,DWORD PTR [edx]
+   f3aec:	89 7d fc             	mov    DWORD PTR [ebp-0x4],edi
+   f3aef:	db 45 fc             	fild   DWORD PTR [ebp-0x4]
+   f3af2:	d8 80 64 01 00 00    	fadd   DWORD PTR [eax+0x164]
+   f3af8:	d9 98 64 01 00 00    	fstp   DWORD PTR [eax+0x164]
+   f3afe:	8b 83 a4 22 00 00    	mov    eax,DWORD PTR [ebx+0x22a4]
+   f3b04:	8b 93 0c 13 00 00    	mov    edx,DWORD PTR [ebx+0x130c]
+   f3b0a:	8b 00                	mov    eax,DWORD PTR [eax]
+   f3b0c:	6a 00                	push   0x0
+   f3b0e:	6a 00                	push   0x0
+   f3b10:	50                   	push   eax
+   f3b11:	6a 02                	push   0x2
+   f3b13:	8b 82 b8 00 00 00    	mov    eax,DWORD PTR [edx+0xb8]
+   f3b19:	ff d0                	call   eax
+   f3b1b:	83 c4 10             	add    esp,0x10
+   f3b1e:	83 c4 f4             	add    esp,0xfffffff4
+   f3b21:	8b 55 08             	mov    edx,DWORD PTR [ebp+0x8]
+   f3b24:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   f3b2a:	8b 02                	mov    eax,DWORD PTR [edx]
+   f3b2c:	83 c4 f4             	add    esp,0xfffffff4
+   f3b2f:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   f3b35:	50                   	push   eax
+   f3b36:	8b 86 1c 01 00 00    	mov    eax,DWORD PTR [esi+0x11c]
+   f3b3c:	ff d0                	call   eax
+   f3b3e:	83 c4 10             	add    esp,0x10
+   f3b41:	50                   	push   eax
+   f3b42:	8b 86 c0 00 00 00    	mov    eax,DWORD PTR [esi+0xc0]
+   f3b48:	ff d0                	call   eax
+   f3b4a:	8b 55 08             	mov    edx,DWORD PTR [ebp+0x8]
+   f3b4d:	8b 02                	mov    eax,DWORD PTR [edx]
+   f3b4f:	83 c4 f4             	add    esp,0xfffffff4
+   f3b52:	d9 80 64 01 00 00    	fld    DWORD PTR [eax+0x164]
+   f3b58:	d9 7d fa             	fnstcw WORD PTR [ebp-0x6]
+   f3b5b:	66 8b 55 fa          	mov    dx,WORD PTR [ebp-0x6]
+   f3b5f:	66 81 ca 00 0c       	or     dx,0xc00
+   f3b64:	66 89 55 f8          	mov    WORD PTR [ebp-0x8],dx
+   f3b68:	d9 6d f8             	fldcw  WORD PTR [ebp-0x8]
+   f3b6b:	db 5d fc             	fistp  DWORD PTR [ebp-0x4]
+   f3b6e:	8b 45 fc             	mov    eax,DWORD PTR [ebp-0x4]
+   f3b71:	d9 6d fa             	fldcw  WORD PTR [ebp-0x6]
+   f3b74:	50                   	push   eax
+   f3b75:	8b 86 c8 00 00 00    	mov    eax,DWORD PTR [esi+0xc8]
+   f3b7b:	ff d0                	call   eax
+   f3b7d:	8b 86 bc 00 00 00    	mov    eax,DWORD PTR [esi+0xbc]
+   f3b83:	83 c4 20             	add    esp,0x20
+   f3b86:	ff d0                	call   eax
+   f3b88:	8d 65 d8             	lea    esp,[ebp-0x28]
+   f3b8b:	5b                   	pop    ebx
+   f3b8c:	5e                   	pop    esi
+   f3b8d:	5f                   	pop    edi
+   f3b8e:	89 ec                	mov    esp,ebp
+   f3b90:	5d                   	pop    ebp
+   f3b91:	c3                   	ret
+
+Disassembly of section .fini:
+
+============================================================
+== AddPointsToTeam__11CBasePlayerii
+============================================================
+
+/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler/research/dod_i386.so.atl-24.04:     file format elf32-i386
+
+
+Disassembly of section .init:
+
+Disassembly of section .plt:
+
+Disassembly of section .text:
+
+000f3b94 <AddPointsToTeam__11CBasePlayerii>:
+   f3b94:	55                   	push   ebp
+   f3b95:	89 e5                	mov    ebp,esp
+   f3b97:	83 ec 0c             	sub    esp,0xc
+   f3b9a:	57                   	push   edi
+   f3b9b:	56                   	push   esi
+   f3b9c:	53                   	push   ebx
+   f3b9d:	e8 00 00 00 00       	call   f3ba2 <AddPointsToTeam__11CBasePlayerii+0xe>
+   f3ba2:	5b                   	pop    ebx
+   f3ba3:	81 c3 56 26 0b 00    	add    ebx,0xb2656
+   f3ba9:	8b b3 cc 15 00 00    	mov    esi,DWORD PTR [ebx+0x15cc]
+   f3baf:	8b 06                	mov    eax,DWORD PTR [esi]
+   f3bb1:	83 c4 f4             	add    esp,0xfffffff4
+   f3bb4:	8b 10                	mov    edx,DWORD PTR [eax]
+   f3bb6:	50                   	push   eax
+   f3bb7:	8b 82 40 01 00 00    	mov    eax,DWORD PTR [edx+0x140]
+   f3bbd:	ff d0                	call   eax
+   f3bbf:	83 c4 10             	add    esp,0x10
+   f3bc2:	84 c0                	test   al,al
+   f3bc4:	74 1b                	je     f3be1 <AddPointsToTeam__11CBasePlayerii+0x4d>
+   f3bc6:	8b 06                	mov    eax,DWORD PTR [esi]
+   f3bc8:	83 c4 f4             	add    esp,0xfffffff4
+   f3bcb:	8b 10                	mov    edx,DWORD PTR [eax]
+   f3bcd:	50                   	push   eax
+   f3bce:	8b 82 44 01 00 00    	mov    eax,DWORD PTR [edx+0x144]
+   f3bd4:	ff d0                	call   eax
+   f3bd6:	83 c4 10             	add    esp,0x10
+   f3bd9:	84 c0                	test   al,al
+   f3bdb:	0f 84 9a 00 00 00    	je     f3c7b <AddPointsToTeam__11CBasePlayerii+0xe7>
+   f3be1:	8b 55 08             	mov    edx,DWORD PTR [ebp+0x8]
+   f3be4:	8b 02                	mov    eax,DWORD PTR [edx]
+   f3be6:	83 c4 f4             	add    esp,0xfffffff4
+   f3be9:	8b 90 08 02 00 00    	mov    edx,DWORD PTR [eax+0x208]
+   f3bef:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   f3bf5:	52                   	push   edx
+   f3bf6:	8b 80 1c 01 00 00    	mov    eax,DWORD PTR [eax+0x11c]
+   f3bfc:	ff d0                	call   eax
+   f3bfe:	89 45 fc             	mov    DWORD PTR [ebp-0x4],eax
+   f3c01:	8b 83 08 13 00 00    	mov    eax,DWORD PTR [ebx+0x1308]
+   f3c07:	83 c4 10             	add    esp,0x10
+   f3c0a:	8b 00                	mov    eax,DWORD PTR [eax]
+   f3c0c:	bf 01 00 00 00       	mov    edi,0x1
+   f3c11:	3b b8 90 00 00 00    	cmp    edi,DWORD PTR [eax+0x90]
+   f3c17:	7f 62                	jg     f3c7b <AddPointsToTeam__11CBasePlayerii+0xe7>
+   f3c19:	8d 76 00             	lea    esi,[esi+0x0]
+   f3c1c:	83 c4 f4             	add    esp,0xfffffff4
+   f3c1f:	57                   	push   edi
+   f3c20:	e8 2f dc f8 ff       	call   81854 <UTIL_PlayerByIndex__Fi@plt>
+   f3c25:	89 c6                	mov    esi,eax
+   f3c27:	83 c4 10             	add    esp,0x10
+   f3c2a:	85 f6                	test   esi,esi
+   f3c2c:	74 3c                	je     f3c6a <AddPointsToTeam__11CBasePlayerii+0xd6>
+   f3c2e:	3b 7d fc             	cmp    edi,DWORD PTR [ebp-0x4]
+   f3c31:	74 37                	je     f3c6a <AddPointsToTeam__11CBasePlayerii+0xd6>
+   f3c33:	8b 93 cc 15 00 00    	mov    edx,DWORD PTR [ebx+0x15cc]
+   f3c39:	8b 02                	mov    eax,DWORD PTR [edx]
+   f3c3b:	83 c4 fc             	add    esp,0xfffffffc
+   f3c3e:	8b 08                	mov    ecx,DWORD PTR [eax]
+   f3c40:	56                   	push   esi
+   f3c41:	8b 45 08             	mov    eax,DWORD PTR [ebp+0x8]
+   f3c44:	50                   	push   eax
+   f3c45:	8b 02                	mov    eax,DWORD PTR [edx]
+   f3c47:	50                   	push   eax
+   f3c48:	8b 81 d4 00 00 00    	mov    eax,DWORD PTR [ecx+0xd4]
+   f3c4e:	ff d0                	call   eax
+   f3c50:	83 c4 10             	add    esp,0x10
+   f3c53:	83 f8 01             	cmp    eax,0x1
+   f3c56:	75 12                	jne    f3c6a <AddPointsToTeam__11CBasePlayerii+0xd6>
+   f3c58:	83 c4 fc             	add    esp,0xfffffffc
+   f3c5b:	6a 01                	push   0x1
+   f3c5d:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   f3c60:	52                   	push   edx
+   f3c61:	56                   	push   esi
+   f3c62:	e8 0d ed f8 ff       	call   82974 <AddObjScore__11CBasePlayerii@plt>
+   f3c67:	83 c4 10             	add    esp,0x10
+   f3c6a:	8b 83 08 13 00 00    	mov    eax,DWORD PTR [ebx+0x1308]
+   f3c70:	8b 00                	mov    eax,DWORD PTR [eax]
+   f3c72:	47                   	inc    edi
+   f3c73:	3b b8 90 00 00 00    	cmp    edi,DWORD PTR [eax+0x90]
+   f3c79:	7e a1                	jle    f3c1c <AddPointsToTeam__11CBasePlayerii+0x88>
+   f3c7b:	8d 65 e8             	lea    esp,[ebp-0x18]
+   f3c7e:	5b                   	pop    ebx
+   f3c7f:	5e                   	pop    esi
+   f3c80:	5f                   	pop    edi
+   f3c81:	89 ec                	mov    esp,ebp
+   f3c83:	5d                   	pop    ebp
+   f3c84:	c3                   	ret
+
+Disassembly of section .fini:
+
+============================================================
+== Killed__11CBasePlayerP9entvars_si
+============================================================
+
+/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler/research/dod_i386.so.atl-24.04:     file format elf32-i386
+
+
+Disassembly of section .init:
+
+Disassembly of section .plt:
+
+Disassembly of section .text:
+
+000f1344 <Killed__11CBasePlayerP9entvars_si>:
+   f1344:	55                   	push   ebp
+   f1345:	89 e5                	mov    ebp,esp
+   f1347:	83 ec 2c             	sub    esp,0x2c
+   f134a:	57                   	push   edi
+   f134b:	56                   	push   esi
+   f134c:	53                   	push   ebx
+   f134d:	e8 00 00 00 00       	call   f1352 <Killed__11CBasePlayerP9entvars_si+0xe>
+   f1352:	5b                   	pop    ebx
+   f1353:	81 c3 a6 4e 0b 00    	add    ebx,0xb4ea6
+   f1359:	8b 7d 08             	mov    edi,DWORD PTR [ebp+0x8]
+   f135c:	8b 97 68 04 00 00    	mov    edx,DWORD PTR [edi+0x468]
+   f1362:	85 d2                	test   edx,edx
+   f1364:	74 2f                	je     f1395 <Killed__11CBasePlayerP9entvars_si+0x51>
+   f1366:	83 c4 f4             	add    esp,0xfffffff4
+   f1369:	8b 82 54 01 00 00    	mov    eax,DWORD PTR [edx+0x154]
+   f136f:	52                   	push   edx
+   f1370:	8b 80 28 01 00 00    	mov    eax,DWORD PTR [eax+0x128]
+   f1376:	ff d0                	call   eax
+   f1378:	8b 87 68 04 00 00    	mov    eax,DWORD PTR [edi+0x468]
+   f137e:	83 c4 f8             	add    esp,0xfffffff8
+   f1381:	8b 90 54 01 00 00    	mov    edx,DWORD PTR [eax+0x154]
+   f1387:	6a 00                	push   0x0
+   f1389:	50                   	push   eax
+   f138a:	8b 82 30 01 00 00    	mov    eax,DWORD PTR [edx+0x130]
+   f1390:	ff d0                	call   eax
+   f1392:	83 c4 20             	add    esp,0x20
+   f1395:	83 c4 f8             	add    esp,0xfffffff8
+   f1398:	68 f0 03 00 00       	push   0x3f0
+   f139d:	57                   	push   edi
+   f139e:	e8 91 f1 f8 ff       	call   80534 <DropItemByClass__11CBasePlayeri@plt>
+   f13a3:	83 c4 f8             	add    esp,0xfffffff8
+   f13a6:	6a 01                	push   0x1
+   f13a8:	57                   	push   edi
+   f13a9:	e8 26 12 f9 ff       	call   825d4 <RemoveAllItems__11CBasePlayeri@plt>
+   f13ae:	8b 45 0c             	mov    eax,DWORD PTR [ebp+0xc]
+   f13b1:	83 c4 20             	add    esp,0x20
+   f13b4:	83 b8 08 02 00 00 00 	cmp    DWORD PTR [eax+0x208],0x0
+   f13bb:	75 16                	jne    f13d3 <Killed__11CBasePlayerP9entvars_si+0x8f>
+   f13bd:	83 c4 f4             	add    esp,0xfffffff4
+   f13c0:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   f13c6:	6a 00                	push   0x0
+   f13c8:	8b 80 14 01 00 00    	mov    eax,DWORD PTR [eax+0x114]
+   f13ce:	ff d0                	call   eax
+   f13d0:	83 c4 10             	add    esp,0x10
+   f13d3:	8b 93 cc 15 00 00    	mov    edx,DWORD PTR [ebx+0x15cc]
+   f13d9:	8b 02                	mov    eax,DWORD PTR [edx]
+   f13db:	83 c4 f4             	add    esp,0xfffffff4
+   f13de:	8b 08                	mov    ecx,DWORD PTR [eax]
+   f13e0:	8b 45 10             	mov    eax,DWORD PTR [ebp+0x10]
+   f13e3:	50                   	push   eax
+   f13e4:	8b 83 54 16 00 00    	mov    eax,DWORD PTR [ebx+0x1654]
+   f13ea:	8b 00                	mov    eax,DWORD PTR [eax]
+   f13ec:	50                   	push   eax
+   f13ed:	8b 45 0c             	mov    eax,DWORD PTR [ebp+0xc]
+   f13f0:	50                   	push   eax
+   f13f1:	57                   	push   edi
+   f13f2:	8b 02                	mov    eax,DWORD PTR [edx]
+   f13f4:	50                   	push   eax
+   f13f5:	8b 41 78             	mov    eax,DWORD PTR [ecx+0x78]
+   f13f8:	ff d0                	call   eax
+   f13fa:	83 c4 20             	add    esp,0x20
+   f13fd:	83 bf 1c 06 00 00 00 	cmp    DWORD PTR [edi+0x61c],0x0
+   f1404:	7e 0c                	jle    f1412 <Killed__11CBasePlayerP9entvars_si+0xce>
+   f1406:	83 c4 f4             	add    esp,0xfffffff4
+   f1409:	57                   	push   edi
+   f140a:	e8 c5 f0 f8 ff       	call   804d4 <ClearVoiceMenu__11CBasePlayer@plt>
+   f140f:	83 c4 10             	add    esp,0x10
+   f1412:	83 c4 f4             	add    esp,0xfffffff4
+   f1415:	8d b7 24 04 00 00    	lea    esi,[edi+0x424]
+   f141b:	56                   	push   esi
+   f141c:	e8 83 2a f9 ff       	call   83ea4 <__opi__7EHANDLE@plt>
+   f1421:	83 c4 10             	add    esp,0x10
+   f1424:	85 c0                	test   eax,eax
+   f1426:	74 34                	je     f145c <Killed__11CBasePlayerP9entvars_si+0x118>
+   f1428:	83 c4 f4             	add    esp,0xfffffff4
+   f142b:	83 c4 f4             	add    esp,0xfffffff4
+   f142e:	56                   	push   esi
+   f142f:	e8 10 00 f9 ff       	call   81444 <__rf__7EHANDLE@plt>
+   f1434:	89 c2                	mov    edx,eax
+   f1436:	8b 82 54 01 00 00    	mov    eax,DWORD PTR [edx+0x154]
+   f143c:	6a 00                	push   0x0
+   f143e:	6a 00                	push   0x0
+   f1440:	57                   	push   edi
+   f1441:	57                   	push   edi
+   f1442:	52                   	push   edx
+   f1443:	8b 80 d4 00 00 00    	mov    eax,DWORD PTR [eax+0xd4]
+   f1449:	ff d0                	call   eax
+   f144b:	83 c4 30             	add    esp,0x30
+   f144e:	83 c4 f8             	add    esp,0xfffffff8
+   f1451:	6a 00                	push   0x0
+   f1453:	56                   	push   esi
+   f1454:	e8 ab 2a f9 ff       	call   83f04 <__as__7EHANDLEP11CBaseEntity@plt>
+   f1459:	83 c4 10             	add    esp,0x10
+   f145c:	83 c4 f4             	add    esp,0xfffffff4
+   f145f:	8b 07                	mov    eax,DWORD PTR [edi]
+   f1461:	83 c4 f4             	add    esp,0xfffffff4
+   f1464:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   f146a:	50                   	push   eax
+   f146b:	e8 94 02 f9 ff       	call   81704 <ClientSoundIndex__9CSoundEntP7edict_s@plt>
+   f1470:	50                   	push   eax
+   f1471:	e8 de eb f8 ff       	call   80054 <SoundPointerForIndex__9CSoundEnti@plt>
+   f1476:	83 c4 20             	add    esp,0x20
+   f1479:	85 c0                	test   eax,eax
+   f147b:	74 0c                	je     f1489 <Killed__11CBasePlayerP9entvars_si+0x145>
+   f147d:	83 c4 f4             	add    esp,0xfffffff4
+   f1480:	50                   	push   eax
+   f1481:	e8 4e 16 f9 ff       	call   82ad4 <Reset__6CSound@plt>
+   f1486:	83 c4 10             	add    esp,0x10
+   f1489:	83 c4 f4             	add    esp,0xfffffff4
+   f148c:	8b 07                	mov    eax,DWORD PTR [edi]
+   f148e:	83 c0 50             	add    eax,0x50
+   f1491:	50                   	push   eax
+   f1492:	e8 0d 06 f9 ff       	call   81aa4 <UTIL_MakeVectors__FRC6Vector@plt>
+   f1497:	8b 83 d0 15 00 00    	mov    eax,DWORD PTR [ebx+0x15d0]
+   f149d:	d9 00                	fld    DWORD PTR [eax]
+   f149f:	d9 e0                	fchs
+   f14a1:	d9 40 04             	fld    DWORD PTR [eax+0x4]
+   f14a4:	d9 e0                	fchs
+   f14a6:	d9 40 08             	fld    DWORD PTR [eax+0x8]
+   f14a9:	d9 e0                	fchs
+   f14ab:	d9 ca                	fxch   st(2)
+   f14ad:	8b 83 08 13 00 00    	mov    eax,DWORD PTR [ebx+0x1308]
+   f14b3:	d9 55 f4             	fst    DWORD PTR [ebp-0xc]
+   f14b6:	d9 c9                	fxch   st(1)
+   f14b8:	d9 55 f8             	fst    DWORD PTR [ebp-0x8]
+   f14bb:	d9 ca                	fxch   st(2)
+   f14bd:	d9 55 fc             	fst    DWORD PTR [ebp-0x4]
+   f14c0:	d9 c9                	fxch   st(1)
+   f14c2:	8b 00                	mov    eax,DWORD PTR [eax]
+   f14c4:	8d 50 28             	lea    edx,[eax+0x28]
+   f14c7:	d8 48 28             	fmul   DWORD PTR [eax+0x28]
+   f14ca:	d9 ca                	fxch   st(2)
+   f14cc:	d8 4a 04             	fmul   DWORD PTR [edx+0x4]
+   f14cf:	de c2                	faddp  st(2),st
+   f14d1:	83 c4 10             	add    esp,0x10
+   f14d4:	d8 4a 08             	fmul   DWORD PTR [edx+0x8]
+   f14d7:	c6 45 e7 00          	mov    BYTE PTR [ebp-0x19],0x0
+   f14db:	de c1                	faddp  st(1),st
+   f14dd:	f6 87 64 03 00 00 40 	test   BYTE PTR [edi+0x364],0x40
+   f14e4:	74 39                	je     f151f <Killed__11CBasePlayerP9entvars_si+0x1db>
+   f14e6:	dc 93 20 98 fc ff    	fcom   QWORD PTR [ebx-0x367e0]
+   f14ec:	df e0                	fnstsw ax
+   f14ee:	80 e4 45             	and    ah,0x45
+   f14f1:	74 09                	je     f14fc <Killed__11CBasePlayerP9entvars_si+0x1b8>
+   f14f3:	dd d8                	fstp   st(0)
+   f14f5:	83 c4 f8             	add    esp,0xfffffff8
+   f14f8:	6a 0e                	push   0xe
+   f14fa:	eb 17                	jmp    f1513 <Killed__11CBasePlayerP9entvars_si+0x1cf>
+   f14fc:	dc 9b 28 98 fc ff    	fcomp  QWORD PTR [ebx-0x367d8]
+   f1502:	df e0                	fnstsw ax
+   f1504:	80 e4 45             	and    ah,0x45
+   f1507:	fe cc                	dec    ah
+   f1509:	80 fc 40             	cmp    ah,0x40
+   f150c:	72 16                	jb     f1524 <Killed__11CBasePlayerP9entvars_si+0x1e0>
+   f150e:	83 c4 f8             	add    esp,0xfffffff8
+   f1511:	6a 0f                	push   0xf
+   f1513:	57                   	push   edi
+   f1514:	e8 eb 27 f9 ff       	call   83d04 <SetAnimation__11CBasePlayer11PLAYER_ANIM@plt>
+   f1519:	c6 45 e7 01          	mov    BYTE PTR [ebp-0x19],0x1
+   f151d:	eb 10                	jmp    f152f <Killed__11CBasePlayerP9entvars_si+0x1eb>
+   f151f:	dd d8                	fstp   st(0)
+   f1521:	8d 76 00             	lea    esi,[esi+0x0]
+   f1524:	83 c4 f8             	add    esp,0xfffffff8
+   f1527:	6a 04                	push   0x4
+   f1529:	57                   	push   edi
+   f152a:	e8 d5 27 f9 ff       	call   83d04 <SetAnimation__11CBasePlayer11PLAYER_ANIM@plt>
+   f152f:	83 c4 10             	add    esp,0x10
+   f1532:	80 7d e7 00          	cmp    BYTE PTR [ebp-0x19],0x0
+   f1536:	74 10                	je     f1548 <Killed__11CBasePlayerP9entvars_si+0x204>
+   f1538:	83 c4 fc             	add    esp,0xfffffffc
+   f153b:	6a 47                	push   0x47
+   f153d:	6a 00                	push   0x0
+   f153f:	57                   	push   edi
+   f1540:	e8 ff 27 f9 ff       	call   83d44 <UTIL_SendDirectorMessage__FP11CBaseEntityT0i@plt>
+   f1545:	83 c4 10             	add    esp,0x10
+   f1548:	8b 17                	mov    edx,DWORD PTR [edi]
+   f154a:	8b 83 e8 22 00 00    	mov    eax,DWORD PTR [ebx+0x22e8]
+   f1550:	c7 87 38 04 00 00 00 	mov    DWORD PTR [edi+0x438],0x0
+   f1557:	00 00 00 
+   f155a:	8b 00                	mov    eax,DWORD PTR [eax]
+   f155c:	89 82 b4 00 00 00    	mov    DWORD PTR [edx+0xb4],eax
+   f1562:	8b 07                	mov    eax,DWORD PTR [edi]
+   f1564:	c7 80 70 01 00 00 01 	mov    DWORD PTR [eax+0x170],0x1
+   f156b:	00 00 00 
+   f156e:	8b 07                	mov    eax,DWORD PTR [edi]
+   f1570:	c7 80 08 01 00 00 06 	mov    DWORD PTR [eax+0x108],0x6
+   f1577:	00 00 00 
+   f157a:	8b 07                	mov    eax,DWORD PTR [edi]
+   f157c:	80 a0 a5 01 00 00 fd 	and    BYTE PTR [eax+0x1a5],0xfd
+   f1583:	8b 83 14 1b 00 00    	mov    eax,DWORD PTR [ebx+0x1b14]
+   f1589:	d9 ee                	fldz
+   f158b:	d9 40 0c             	fld    DWORD PTR [eax+0xc]
+   f158e:	da e9                	fucompp
+   f1590:	df e0                	fnstsw ax
+   f1592:	80 e4 45             	and    ah,0x45
+   f1595:	80 fc 40             	cmp    ah,0x40
+   f1598:	74 72                	je     f160c <Killed__11CBasePlayerP9entvars_si+0x2c8>
+   f159a:	8b b3 cc 15 00 00    	mov    esi,DWORD PTR [ebx+0x15cc]
+   f15a0:	8b 06                	mov    eax,DWORD PTR [esi]
+   f15a2:	83 c4 f4             	add    esp,0xfffffff4
+   f15a5:	8b 10                	mov    edx,DWORD PTR [eax]
+   f15a7:	50                   	push   eax
+   f15a8:	8b 82 40 01 00 00    	mov    eax,DWORD PTR [edx+0x140]
+   f15ae:	ff d0                	call   eax
+   f15b0:	83 c4 10             	add    esp,0x10
+   f15b3:	84 c0                	test   al,al
+   f15b5:	74 55                	je     f160c <Killed__11CBasePlayerP9entvars_si+0x2c8>
+   f15b7:	8b 06                	mov    eax,DWORD PTR [esi]
+   f15b9:	83 c4 f4             	add    esp,0xfffffff4
+   f15bc:	8b 10                	mov    edx,DWORD PTR [eax]
+   f15be:	50                   	push   eax
+   f15bf:	8b 82 44 01 00 00    	mov    eax,DWORD PTR [edx+0x144]
+   f15c5:	ff d0                	call   eax
+   f15c7:	83 c4 10             	add    esp,0x10
+   f15ca:	84 c0                	test   al,al
+   f15cc:	74 3e                	je     f160c <Killed__11CBasePlayerP9entvars_si+0x2c8>
+   f15ce:	8d 45 f4             	lea    eax,[ebp-0xc]
+   f15d1:	83 c4 f8             	add    esp,0xfffffff8
+   f15d4:	c7 45 f4 00 00 00 00 	mov    DWORD PTR [ebp-0xc],0x0
+   f15db:	c7 45 f8 00 00 00 00 	mov    DWORD PTR [ebp-0x8],0x0
+   f15e2:	c7 45 fc 00 00 00 00 	mov    DWORD PTR [ebp-0x4],0x0
+   f15e9:	6a 05                	push   0x5
+   f15eb:	68 ff 00 00 00       	push   0xff
+   f15f0:	83 ec 04             	sub    esp,0x4
+   f15f3:	d9 83 30 98 fc ff    	fld    DWORD PTR [ebx-0x367d0]
+   f15f9:	d9 14 24             	fst    DWORD PTR [esp]
+   f15fc:	83 ec 04             	sub    esp,0x4
+   f15ff:	d9 1c 24             	fstp   DWORD PTR [esp]
+   f1602:	50                   	push   eax
+   f1603:	57                   	push   edi
+   f1604:	e8 bb 2c f9 ff       	call   842c4 <UTIL_ScreenFade__FP11CBaseEntityRC6Vectorffii@plt>
+   f1609:	eb 7d                	jmp    f1688 <Killed__11CBasePlayerP9entvars_si+0x344>
+   f160b:	90                   	nop
+   f160c:	8b 07                	mov    eax,DWORD PTR [edi]
+   f160e:	c7 80 44 02 00 00 02 	mov    DWORD PTR [eax+0x244],0x2
+   f1615:	00 00 00 
+   f1618:	8b 07                	mov    eax,DWORD PTR [edi]
+   f161a:	83 c4 f4             	add    esp,0xfffffff4
+   f161d:	8b 90 08 02 00 00    	mov    edx,DWORD PTR [eax+0x208]
+   f1623:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   f1629:	52                   	push   edx
+   f162a:	8b 80 1c 01 00 00    	mov    eax,DWORD PTR [eax+0x11c]
+   f1630:	ff d0                	call   eax
+   f1632:	89 c2                	mov    edx,eax
+   f1634:	83 c4 10             	add    esp,0x10
+   f1637:	8b 07                	mov    eax,DWORD PTR [edi]
+   f1639:	89 90 48 02 00 00    	mov    DWORD PTR [eax+0x248],edx
+   f163f:	8b 45 0c             	mov    eax,DWORD PTR [ebp+0xc]
+   f1642:	83 c4 f4             	add    esp,0xfffffff4
+   f1645:	8b 90 08 02 00 00    	mov    edx,DWORD PTR [eax+0x208]
+   f164b:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   f1651:	52                   	push   edx
+   f1652:	8b 80 1c 01 00 00    	mov    eax,DWORD PTR [eax+0x11c]
+   f1658:	ff d0                	call   eax
+   f165a:	89 c2                	mov    edx,eax
+   f165c:	83 c4 10             	add    esp,0x10
+   f165f:	8b 07                	mov    eax,DWORD PTR [edi]
+   f1661:	89 90 4c 02 00 00    	mov    DWORD PTR [eax+0x24c],edx
+   f1667:	83 c4 f8             	add    esp,0xfffffff8
+   f166a:	8b 07                	mov    eax,DWORD PTR [edi]
+   f166c:	83 c4 f4             	add    esp,0xfffffff4
+   f166f:	8b 80 4c 02 00 00    	mov    eax,DWORD PTR [eax+0x24c]
+   f1675:	50                   	push   eax
+   f1676:	e8 d9 01 f9 ff       	call   81854 <UTIL_PlayerByIndex__Fi@plt>
+   f167b:	50                   	push   eax
+   f167c:	8d 87 d4 05 00 00    	lea    eax,[edi+0x5d4]
+   f1682:	50                   	push   eax
+   f1683:	e8 7c 28 f9 ff       	call   83f04 <__as__7EHANDLEP11CBaseEntity@plt>
+   f1688:	83 c4 20             	add    esp,0x20
+   f168b:	8b 83 a8 22 00 00    	mov    eax,DWORD PTR [ebx+0x22a8]
+   f1691:	8b 10                	mov    edx,DWORD PTR [eax]
+   f1693:	8b 07                	mov    eax,DWORD PTR [edi]
+   f1695:	8b 8b 0c 13 00 00    	mov    ecx,DWORD PTR [ebx+0x130c]
+   f169b:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   f16a1:	50                   	push   eax
+   f16a2:	6a 00                	push   0x0
+   f16a4:	52                   	push   edx
+   f16a5:	6a 01                	push   0x1
+   f16a7:	8b 81 b8 00 00 00    	mov    eax,DWORD PTR [ecx+0xb8]
+   f16ad:	ff d0                	call   eax
+   f16af:	83 c4 10             	add    esp,0x10
+   f16b2:	83 c4 f4             	add    esp,0xfffffff4
+   f16b5:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   f16bb:	6a 00                	push   0x0
+   f16bd:	8b 86 c0 00 00 00    	mov    eax,DWORD PTR [esi+0xc0]
+   f16c3:	ff d0                	call   eax
+   f16c5:	8b 86 bc 00 00 00    	mov    eax,DWORD PTR [esi+0xbc]
+   f16cb:	ff d0                	call   eax
+   f16cd:	c7 87 44 04 00 00 00 	mov    DWORD PTR [edi+0x444],0x0
+   f16d4:	00 00 00 
+   f16d7:	c7 87 c4 05 00 00 00 	mov    DWORD PTR [edi+0x5c4],0x0
+   f16de:	00 00 00 
+   f16e1:	8b 83 cc 15 00 00    	mov    eax,DWORD PTR [ebx+0x15cc]
+   f16e7:	83 c4 f4             	add    esp,0xfffffff4
+   f16ea:	8b 00                	mov    eax,DWORD PTR [eax]
+   f16ec:	50                   	push   eax
+   f16ed:	e8 a2 01 f9 ff       	call   81894 <CheckOneLifeRoundConditions__12CDoDTeamPlay@plt>
+   f16f2:	83 c4 20             	add    esp,0x20
+   f16f5:	83 c4 f8             	add    esp,0xfffffff8
+   f16f8:	6a 00                	push   0x0
+   f16fa:	57                   	push   edi
+   f16fb:	e8 f4 20 f9 ff       	call   837f4 <SetSandbagState__11CBasePlayeri@plt>
+   f1700:	8b 07                	mov    eax,DWORD PTR [edi]
+   f1702:	c7 80 68 02 00 00 00 	mov    DWORD PTR [eax+0x268],0x0
+   f1709:	00 00 00 
+   f170c:	66 31 c0             	xor    ax,ax
+   f170f:	0d 00 00 ff ff       	or     eax,0xffff0000
+   f1714:	8b 93 ec 22 00 00    	mov    edx,DWORD PTR [ebx+0x22ec]
+   f171a:	89 87 9c 00 00 00    	mov    DWORD PTR [edi+0x9c],eax
+   f1720:	8b 83 08 13 00 00    	mov    eax,DWORD PTR [ebx+0x1308]
+   f1726:	89 97 a0 00 00 00    	mov    DWORD PTR [edi+0xa0],edx
+   f172c:	8b 00                	mov    eax,DWORD PTR [eax]
+   f172e:	d9 00                	fld    DWORD PTR [eax]
+   f1730:	dc 83 38 98 fc ff    	fadd   QWORD PTR [ebx-0x367c8]
+   f1736:	8b 17                	mov    edx,DWORD PTR [edi]
+   f1738:	d9 9a 04 01 00 00    	fstp   DWORD PTR [edx+0x104]
+   f173e:	8d 65 c8             	lea    esp,[ebp-0x38]
+   f1741:	5b                   	pop    ebx
+   f1742:	5e                   	pop    esi
+   f1743:	5f                   	pop    edi
+   f1744:	89 ec                	mov    esp,ebp
+   f1746:	5d                   	pop    ebp
+   f1747:	c3                   	ret
+
+Disassembly of section .fini:
+
+============================================================
+== Data symbols for ScoreInfo / Frags / Deaths
+============================================================
+0018917c D gmsgFrags
+001890f0 D gmsgScoreInfo
+001891b4 D gmsgScoreInfoLong
+00189184 D gmsgScoreShort

@@ -38,3 +38,8 @@ __pycache__/
 
 # Log files (if generated during development)
 *.log
+
+# research/ binaries — multi-MB, re-pullable from live server.
+# Keep the analysis text (.txt, .md) committed for forensics.
+research/*.so
+research/*.so.*

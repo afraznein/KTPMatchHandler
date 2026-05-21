@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.132] - 2026-05-21
+
+### Added
+
+#### Mid-match score persistence (frags + DoD score column + deaths) — disconnect/reconnect restore
+
+New 244-line subsystem captures `pev->frags` + DoD's `m_iObjScore` + `m_iDeaths` per-player at `client_disconnect` and writes them back on `dod_client_changeteam` when a player rejoins to the same team. Steam-ID keyed, in-memory only, cleared on `end_match_cleanup` + `.forcereset`. Capacity 16 (12 players + churn slack).
+
+**Three-field restore path:**
+- Frags via ReAPI `set_entvar(var_frags)` (engine-level entvar, float).
+- Deaths via `dodx_set_user_deaths` (new in KTPAMXX 2.7.17, writes `pvPrivateData + STEAM_PDOFFSET_DEATHS`).
+- Score via `dodx_set_user_score` (new in KTPAMXX 2.7.17, writes `pvPrivateData + STEAM_PDOFFSET_SCORE`).
+
+**Validation gate at SAVE time:** compares `dodx_get_user_deaths` (pdata-offset read) against `dodx_get_observed_deaths` (DODX-internal counter incremented from every engine death broadcast). Mismatch ⇒ log `event=SCORE_DEATHS_OFFSET_MISMATCH`, skip persist, clear slot. Validated flag persists into the saved row so RESTORE refuses to write back from un-validated rows. Guards against silent wrong-value SAVE that occurred on the 5/21 first-iteration test (spike captured `score=2 deaths=0` vs scoreboard `score=3 deaths=2` — caught by the gate once `g_observedDeaths` ground truth was wired).
+
+**Scoreboard refresh:** after the three pdata writes, calls `dodx_broadcast_scoreboard(id)` (new in KTPAMXX 2.7.17 — sends `ScoreShort` via direct engine-func `MESSAGE_BEGIN`, matches DoD's native format byte-for-byte). Client scoreboard reflects restored values within ~100ms of team-pick, no kill-trigger needed. Earlier iteration (v1.3.1) tried calling the AMX `message_begin` Pawn native here; that path segfaulted ATL:27019 with a vtable lookup crash at `ktpamx_i386.so+0x561c3` (documented historically in CLAUDE.md since v0.10.20: "AMX message natives crashed; DODX native works from C++ level" — the same lesson the operator learned then, accidentally re-discovered here).
+
+**Trigger semantics:** restore fires from `dod_client_changeteam` (not `client_putinserver`). At `client_putinserver` time the player is still on team 0 (pre team-pick menu), so the same-team gate inside `task_restore_player_score` always failed. `dod_client_changeteam` fires after the player picks Allies/Axis, which is the right semantic moment.
+
+**Tested 2026-05-21 on ATL:27019 baremetal:** full SAVE (`score=2 deaths=1 validated=1`) → disconnect → reconnect → RESTORE (`score=2 deaths=1`) with immediate scoreboard refresh. End-to-end validation passed. Five deploy/test/rollback cycles between v1.0 (5/11) and v1.3.3 (5/21) — see `research/OFFSETS_RESEARCH_2026-05-21.md` for the architecture findings.
+
+#### `research/` scratch dir + `scripts/{deploy,rollback,check}_*.py` + `scripts/recon_*.sh`
+
+Reusable tooling from the spike work, kept around as the canonical pattern for future score-persistence-style spike + deploy + validate work:
+- `deploy_spike_atl27019.py` + `rollback_spike_atl27019.py` — stop/SCP/backup/md5-verify/start cycle (Windows + WSL path autodetect, monitor-lockfile re-create, pgrep guard).
+- `check_atl27019_players.py` — A2S_INFO + A2S_PLAYER UDP probe with challenge handshake.
+- `recon_dod_offsets.sh` + `disas_score_funcs.sh` + `disas_death_funcs.sh` — objdump-based pdata-offset research (the workflow that confirmed `m_iObjScore` at byte 0x780, `m_iDeaths` at byte 0x784 on Ubuntu 24.04).
+- `research/OFFSETS_RESEARCH_2026-05-21.md` + `research/disas.txt` + `research/disas_death.txt` + `research/crash_20260521_restore_bt.txt` + `research/ktpamx_i386.so.atl-postrollback-20260521` — disassembly outputs and the crash backtrace from v1.3.1.
+- `research/dod_i386.so.atl-24.04` — production DoD binary pulled for offline analysis (md5 `4f4727b2…`).
+
+### Notes
+
+**Branch state:** ships on `main` but the DODX-side natives (`dodx_get_observed_deaths`, `dodx_broadcast_scoreboard`, `dodx_get/set_user_deaths`, `dodx_get/set_user_score`, separate `g_iScoreDeathsOffsetAdjust`) live on KTPAMXX branch `feature/dodx-score-persistence-spike-v1.2` and have not landed on KTPAMXX master yet. Compiling 0.10.132 against an older KTPAMXX include will fail. Fleet deploy is pending operator decision — needs (a) merge of the KTPAMXX spike branch to master + ktpamx rebuild + module deploy, AND (b) local→fleet `.new` push pipeline (currently broken — fleet is uniformly on 0.10.121 since ~Apr 30 with no `.new` files ever staged for subsequent versions).
+
+**Production fleet impact: zero today.** 24/24 active fleet instances still on 0.10.121 + pre-spike `dodx_ktp_i386.so` (md5 `cb670f75…`). ATL:27019 spike binaries were rolled back after each test iteration; production state is consistent across the fleet.
+
+---
+
 ## [0.10.131] - 2026-05-06
 
 ### `tests`: Tier 2 first-fire fixes — score-propagation + log_message-mirror

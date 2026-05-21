@@ -1,0 +1,1379 @@
+Disassembly of death-handling functions (dod_i386.so md5 4f4727b2390d3a0ed6f5ad862dd6d4be)
+
+============================================================
+== ClientKill__FP7edict_s
+============================================================
+
+/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler/research/dod_i386.so.atl-24.04:     file format elf32-i386
+
+
+Disassembly of section .init:
+
+Disassembly of section .plt:
+
+Disassembly of section .text:
+
+000a2ba8 <ClientKill__FP7edict_s>:
+   a2ba8:	55                   	push   ebp
+   a2ba9:	89 e5                	mov    ebp,esp
+   a2bab:	83 ec 10             	sub    esp,0x10
+   a2bae:	56                   	push   esi
+   a2baf:	53                   	push   ebx
+   a2bb0:	e8 00 00 00 00       	call   a2bb5 <ClientKill__FP7edict_s+0xd>
+   a2bb5:	5b                   	pop    ebx
+   a2bb6:	81 c3 43 36 10 00    	add    ebx,0x103643
+   a2bbc:	8b 75 08             	mov    esi,DWORD PTR [ebp+0x8]
+   a2bbf:	83 ee 80             	sub    esi,0xffffff80
+   a2bc2:	8b 86 08 02 00 00    	mov    eax,DWORD PTR [esi+0x208]
+   a2bc8:	85 c0                	test   eax,eax
+   a2bca:	75 1a                	jne    a2be6 <ClientKill__FP7edict_s+0x3e>
+   a2bcc:	83 c4 f4             	add    esp,0xfffffff4
+   a2bcf:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   a2bd5:	6a 00                	push   0x0
+   a2bd7:	8b 80 14 01 00 00    	mov    eax,DWORD PTR [eax+0x114]
+   a2bdd:	ff d0                	call   eax
+   a2bdf:	83 c4 10             	add    esp,0x10
+   a2be2:	85 c0                	test   eax,eax
+   a2be4:	74 06                	je     a2bec <ClientKill__FP7edict_s+0x44>
+   a2be6:	8b 50 7c             	mov    edx,DWORD PTR [eax+0x7c]
+   a2be9:	eb 03                	jmp    a2bee <ClientKill__FP7edict_s+0x46>
+   a2beb:	90                   	nop
+   a2bec:	31 d2                	xor    edx,edx
+   a2bee:	83 be 44 02 00 00 00 	cmp    DWORD PTR [esi+0x244],0x0
+   a2bf5:	75 60                	jne    a2c57 <ClientKill__FP7edict_s+0xaf>
+   a2bf7:	83 be 48 02 00 00 00 	cmp    DWORD PTR [esi+0x248],0x0
+   a2bfe:	75 57                	jne    a2c57 <ClientKill__FP7edict_s+0xaf>
+   a2c00:	83 ba 20 04 00 00 02 	cmp    DWORD PTR [edx+0x420],0x2
+   a2c07:	75 4e                	jne    a2c57 <ClientKill__FP7edict_s+0xaf>
+   a2c09:	8b 83 08 13 00 00    	mov    eax,DWORD PTR [ebx+0x1308]
+   a2c0f:	8b 00                	mov    eax,DWORD PTR [eax]
+   a2c11:	d9 00                	fld    DWORD PTR [eax]
+   a2c13:	d8 92 ec 03 00 00    	fcom   DWORD PTR [edx+0x3ec]
+   a2c19:	df e0                	fnstsw ax
+   a2c1b:	80 e4 45             	and    ah,0x45
+   a2c1e:	80 fc 01             	cmp    ah,0x1
+   a2c21:	74 32                	je     a2c55 <ClientKill__FP7edict_s+0xad>
+   a2c23:	d9 e8                	fld1
+   a2c25:	de c1                	faddp  st(1),st
+   a2c27:	83 c4 fc             	add    esp,0xfffffffc
+   a2c2a:	d9 9a ec 03 00 00    	fstp   DWORD PTR [edx+0x3ec]
+   a2c30:	c7 86 60 01 00 00 00 	mov    DWORD PTR [esi+0x160],0x0
+   a2c37:	00 00 00 
+   a2c3a:	c7 82 64 03 00 00 00 	mov    DWORD PTR [edx+0x364],0x0
+   a2c41:	00 00 00 
+   a2c44:	8b 82 54 01 00 00    	mov    eax,DWORD PTR [edx+0x154]
+   a2c4a:	6a 01                	push   0x1
+   a2c4c:	56                   	push   esi
+   a2c4d:	52                   	push   edx
+   a2c4e:	8b 40 58             	mov    eax,DWORD PTR [eax+0x58]
+   a2c51:	ff d0                	call   eax
+   a2c53:	eb 02                	jmp    a2c57 <ClientKill__FP7edict_s+0xaf>
+   a2c55:	dd d8                	fstp   st(0)
+   a2c57:	8d 65 e8             	lea    esp,[ebp-0x18]
+   a2c5a:	5b                   	pop    ebx
+   a2c5b:	5e                   	pop    esi
+   a2c5c:	89 ec                	mov    esp,ebp
+   a2c5e:	5d                   	pop    ebp
+   a2c5f:	c3                   	ret
+
+Disassembly of section .fini:
+
+============================================================
+== PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i
+============================================================
+
+/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler/research/dod_i386.so.atl-24.04:     file format elf32-i386
+
+
+Disassembly of section .init:
+
+Disassembly of section .plt:
+
+Disassembly of section .text:
+
+000b2654 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i>:
+   b2654:	55                   	push   ebp
+   b2655:	89 e5                	mov    ebp,esp
+   b2657:	83 ec 1c             	sub    esp,0x1c
+   b265a:	57                   	push   edi
+   b265b:	56                   	push   esi
+   b265c:	53                   	push   ebx
+   b265d:	e8 00 00 00 00       	call   b2662 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xe>
+   b2662:	5b                   	pop    ebx
+   b2663:	81 c3 96 3b 0f 00    	add    ebx,0xf3b96
+   b2669:	8b 75 18             	mov    esi,DWORD PTR [ebp+0x18]
+   b266c:	8d 46 fd             	lea    eax,[esi-0x3]
+   b266f:	83 f8 03             	cmp    eax,0x3
+   b2672:	76 02                	jbe    b2676 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x22>
+   b2674:	31 f6                	xor    esi,esi
+   b2676:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   b2679:	83 c4 f8             	add    esp,0xfffffff8
+   b267c:	8b 02                	mov    eax,DWORD PTR [edx]
+   b267e:	8b 4d 08             	mov    ecx,DWORD PTR [ebp+0x8]
+   b2681:	8b 80 ac 01 00 00    	mov    eax,DWORD PTR [eax+0x1ac]
+   b2687:	50                   	push   eax
+   b2688:	51                   	push   ecx
+   b2689:	e8 56 eb fc ff       	call   811e4 <IsTeamInfinite__12CDoDTeamPlayi@plt>
+   b268e:	83 c4 10             	add    esp,0x10
+   b2691:	84 c0                	test   al,al
+   b2693:	74 2b                	je     b26c0 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x6c>
+   b2695:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   b2698:	8b 82 c8 07 00 00    	mov    eax,DWORD PTR [edx+0x7c8]
+   b269e:	a9 00 00 01 00       	test   eax,0x10000
+   b26a3:	75 4b                	jne    b26f0 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x9c>
+   b26a5:	0d 00 00 01 00       	or     eax,0x10000
+   b26aa:	89 82 c8 07 00 00    	mov    DWORD PTR [edx+0x7c8],eax
+   b26b0:	83 c4 fc             	add    esp,0xfffffffc
+   b26b3:	6a 00                	push   0x0
+   b26b5:	8d 83 1e 01 fc ff    	lea    eax,[ebx-0x3fee2]
+   b26bb:	50                   	push   eax
+   b26bc:	52                   	push   edx
+   b26bd:	eb 29                	jmp    b26e8 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x94>
+   b26bf:	90                   	nop
+   b26c0:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b26c3:	8b 81 c8 07 00 00    	mov    eax,DWORD PTR [ecx+0x7c8]
+   b26c9:	a9 00 00 02 00       	test   eax,0x20000
+   b26ce:	75 20                	jne    b26f0 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x9c>
+   b26d0:	0d 00 00 02 00       	or     eax,0x20000
+   b26d5:	89 81 c8 07 00 00    	mov    DWORD PTR [ecx+0x7c8],eax
+   b26db:	83 c4 fc             	add    esp,0xfffffffc
+   b26de:	6a 00                	push   0x0
+   b26e0:	8d 83 3b 01 fc ff    	lea    eax,[ebx-0x3fec5]
+   b26e6:	50                   	push   eax
+   b26e7:	51                   	push   ecx
+   b26e8:	e8 27 11 fd ff       	call   83814 <HintMessage__11CBasePlayerPCci@plt>
+   b26ed:	83 c4 10             	add    esp,0x10
+   b26f0:	8b 45 08             	mov    eax,DWORD PTR [ebp+0x8]
+   b26f3:	83 b8 14 02 00 00 00 	cmp    DWORD PTR [eax+0x214],0x0
+   b26fa:	0f 85 e6 03 00 00    	jne    b2ae6 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x492>
+   b2700:	83 c4 f4             	add    esp,0xfffffff4
+   b2703:	8b 00                	mov    eax,DWORD PTR [eax]
+   b2705:	56                   	push   esi
+   b2706:	8b 55 14             	mov    edx,DWORD PTR [ebp+0x14]
+   b2709:	52                   	push   edx
+   b270a:	8b 55 10             	mov    edx,DWORD PTR [ebp+0x10]
+   b270d:	52                   	push   edx
+   b270e:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b2711:	51                   	push   ecx
+   b2712:	8b 55 08             	mov    edx,DWORD PTR [ebp+0x8]
+   b2715:	52                   	push   edx
+   b2716:	8b 40 7c             	mov    eax,DWORD PTR [eax+0x7c]
+   b2719:	ff d0                	call   eax
+   b271b:	8b 4d 08             	mov    ecx,DWORD PTR [ebp+0x8]
+   b271e:	83 c4 20             	add    esp,0x20
+   b2721:	83 79 04 00          	cmp    DWORD PTR [ecx+0x4],0x0
+   b2725:	0f 84 bb 03 00 00    	je     b2ae6 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x492>
+   b272b:	8b 45 0c             	mov    eax,DWORD PTR [ebp+0xc]
+   b272e:	ff 80 84 07 00 00    	inc    DWORD PTR [eax+0x784]
+   b2734:	8b 83 c4 17 00 00    	mov    eax,DWORD PTR [ebx+0x17c4]
+   b273a:	8b 93 0c 13 00 00    	mov    edx,DWORD PTR [ebx+0x130c]
+   b2740:	8b 00                	mov    eax,DWORD PTR [eax]
+   b2742:	6a 00                	push   0x0
+   b2744:	6a 00                	push   0x0
+   b2746:	50                   	push   eax
+   b2747:	6a 02                	push   0x2
+   b2749:	8b 82 b8 00 00 00    	mov    eax,DWORD PTR [edx+0xb8]
+   b274f:	ff d0                	call   eax
+   b2751:	83 c4 10             	add    esp,0x10
+   b2754:	83 c4 f4             	add    esp,0xfffffff4
+   b2757:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   b275a:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   b2760:	8b 02                	mov    eax,DWORD PTR [edx]
+   b2762:	83 c4 f4             	add    esp,0xfffffff4
+   b2765:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b276b:	50                   	push   eax
+   b276c:	8b 86 1c 01 00 00    	mov    eax,DWORD PTR [esi+0x11c]
+   b2772:	ff d0                	call   eax
+   b2774:	83 c4 10             	add    esp,0x10
+   b2777:	50                   	push   eax
+   b2778:	8b 86 c0 00 00 00    	mov    eax,DWORD PTR [esi+0xc0]
+   b277e:	ff d0                	call   eax
+   b2780:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b2783:	83 c4 f4             	add    esp,0xfffffff4
+   b2786:	8b 81 80 07 00 00    	mov    eax,DWORD PTR [ecx+0x780]
+   b278c:	50                   	push   eax
+   b278d:	8b 86 c8 00 00 00    	mov    eax,DWORD PTR [esi+0xc8]
+   b2793:	ff d0                	call   eax
+   b2795:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   b2798:	83 c4 20             	add    esp,0x20
+   b279b:	8b 02                	mov    eax,DWORD PTR [edx]
+   b279d:	83 c4 f4             	add    esp,0xfffffff4
+   b27a0:	d9 80 64 01 00 00    	fld    DWORD PTR [eax+0x164]
+   b27a6:	d9 7d fe             	fnstcw WORD PTR [ebp-0x2]
+   b27a9:	66 8b 4d fe          	mov    cx,WORD PTR [ebp-0x2]
+   b27ad:	66 81 c9 00 0c       	or     cx,0xc00
+   b27b2:	66 89 4d fc          	mov    WORD PTR [ebp-0x4],cx
+   b27b6:	d9 6d fc             	fldcw  WORD PTR [ebp-0x4]
+   b27b9:	db 5d f8             	fistp  DWORD PTR [ebp-0x8]
+   b27bc:	8b 45 f8             	mov    eax,DWORD PTR [ebp-0x8]
+   b27bf:	d9 6d fe             	fldcw  WORD PTR [ebp-0x2]
+   b27c2:	50                   	push   eax
+   b27c3:	8b 86 c8 00 00 00    	mov    eax,DWORD PTR [esi+0xc8]
+   b27c9:	ff d0                	call   eax
+   b27cb:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   b27ce:	83 c4 f4             	add    esp,0xfffffff4
+   b27d1:	8b 82 84 07 00 00    	mov    eax,DWORD PTR [edx+0x784]
+   b27d7:	50                   	push   eax
+   b27d8:	8b 86 c8 00 00 00    	mov    eax,DWORD PTR [esi+0xc8]
+   b27de:	ff d0                	call   eax
+   b27e0:	83 c4 20             	add    esp,0x20
+   b27e3:	83 c4 f4             	add    esp,0xfffffff4
+   b27e6:	6a 01                	push   0x1
+   b27e8:	8b 86 c0 00 00 00    	mov    eax,DWORD PTR [esi+0xc0]
+   b27ee:	ff d0                	call   eax
+   b27f0:	8b 86 bc 00 00 00    	mov    eax,DWORD PTR [esi+0xbc]
+   b27f6:	ff d0                	call   eax
+   b27f8:	8b 83 c8 17 00 00    	mov    eax,DWORD PTR [ebx+0x17c8]
+   b27fe:	83 c4 10             	add    esp,0x10
+   b2801:	8b 00                	mov    eax,DWORD PTR [eax]
+   b2803:	85 c0                	test   eax,eax
+   b2805:	74 05                	je     b280c <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x1b8>
+   b2807:	d9 40 0c             	fld    DWORD PTR [eax+0xc]
+   b280a:	eb 06                	jmp    b2812 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x1be>
+   b280c:	d9 83 44 02 fc ff    	fld    DWORD PTR [ebx-0x3fdbc]
+   b2812:	d9 5d f4             	fstp   DWORD PTR [ebp-0xc]
+   b2815:	83 c4 f4             	add    esp,0xfffffff4
+   b2818:	6a 00                	push   0x0
+   b281a:	6a 03                	push   0x3
+   b281c:	8b 45 0c             	mov    eax,DWORD PTR [ebp+0xc]
+   b281f:	50                   	push   eax
+   b2820:	50                   	push   eax
+   b2821:	8d 83 57 01 fc ff    	lea    eax,[ebx-0x3fea9]
+   b2827:	50                   	push   eax
+   b2828:	e8 37 04 fd ff       	call   82c64 <FireTargets__FPCcP11CBaseEntityT18USE_TYPEf@plt>
+   b282d:	c7 45 f0 00 00 00 00 	mov    DWORD PTR [ebp-0x10],0x0
+   b2834:	8b 55 10             	mov    edx,DWORD PTR [ebp+0x10]
+   b2837:	83 c4 20             	add    esp,0x20
+   b283a:	8b 82 08 02 00 00    	mov    eax,DWORD PTR [edx+0x208]
+   b2840:	85 c0                	test   eax,eax
+   b2842:	75 1a                	jne    b285e <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x20a>
+   b2844:	83 c4 f4             	add    esp,0xfffffff4
+   b2847:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b284d:	6a 00                	push   0x0
+   b284f:	8b 80 14 01 00 00    	mov    eax,DWORD PTR [eax+0x114]
+   b2855:	ff d0                	call   eax
+   b2857:	83 c4 10             	add    esp,0x10
+   b285a:	85 c0                	test   eax,eax
+   b285c:	74 06                	je     b2864 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x210>
+   b285e:	8b 78 7c             	mov    edi,DWORD PTR [eax+0x7c]
+   b2861:	eb 03                	jmp    b2866 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x212>
+   b2863:	90                   	nop
+   b2864:	31 ff                	xor    edi,edi
+   b2866:	85 ff                	test   edi,edi
+   b2868:	0f 84 78 02 00 00    	je     b2ae6 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x492>
+   b286e:	83 c4 f4             	add    esp,0xfffffff4
+   b2871:	8b 87 54 01 00 00    	mov    eax,DWORD PTR [edi+0x154]
+   b2877:	57                   	push   edi
+   b2878:	8b 40 3c             	mov    eax,DWORD PTR [eax+0x3c]
+   b287b:	ff d0                	call   eax
+   b287d:	83 c4 10             	add    esp,0x10
+   b2880:	83 f8 02             	cmp    eax,0x2
+   b2883:	75 03                	jne    b2888 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x234>
+   b2885:	89 7d f0             	mov    DWORD PTR [ebp-0x10],edi
+   b2888:	83 c4 f4             	add    esp,0xfffffff4
+   b288b:	8b 87 54 01 00 00    	mov    eax,DWORD PTR [edi+0x154]
+   b2891:	57                   	push   edi
+   b2892:	8b 80 bc 00 00 00    	mov    eax,DWORD PTR [eax+0xbc]
+   b2898:	ff d0                	call   eax
+   b289a:	83 c4 10             	add    esp,0x10
+   b289d:	85 c0                	test   eax,eax
+   b289f:	0f 84 41 02 00 00    	je     b2ae6 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x492>
+   b28a5:	83 c4 f4             	add    esp,0xfffffff4
+   b28a8:	8b 4d 10             	mov    ecx,DWORD PTR [ebp+0x10]
+   b28ab:	51                   	push   ecx
+   b28ac:	e8 33 04 fd ff       	call   82ce4 <GetClassPtr__H1Z11CBasePlayer_PX01_PX01@plt>
+   b28b1:	89 c6                	mov    esi,eax
+   b28b3:	83 c4 10             	add    esp,0x10
+   b28b6:	8b 45 0c             	mov    eax,DWORD PTR [ebp+0xc]
+   b28b9:	8b 55 10             	mov    edx,DWORD PTR [ebp+0x10]
+   b28bc:	39 10                	cmp    DWORD PTR [eax],edx
+   b28be:	0f 84 22 02 00 00    	je     b2ae6 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x492>
+   b28c4:	83 c4 fc             	add    esp,0xfffffffc
+   b28c7:	8b 4d 08             	mov    ecx,DWORD PTR [ebp+0x8]
+   b28ca:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   b28cd:	8b 01                	mov    eax,DWORD PTR [ecx]
+   b28cf:	52                   	push   edx
+   b28d0:	56                   	push   esi
+   b28d1:	51                   	push   ecx
+   b28d2:	8b 40 74             	mov    eax,DWORD PTR [eax+0x74]
+   b28d5:	ff d0                	call   eax
+   b28d7:	83 c4 fc             	add    esp,0xfffffffc
+   b28da:	6a 01                	push   0x1
+   b28dc:	50                   	push   eax
+   b28dd:	57                   	push   edi
+   b28de:	e8 e1 fd fc ff       	call   826c4 <AddFrags__11CBasePlayerii@plt>
+   b28e3:	83 c4 20             	add    esp,0x20
+   b28e6:	83 c4 f4             	add    esp,0xfffffff4
+   b28e9:	6a 00                	push   0x0
+   b28eb:	6a 03                	push   0x3
+   b28ed:	57                   	push   edi
+   b28ee:	57                   	push   edi
+   b28ef:	8d 83 66 01 fc ff    	lea    eax,[ebx-0x3fe9a]
+   b28f5:	50                   	push   eax
+   b28f6:	e8 69 03 fd ff       	call   82c64 <FireTargets__FPCcP11CBaseEntityT18USE_TYPEf@plt>
+   b28fb:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b28fe:	8b 11                	mov    edx,DWORD PTR [ecx]
+   b2900:	8b 4d f0             	mov    ecx,DWORD PTR [ebp-0x10]
+   b2903:	8b 01                	mov    eax,DWORD PTR [ecx]
+   b2905:	83 c4 20             	add    esp,0x20
+   b2908:	8b 80 ac 01 00 00    	mov    eax,DWORD PTR [eax+0x1ac]
+   b290e:	39 82 ac 01 00 00    	cmp    DWORD PTR [edx+0x1ac],eax
+   b2914:	75 16                	jne    b292c <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x2d8>
+   b2916:	d9 ee                	fldz
+   b2918:	d8 5d f4             	fcomp  DWORD PTR [ebp-0xc]
+   b291b:	df e0                	fnstsw ax
+   b291d:	80 e4 05             	and    ah,0x5
+   b2920:	74 0a                	je     b292c <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x2d8>
+   b2922:	ff 81 88 07 00 00    	inc    DWORD PTR [ecx+0x788]
+   b2928:	eb 0f                	jmp    b2939 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x2e5>
+   b292a:	89 f6                	mov    esi,esi
+   b292c:	8b 55 f0             	mov    edx,DWORD PTR [ebp-0x10]
+   b292f:	c7 82 88 07 00 00 00 	mov    DWORD PTR [edx+0x788],0x0
+   b2936:	00 00 00 
+   b2939:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b293c:	8b 01                	mov    eax,DWORD PTR [ecx]
+   b293e:	8b 4d f0             	mov    ecx,DWORD PTR [ebp-0x10]
+   b2941:	8b 11                	mov    edx,DWORD PTR [ecx]
+   b2943:	8b 92 ac 01 00 00    	mov    edx,DWORD PTR [edx+0x1ac]
+   b2949:	39 90 ac 01 00 00    	cmp    DWORD PTR [eax+0x1ac],edx
+   b294f:	75 33                	jne    b2984 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x330>
+   b2951:	d9 ee                	fldz
+   b2953:	d8 5d f4             	fcomp  DWORD PTR [ebp-0xc]
+   b2956:	df e0                	fnstsw ax
+   b2958:	80 e4 05             	and    ah,0x5
+   b295b:	74 06                	je     b2963 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x30f>
+   b295d:	ff 81 88 07 00 00    	inc    DWORD PTR [ecx+0x788]
+   b2963:	8b 86 c8 07 00 00    	mov    eax,DWORD PTR [esi+0x7c8]
+   b2969:	a8 10                	test   al,0x10
+   b296b:	75 4b                	jne    b29b8 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x364>
+   b296d:	0c 10                	or     al,0x10
+   b296f:	89 86 c8 07 00 00    	mov    DWORD PTR [esi+0x7c8],eax
+   b2975:	83 c4 fc             	add    esp,0xfffffffc
+   b2978:	6a 01                	push   0x1
+   b297a:	8d 83 88 01 fc ff    	lea    eax,[ebx-0x3fe78]
+   b2980:	eb 2c                	jmp    b29ae <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x35a>
+   b2982:	89 f6                	mov    esi,esi
+   b2984:	8b 55 f0             	mov    edx,DWORD PTR [ebp-0x10]
+   b2987:	c7 82 88 07 00 00 00 	mov    DWORD PTR [edx+0x788],0x0
+   b298e:	00 00 00 
+   b2991:	8b 86 c8 07 00 00    	mov    eax,DWORD PTR [esi+0x7c8]
+   b2997:	a8 20                	test   al,0x20
+   b2999:	75 1d                	jne    b29b8 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x364>
+   b299b:	0c 20                	or     al,0x20
+   b299d:	89 86 c8 07 00 00    	mov    DWORD PTR [esi+0x7c8],eax
+   b29a3:	83 c4 fc             	add    esp,0xfffffffc
+   b29a6:	6a 00                	push   0x0
+   b29a8:	8d 83 a7 01 fc ff    	lea    eax,[ebx-0x3fe59]
+   b29ae:	50                   	push   eax
+   b29af:	56                   	push   esi
+   b29b0:	e8 5f 0e fd ff       	call   83814 <HintMessage__11CBasePlayerPCci@plt>
+   b29b5:	83 c4 10             	add    esp,0x10
+   b29b8:	8b b3 08 13 00 00    	mov    esi,DWORD PTR [ebx+0x1308]
+   b29be:	8b 06                	mov    eax,DWORD PTR [esi]
+   b29c0:	d9 00                	fld    DWORD PTR [eax]
+   b29c2:	d9 9f 4c 04 00 00    	fstp   DWORD PTR [edi+0x44c]
+   b29c8:	d9 ee                	fldz
+   b29ca:	d8 5d f4             	fcomp  DWORD PTR [ebp-0xc]
+   b29cd:	df e0                	fnstsw ax
+   b29cf:	80 e4 05             	and    ah,0x5
+   b29d2:	0f 84 0e 01 00 00    	je     b2ae6 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x492>
+   b29d8:	db 87 88 07 00 00    	fild   DWORD PTR [edi+0x788]
+   b29de:	d8 5d f4             	fcomp  DWORD PTR [ebp-0xc]
+   b29e1:	df e0                	fnstsw ax
+   b29e3:	80 e4 45             	and    ah,0x45
+   b29e6:	80 fc 01             	cmp    ah,0x1
+   b29e9:	0f 84 f7 00 00 00    	je     b2ae6 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x492>
+   b29ef:	8b 07                	mov    eax,DWORD PTR [edi]
+   b29f1:	83 c4 f4             	add    esp,0xfffffff4
+   b29f4:	8b 90 08 02 00 00    	mov    edx,DWORD PTR [eax+0x208]
+   b29fa:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b2a00:	52                   	push   edx
+   b2a01:	8b 80 1c 01 00 00    	mov    eax,DWORD PTR [eax+0x11c]
+   b2a07:	ff d0                	call   eax
+   b2a09:	83 c4 10             	add    esp,0x10
+   b2a0c:	83 f8 01             	cmp    eax,0x1
+   b2a0f:	75 16                	jne    b2a27 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x3d3>
+   b2a11:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b2a17:	8b 80 cc 01 00 00    	mov    eax,DWORD PTR [eax+0x1cc]
+   b2a1d:	ff d0                	call   eax
+   b2a1f:	85 c0                	test   eax,eax
+   b2a21:	0f 84 bf 00 00 00    	je     b2ae6 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x492>
+   b2a27:	83 c4 f8             	add    esp,0xfffffff8
+   b2a2a:	6a 00                	push   0x0
+   b2a2c:	6a 00                	push   0x0
+   b2a2e:	6a 00                	push   0x0
+   b2a30:	8b 07                	mov    eax,DWORD PTR [edi]
+   b2a32:	8d 8b 8f fe fb ff    	lea    ecx,[ebx-0x40171]
+   b2a38:	8b 90 d0 01 00 00    	mov    edx,DWORD PTR [eax+0x1d0]
+   b2a3e:	85 d2                	test   edx,edx
+   b2a40:	74 11                	je     b2a53 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x3ff>
+   b2a42:	8b 06                	mov    eax,DWORD PTR [esi]
+   b2a44:	8b 80 98 00 00 00    	mov    eax,DWORD PTR [eax+0x98]
+   b2a4a:	80 3c 02 00          	cmp    BYTE PTR [edx+eax*1],0x0
+   b2a4e:	74 03                	je     b2a53 <PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x3ff>
+   b2a50:	8d 0c 02             	lea    ecx,[edx+eax*1]
+   b2a53:	51                   	push   ecx
+   b2a54:	8d 83 c5 01 fc ff    	lea    eax,[ebx-0x3fe3b]
+   b2a5a:	50                   	push   eax
+   b2a5b:	6a 03                	push   0x3
+   b2a5d:	e8 b2 ed fc ff       	call   81814 <UTIL_ClientPrintAll__FiPCcN41@plt>
+   b2a62:	83 c4 20             	add    esp,0x20
+   b2a65:	83 c4 fc             	add    esp,0xfffffffc
+   b2a68:	8b 55 f0             	mov    edx,DWORD PTR [ebp-0x10]
+   b2a6b:	83 c4 f4             	add    esp,0xfffffff4
+   b2a6e:	8b 02                	mov    eax,DWORD PTR [edx]
+   b2a70:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   b2a76:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b2a7c:	50                   	push   eax
+   b2a7d:	8b 86 c4 01 00 00    	mov    eax,DWORD PTR [esi+0x1c4]
+   b2a83:	ff d0                	call   eax
+   b2a85:	50                   	push   eax
+   b2a86:	8b 83 08 13 00 00    	mov    eax,DWORD PTR [ebx+0x1308]
+   b2a8c:	8b 10                	mov    edx,DWORD PTR [eax]
+   b2a8e:	8b 07                	mov    eax,DWORD PTR [edi]
+   b2a90:	8b 80 d0 01 00 00    	mov    eax,DWORD PTR [eax+0x1d0]
+   b2a96:	03 82 98 00 00 00    	add    eax,DWORD PTR [edx+0x98]
+   b2a9c:	50                   	push   eax
+   b2a9d:	8d 83 e8 01 fc ff    	lea    eax,[ebx-0x3fe18]
+   b2aa3:	50                   	push   eax
+   b2aa4:	e8 1b d7 fc ff       	call   801c4 <UTIL_LogPrintf__FPce@plt>
+   b2aa9:	83 c4 20             	add    esp,0x20
+   b2aac:	83 c4 fc             	add    esp,0xfffffffc
+   b2aaf:	6a 00                	push   0x0
+   b2ab1:	6a 00                	push   0x0
+   b2ab3:	6a 00                	push   0x0
+   b2ab5:	6a 00                	push   0x0
+   b2ab7:	8d 83 1f 02 fc ff    	lea    eax,[ebx-0x3fde1]
+   b2abd:	50                   	push   eax
+   b2abe:	6a 02                	push   0x2
+   b2ac0:	8b 07                	mov    eax,DWORD PTR [edi]
+   b2ac2:	50                   	push   eax
+   b2ac3:	e8 ac e8 fc ff       	call   81374 <ClientPrint__FP9entvars_siPCcN42@plt>
+   b2ac8:	83 c4 20             	add    esp,0x20
+   b2acb:	83 c4 f8             	add    esp,0xfffffff8
+   b2ace:	8d 83 35 02 fc ff    	lea    eax,[ebx-0x3fdcb]
+   b2ad4:	50                   	push   eax
+   b2ad5:	8b 07                	mov    eax,DWORD PTR [edi]
+   b2ad7:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b2add:	50                   	push   eax
+   b2ade:	8b 86 a4 00 00 00    	mov    eax,DWORD PTR [esi+0xa4]
+   b2ae4:	ff d0                	call   eax
+   b2ae6:	8d 65 d8             	lea    esp,[ebp-0x28]
+   b2ae9:	5b                   	pop    ebx
+   b2aea:	5e                   	pop    esi
+   b2aeb:	5f                   	pop    edi
+   b2aec:	89 ec                	mov    esp,ebp
+   b2aee:	5d                   	pop    ebp
+   b2aef:	c3                   	ret
+
+Disassembly of section .fini:
+
+============================================================
+== DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i
+============================================================
+
+/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler/research/dod_i386.so.atl-24.04:     file format elf32-i386
+
+
+Disassembly of section .init:
+
+Disassembly of section .plt:
+
+Disassembly of section .text:
+
+000b1b64 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i>:
+   b1b64:	55                   	push   ebp
+   b1b65:	89 e5                	mov    ebp,esp
+   b1b67:	83 ec 2c             	sub    esp,0x2c
+   b1b6a:	57                   	push   edi
+   b1b6b:	56                   	push   esi
+   b1b6c:	53                   	push   ebx
+   b1b6d:	e8 00 00 00 00       	call   b1b72 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xe>
+   b1b72:	5b                   	pop    ebx
+   b1b73:	81 c3 86 46 0f 00    	add    ebx,0xf4686
+   b1b79:	8b 83 bc 17 00 00    	mov    eax,DWORD PTR [ebx+0x17bc]
+   b1b7f:	c6 45 ff 00          	mov    BYTE PTR [ebp-0x1],0x0
+   b1b83:	8b 10                	mov    edx,DWORD PTR [eax]
+   b1b85:	85 d2                	test   edx,edx
+   b1b87:	74 11                	je     b1b9a <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x36>
+   b1b89:	d9 ee                	fldz
+   b1b8b:	d8 5a 0c             	fcomp  DWORD PTR [edx+0xc]
+   b1b8e:	df e0                	fnstsw ax
+   b1b90:	80 e4 45             	and    ah,0x45
+   b1b93:	80 fc 01             	cmp    ah,0x1
+   b1b96:	0f 94 45 ff          	sete   BYTE PTR [ebp-0x1]
+   b1b9a:	8b 55 10             	mov    edx,DWORD PTR [ebp+0x10]
+   b1b9d:	83 ba 08 02 00 00 00 	cmp    DWORD PTR [edx+0x208],0x0
+   b1ba4:	75 16                	jne    b1bbc <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x58>
+   b1ba6:	83 c4 f4             	add    esp,0xfffffff4
+   b1ba9:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b1baf:	6a 00                	push   0x0
+   b1bb1:	8b 80 14 01 00 00    	mov    eax,DWORD PTR [eax+0x114]
+   b1bb7:	ff d0                	call   eax
+   b1bb9:	83 c4 10             	add    esp,0x10
+   b1bbc:	8d 8b 6e ff fb ff    	lea    ecx,[ebx-0x40092]
+   b1bc2:	89 4d dc             	mov    DWORD PTR [ebp-0x24],ecx
+   b1bc5:	c7 45 f8 00 00 00 00 	mov    DWORD PTR [ebp-0x8],0x0
+   b1bcc:	c7 45 f4 00 00 00 00 	mov    DWORD PTR [ebp-0xc],0x0
+   b1bd3:	8b 7d 10             	mov    edi,DWORD PTR [ebp+0x10]
+   b1bd6:	c7 45 f0 00 00 00 00 	mov    DWORD PTR [ebp-0x10],0x0
+   b1bdd:	f6 87 a4 01 00 00 08 	test   BYTE PTR [edi+0x1a4],0x8
+   b1be4:	0f 84 e0 00 00 00    	je     b1cca <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x166>
+   b1bea:	8b 97 08 02 00 00    	mov    edx,DWORD PTR [edi+0x208]
+   b1bf0:	83 c4 f4             	add    esp,0xfffffff4
+   b1bf3:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b1bf9:	52                   	push   edx
+   b1bfa:	8b 80 1c 01 00 00    	mov    eax,DWORD PTR [eax+0x11c]
+   b1c00:	ff d0                	call   eax
+   b1c02:	89 45 f4             	mov    DWORD PTR [ebp-0xc],eax
+   b1c05:	83 c4 10             	add    esp,0x10
+   b1c08:	83 7d 14 00          	cmp    DWORD PTR [ebp+0x14],0x0
+   b1c0c:	0f 84 b8 00 00 00    	je     b1cca <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x166>
+   b1c12:	39 7d 14             	cmp    DWORD PTR [ebp+0x14],edi
+   b1c15:	75 5d                	jne    b1c74 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x110>
+   b1c17:	8b 87 08 02 00 00    	mov    eax,DWORD PTR [edi+0x208]
+   b1c1d:	85 c0                	test   eax,eax
+   b1c1f:	75 1a                	jne    b1c3b <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xd7>
+   b1c21:	83 c4 f4             	add    esp,0xfffffff4
+   b1c24:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b1c2a:	6a 00                	push   0x0
+   b1c2c:	8b 80 14 01 00 00    	mov    eax,DWORD PTR [eax+0x114]
+   b1c32:	ff d0                	call   eax
+   b1c34:	83 c4 10             	add    esp,0x10
+   b1c37:	85 c0                	test   eax,eax
+   b1c39:	74 05                	je     b1c40 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xdc>
+   b1c3b:	8b 40 7c             	mov    eax,DWORD PTR [eax+0x7c]
+   b1c3e:	eb 02                	jmp    b1c42 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xde>
+   b1c40:	31 c0                	xor    eax,eax
+   b1c42:	8b b0 68 04 00 00    	mov    esi,DWORD PTR [eax+0x468]
+   b1c48:	85 f6                	test   esi,esi
+   b1c4a:	74 7e                	je     b1cca <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x166>
+   b1c4c:	8b 86 7c 01 00 00    	mov    eax,DWORD PTR [esi+0x17c]
+   b1c52:	8d 14 c5 00 00 00 00 	lea    edx,[eax*8+0x0]
+   b1c59:	29 c2                	sub    edx,eax
+   b1c5b:	8b 8b 7c 17 00 00    	mov    ecx,DWORD PTR [ebx+0x177c]
+   b1c61:	83 c1 18             	add    ecx,0x18
+   b1c64:	8b 14 d1             	mov    edx,DWORD PTR [ecx+edx*8]
+   b1c67:	89 55 dc             	mov    DWORD PTR [ebp-0x24],edx
+   b1c6a:	89 45 f8             	mov    DWORD PTR [ebp-0x8],eax
+   b1c6d:	89 75 f0             	mov    DWORD PTR [ebp-0x10],esi
+   b1c70:	eb 58                	jmp    b1cca <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x166>
+   b1c72:	89 f6                	mov    esi,esi
+   b1c74:	8b 83 08 13 00 00    	mov    eax,DWORD PTR [ebx+0x1308]
+   b1c7a:	8b 55 14             	mov    edx,DWORD PTR [ebp+0x14]
+   b1c7d:	b9 08 00 00 00       	mov    ecx,0x8
+   b1c82:	8b 00                	mov    eax,DWORD PTR [eax]
+   b1c84:	8b 12                	mov    edx,DWORD PTR [edx]
+   b1c86:	8b 80 98 00 00 00    	mov    eax,DWORD PTR [eax+0x98]
+   b1c8c:	01 c2                	add    edx,eax
+   b1c8e:	89 d6                	mov    esi,edx
+   b1c90:	8d 83 74 ff fb ff    	lea    eax,[ebx-0x4008c]
+   b1c96:	89 c7                	mov    edi,eax
+   b1c98:	89 55 dc             	mov    DWORD PTR [ebp-0x24],edx
+   b1c9b:	fc                   	cld
+   b1c9c:	a8 00                	test   al,0x0
+   b1c9e:	f3 a6                	repz cmps BYTE PTR ds:[esi],BYTE PTR es:[edi]
+   b1ca0:	75 0a                	jne    b1cac <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x148>
+   b1ca2:	c7 45 f8 0d 00 00 00 	mov    DWORD PTR [ebp-0x8],0xd
+   b1ca9:	eb 1f                	jmp    b1cca <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x166>
+   b1cab:	90                   	nop
+   b1cac:	8b 75 dc             	mov    esi,DWORD PTR [ebp-0x24]
+   b1caf:	8d 83 7c ff fb ff    	lea    eax,[ebx-0x40084]
+   b1cb5:	89 c7                	mov    edi,eax
+   b1cb7:	b9 09 00 00 00       	mov    ecx,0x9
+   b1cbc:	fc                   	cld
+   b1cbd:	a8 00                	test   al,0x0
+   b1cbf:	f3 a6                	repz cmps BYTE PTR ds:[esi],BYTE PTR es:[edi]
+   b1cc1:	75 07                	jne    b1cca <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x166>
+   b1cc3:	c7 45 f8 0e 00 00 00 	mov    DWORD PTR [ebp-0x8],0xe
+   b1cca:	83 c4 fc             	add    esp,0xfffffffc
+   b1ccd:	6a 07                	push   0x7
+   b1ccf:	8d 83 7f fc fb ff    	lea    eax,[ebx-0x40381]
+   b1cd5:	50                   	push   eax
+   b1cd6:	8b 45 dc             	mov    eax,DWORD PTR [ebp-0x24]
+   b1cd9:	50                   	push   eax
+   b1cda:	e8 d5 03 fd ff       	call   820b4 <strncmp@plt>
+   b1cdf:	83 c4 10             	add    esp,0x10
+   b1ce2:	85 c0                	test   eax,eax
+   b1ce4:	75 06                	jne    b1cec <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x188>
+   b1ce6:	83 45 dc 07          	add    DWORD PTR [ebp-0x24],0x7
+   b1cea:	eb 6a                	jmp    b1d56 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x1f2>
+   b1cec:	83 c4 fc             	add    esp,0xfffffffc
+   b1cef:	6a 08                	push   0x8
+   b1cf1:	8d 83 85 ff fb ff    	lea    eax,[ebx-0x4007b]
+   b1cf7:	50                   	push   eax
+   b1cf8:	8b 55 dc             	mov    edx,DWORD PTR [ebp-0x24]
+   b1cfb:	52                   	push   edx
+   b1cfc:	e8 b3 03 fd ff       	call   820b4 <strncmp@plt>
+   b1d01:	83 c4 10             	add    esp,0x10
+   b1d04:	85 c0                	test   eax,eax
+   b1d06:	75 08                	jne    b1d10 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x1ac>
+   b1d08:	83 45 dc 08          	add    DWORD PTR [ebp-0x24],0x8
+   b1d0c:	eb 48                	jmp    b1d56 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x1f2>
+   b1d0e:	89 f6                	mov    esi,esi
+   b1d10:	83 c4 fc             	add    esp,0xfffffffc
+   b1d13:	6a 05                	push   0x5
+   b1d15:	8d 83 8e ff fb ff    	lea    eax,[ebx-0x40072]
+   b1d1b:	50                   	push   eax
+   b1d1c:	8b 4d dc             	mov    ecx,DWORD PTR [ebp-0x24]
+   b1d1f:	51                   	push   ecx
+   b1d20:	e8 8f 03 fd ff       	call   820b4 <strncmp@plt>
+   b1d25:	83 c4 10             	add    esp,0x10
+   b1d28:	85 c0                	test   eax,eax
+   b1d2a:	75 08                	jne    b1d34 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x1d0>
+   b1d2c:	83 45 dc 05          	add    DWORD PTR [ebp-0x24],0x5
+   b1d30:	eb 24                	jmp    b1d56 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x1f2>
+   b1d32:	89 f6                	mov    esi,esi
+   b1d34:	83 c4 fc             	add    esp,0xfffffffc
+   b1d37:	6a 06                	push   0x6
+   b1d39:	8d 83 94 ff fb ff    	lea    eax,[ebx-0x4006c]
+   b1d3f:	50                   	push   eax
+   b1d40:	8b 7d dc             	mov    edi,DWORD PTR [ebp-0x24]
+   b1d43:	57                   	push   edi
+   b1d44:	e8 6b 03 fd ff       	call   820b4 <strncmp@plt>
+   b1d49:	83 c4 10             	add    esp,0x10
+   b1d4c:	85 c0                	test   eax,eax
+   b1d4e:	75 06                	jne    b1d56 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x1f2>
+   b1d50:	83 c7 06             	add    edi,0x6
+   b1d53:	89 7d dc             	mov    DWORD PTR [ebp-0x24],edi
+   b1d56:	83 7d f8 0f          	cmp    DWORD PTR [ebp-0x8],0xf
+   b1d5a:	75 0c                	jne    b1d68 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x204>
+   b1d5c:	8d 83 9b ff fb ff    	lea    eax,[ebx-0x40065]
+   b1d62:	89 45 dc             	mov    DWORD PTR [ebp-0x24],eax
+   b1d65:	eb 10                	jmp    b1d77 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x213>
+   b1d67:	90                   	nop
+   b1d68:	83 7d f8 06          	cmp    DWORD PTR [ebp-0x8],0x6
+   b1d6c:	75 09                	jne    b1d77 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x213>
+   b1d6e:	8d 93 a1 ff fb ff    	lea    edx,[ebx-0x4005f]
+   b1d74:	89 55 dc             	mov    DWORD PTR [ebp-0x24],edx
+   b1d77:	8d 83 ab ff fb ff    	lea    eax,[ebx-0x40055]
+   b1d7d:	83 c4 f8             	add    esp,0xfffffff8
+   b1d80:	50                   	push   eax
+   b1d81:	8b 4d dc             	mov    ecx,DWORD PTR [ebp-0x24]
+   b1d84:	51                   	push   ecx
+   b1d85:	e8 3a 0f fd ff       	call   82cc4 <strcmp@plt>
+   b1d8a:	83 c4 10             	add    esp,0x10
+   b1d8d:	85 c0                	test   eax,eax
+   b1d8f:	75 1b                	jne    b1dac <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x248>
+   b1d91:	83 7d 18 03          	cmp    DWORD PTR [ebp+0x18],0x3
+   b1d95:	75 15                	jne    b1dac <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x248>
+   b1d97:	8d bb af ff fb ff    	lea    edi,[ebx-0x40051]
+   b1d9d:	89 7d dc             	mov    DWORD PTR [ebp-0x24],edi
+   b1da0:	c7 45 f8 25 00 00 00 	mov    DWORD PTR [ebp-0x8],0x25
+   b1da7:	e9 91 02 00 00       	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1dac:	8d 83 b7 ff fb ff    	lea    eax,[ebx-0x40049]
+   b1db2:	83 c4 f8             	add    esp,0xfffffff8
+   b1db5:	50                   	push   eax
+   b1db6:	8b 45 dc             	mov    eax,DWORD PTR [ebp-0x24]
+   b1db9:	50                   	push   eax
+   b1dba:	e8 05 0f fd ff       	call   82cc4 <strcmp@plt>
+   b1dbf:	83 c4 10             	add    esp,0x10
+   b1dc2:	85 c0                	test   eax,eax
+   b1dc4:	75 1e                	jne    b1de4 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x280>
+   b1dc6:	83 7d 18 04          	cmp    DWORD PTR [ebp+0x18],0x4
+   b1dca:	75 18                	jne    b1de4 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x280>
+   b1dcc:	8d 93 be ff fb ff    	lea    edx,[ebx-0x40042]
+   b1dd2:	89 55 dc             	mov    DWORD PTR [ebp-0x24],edx
+   b1dd5:	c7 45 f8 2a 00 00 00 	mov    DWORD PTR [ebp-0x8],0x2a
+   b1ddc:	e9 5c 02 00 00       	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1de1:	8d 76 00             	lea    esi,[esi+0x0]
+   b1de4:	8d 83 c9 ff fb ff    	lea    eax,[ebx-0x40037]
+   b1dea:	83 c4 f8             	add    esp,0xfffffff8
+   b1ded:	50                   	push   eax
+   b1dee:	8b 4d dc             	mov    ecx,DWORD PTR [ebp-0x24]
+   b1df1:	51                   	push   ecx
+   b1df2:	e8 cd 0e fd ff       	call   82cc4 <strcmp@plt>
+   b1df7:	83 c4 10             	add    esp,0x10
+   b1dfa:	85 c0                	test   eax,eax
+   b1dfc:	75 1e                	jne    b1e1c <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x2b8>
+   b1dfe:	83 7d 18 06          	cmp    DWORD PTR [ebp+0x18],0x6
+   b1e02:	75 18                	jne    b1e1c <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x2b8>
+   b1e04:	8d bb cd ff fb ff    	lea    edi,[ebx-0x40033]
+   b1e0a:	89 7d dc             	mov    DWORD PTR [ebp-0x24],edi
+   b1e0d:	c7 45 f8 2a 00 00 00 	mov    DWORD PTR [ebp-0x8],0x2a
+   b1e14:	e9 24 02 00 00       	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1e19:	8d 76 00             	lea    esi,[esi+0x0]
+   b1e1c:	8d b3 d5 ff fb ff    	lea    esi,[ebx-0x4002b]
+   b1e22:	83 c4 f8             	add    esp,0xfffffff8
+   b1e25:	56                   	push   esi
+   b1e26:	8b 45 dc             	mov    eax,DWORD PTR [ebp-0x24]
+   b1e29:	50                   	push   eax
+   b1e2a:	e8 95 0e fd ff       	call   82cc4 <strcmp@plt>
+   b1e2f:	83 c4 10             	add    esp,0x10
+   b1e32:	85 c0                	test   eax,eax
+   b1e34:	0f 94 c0             	sete   al
+   b1e37:	a8 01                	test   al,0x1
+   b1e39:	74 1d                	je     b1e58 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x2f4>
+   b1e3b:	83 7d 18 05          	cmp    DWORD PTR [ebp+0x18],0x5
+   b1e3f:	75 17                	jne    b1e58 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x2f4>
+   b1e41:	8d 93 dd ff fb ff    	lea    edx,[ebx-0x40023]
+   b1e47:	89 55 dc             	mov    DWORD PTR [ebp-0x24],edx
+   b1e4a:	c7 45 f8 2b 00 00 00 	mov    DWORD PTR [ebp-0x8],0x2b
+   b1e51:	e9 e7 01 00 00       	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1e56:	89 f6                	mov    esi,esi
+   b1e58:	8d 83 e9 ff fb ff    	lea    eax,[ebx-0x40017]
+   b1e5e:	83 c4 f8             	add    esp,0xfffffff8
+   b1e61:	50                   	push   eax
+   b1e62:	8b 4d dc             	mov    ecx,DWORD PTR [ebp-0x24]
+   b1e65:	51                   	push   ecx
+   b1e66:	e8 59 0e fd ff       	call   82cc4 <strcmp@plt>
+   b1e6b:	83 c4 10             	add    esp,0x10
+   b1e6e:	85 c0                	test   eax,eax
+   b1e70:	75 32                	jne    b1ea4 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x340>
+   b1e72:	8b 7d 10             	mov    edi,DWORD PTR [ebp+0x10]
+   b1e75:	83 c4 f8             	add    esp,0xfffffff8
+   b1e78:	8b 87 ac 01 00 00    	mov    eax,DWORD PTR [edi+0x1ac]
+   b1e7e:	50                   	push   eax
+   b1e7f:	8b 45 08             	mov    eax,DWORD PTR [ebp+0x8]
+   b1e82:	50                   	push   eax
+   b1e83:	e8 8c 15 fd ff       	call   83414 <IsTeamPara__12CDoDTeamPlayi@plt>
+   b1e88:	83 c4 10             	add    esp,0x10
+   b1e8b:	84 c0                	test   al,al
+   b1e8d:	74 15                	je     b1ea4 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x340>
+   b1e8f:	8d 93 f3 ff fb ff    	lea    edx,[ebx-0x4000d]
+   b1e95:	89 55 dc             	mov    DWORD PTR [ebp-0x24],edx
+   b1e98:	c7 45 f8 24 00 00 00 	mov    DWORD PTR [ebp-0x8],0x24
+   b1e9f:	e9 99 01 00 00       	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1ea4:	83 7d f0 00          	cmp    DWORD PTR [ebp-0x10],0x0
+   b1ea8:	74 7e                	je     b1f28 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x3c4>
+   b1eaa:	8d 83 fc ff fb ff    	lea    eax,[ebx-0x40004]
+   b1eb0:	83 c4 f8             	add    esp,0xfffffff8
+   b1eb3:	50                   	push   eax
+   b1eb4:	8b 4d dc             	mov    ecx,DWORD PTR [ebp-0x24]
+   b1eb7:	51                   	push   ecx
+   b1eb8:	e8 07 0e fd ff       	call   82cc4 <strcmp@plt>
+   b1ebd:	83 c4 10             	add    esp,0x10
+   b1ec0:	85 c0                	test   eax,eax
+   b1ec2:	75 28                	jne    b1eec <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x388>
+   b1ec4:	8b 7d f0             	mov    edi,DWORD PTR [ebp-0x10]
+   b1ec7:	f6 87 dc 01 00 00 01 	test   BYTE PTR [edi+0x1dc],0x1
+   b1ece:	0f 84 69 01 00 00    	je     b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1ed4:	8d 83 01 00 fc ff    	lea    eax,[ebx-0x3ffff]
+   b1eda:	89 45 dc             	mov    DWORD PTR [ebp-0x24],eax
+   b1edd:	c7 45 f8 23 00 00 00 	mov    DWORD PTR [ebp-0x8],0x23
+   b1ee4:	e9 54 01 00 00       	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1ee9:	8d 76 00             	lea    esi,[esi+0x0]
+   b1eec:	83 c4 f8             	add    esp,0xfffffff8
+   b1eef:	56                   	push   esi
+   b1ef0:	8b 55 dc             	mov    edx,DWORD PTR [ebp-0x24]
+   b1ef3:	52                   	push   edx
+   b1ef4:	e8 cb 0d fd ff       	call   82cc4 <strcmp@plt>
+   b1ef9:	83 c4 10             	add    esp,0x10
+   b1efc:	85 c0                	test   eax,eax
+   b1efe:	75 28                	jne    b1f28 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x3c4>
+   b1f00:	8b 4d f0             	mov    ecx,DWORD PTR [ebp-0x10]
+   b1f03:	f6 81 dc 01 00 00 01 	test   BYTE PTR [ecx+0x1dc],0x1
+   b1f0a:	0f 84 2d 01 00 00    	je     b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1f10:	8d bb 0d 00 fc ff    	lea    edi,[ebx-0x3fff3]
+   b1f16:	89 7d dc             	mov    DWORD PTR [ebp-0x24],edi
+   b1f19:	c7 45 f8 26 00 00 00 	mov    DWORD PTR [ebp-0x8],0x26
+   b1f20:	e9 18 01 00 00       	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1f25:	8d 76 00             	lea    esi,[esi+0x0]
+   b1f28:	8d 83 74 ff fb ff    	lea    eax,[ebx-0x4008c]
+   b1f2e:	83 c4 f8             	add    esp,0xfffffff8
+   b1f31:	50                   	push   eax
+   b1f32:	8b 45 dc             	mov    eax,DWORD PTR [ebp-0x24]
+   b1f35:	50                   	push   eax
+   b1f36:	e8 89 0d fd ff       	call   82cc4 <strcmp@plt>
+   b1f3b:	83 c4 10             	add    esp,0x10
+   b1f3e:	85 c0                	test   eax,eax
+   b1f40:	75 2a                	jne    b1f6c <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x408>
+   b1f42:	83 c4 f4             	add    esp,0xfffffff4
+   b1f45:	8b 55 08             	mov    edx,DWORD PTR [ebp+0x8]
+   b1f48:	52                   	push   edx
+   b1f49:	e8 d6 ef fc ff       	call   80f24 <IsAlliesBrit__12CDoDTeamPlay@plt>
+   b1f4e:	83 c4 10             	add    esp,0x10
+   b1f51:	84 c0                	test   al,al
+   b1f53:	74 17                	je     b1f6c <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x408>
+   b1f55:	8d 8b 1c 00 fc ff    	lea    ecx,[ebx-0x3ffe4]
+   b1f5b:	89 4d dc             	mov    DWORD PTR [ebp-0x24],ecx
+   b1f5e:	c7 45 f8 27 00 00 00 	mov    DWORD PTR [ebp-0x8],0x27
+   b1f65:	e9 d3 00 00 00       	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1f6a:	89 f6                	mov    esi,esi
+   b1f6c:	8d 83 27 00 fc ff    	lea    eax,[ebx-0x3ffd9]
+   b1f72:	83 c4 f8             	add    esp,0xfffffff8
+   b1f75:	50                   	push   eax
+   b1f76:	8b 7d dc             	mov    edi,DWORD PTR [ebp-0x24]
+   b1f79:	57                   	push   edi
+   b1f7a:	e8 45 0d fd ff       	call   82cc4 <strcmp@plt>
+   b1f7f:	83 c4 10             	add    esp,0x10
+   b1f82:	85 c0                	test   eax,eax
+   b1f84:	75 2a                	jne    b1fb0 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x44c>
+   b1f86:	83 c4 f4             	add    esp,0xfffffff4
+   b1f89:	8b 45 08             	mov    eax,DWORD PTR [ebp+0x8]
+   b1f8c:	50                   	push   eax
+   b1f8d:	e8 92 ef fc ff       	call   80f24 <IsAlliesBrit__12CDoDTeamPlay@plt>
+   b1f92:	83 c4 10             	add    esp,0x10
+   b1f95:	84 c0                	test   al,al
+   b1f97:	74 17                	je     b1fb0 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x44c>
+   b1f99:	8d 93 31 00 fc ff    	lea    edx,[ebx-0x3ffcf]
+   b1f9f:	89 55 dc             	mov    DWORD PTR [ebp-0x24],edx
+   b1fa2:	c7 45 f8 28 00 00 00 	mov    DWORD PTR [ebp-0x8],0x28
+   b1fa9:	e9 8f 00 00 00       	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1fae:	89 f6                	mov    esi,esi
+   b1fb0:	8d 83 3c 00 fc ff    	lea    eax,[ebx-0x3ffc4]
+   b1fb6:	83 c4 f8             	add    esp,0xfffffff8
+   b1fb9:	50                   	push   eax
+   b1fba:	8b 4d dc             	mov    ecx,DWORD PTR [ebp-0x24]
+   b1fbd:	51                   	push   ecx
+   b1fbe:	e8 01 0d fd ff       	call   82cc4 <strcmp@plt>
+   b1fc3:	83 c4 10             	add    esp,0x10
+   b1fc6:	85 c0                	test   eax,eax
+   b1fc8:	75 0a                	jne    b1fd4 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x470>
+   b1fca:	c7 45 f8 1d 00 00 00 	mov    DWORD PTR [ebp-0x8],0x1d
+   b1fd1:	eb 6a                	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1fd3:	90                   	nop
+   b1fd4:	8d 83 44 00 fc ff    	lea    eax,[ebx-0x3ffbc]
+   b1fda:	83 c4 f8             	add    esp,0xfffffff8
+   b1fdd:	50                   	push   eax
+   b1fde:	8b 7d dc             	mov    edi,DWORD PTR [ebp-0x24]
+   b1fe1:	57                   	push   edi
+   b1fe2:	e8 dd 0c fd ff       	call   82cc4 <strcmp@plt>
+   b1fe7:	83 c4 10             	add    esp,0x10
+   b1fea:	85 c0                	test   eax,eax
+   b1fec:	75 0a                	jne    b1ff8 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x494>
+   b1fee:	c7 45 f8 1e 00 00 00 	mov    DWORD PTR [ebp-0x8],0x1e
+   b1ff5:	eb 46                	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b1ff7:	90                   	nop
+   b1ff8:	8d 83 4d 00 fc ff    	lea    eax,[ebx-0x3ffb3]
+   b1ffe:	83 c4 f8             	add    esp,0xfffffff8
+   b2001:	50                   	push   eax
+   b2002:	8b 45 dc             	mov    eax,DWORD PTR [ebp-0x24]
+   b2005:	50                   	push   eax
+   b2006:	e8 b9 0c fd ff       	call   82cc4 <strcmp@plt>
+   b200b:	83 c4 10             	add    esp,0x10
+   b200e:	85 c0                	test   eax,eax
+   b2010:	75 0a                	jne    b201c <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4b8>
+   b2012:	c7 45 f8 1f 00 00 00 	mov    DWORD PTR [ebp-0x8],0x1f
+   b2019:	eb 22                	jmp    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b201b:	90                   	nop
+   b201c:	8d 83 52 00 fc ff    	lea    eax,[ebx-0x3ffae]
+   b2022:	83 c4 f8             	add    esp,0xfffffff8
+   b2025:	50                   	push   eax
+   b2026:	8b 55 dc             	mov    edx,DWORD PTR [ebp-0x24]
+   b2029:	52                   	push   edx
+   b202a:	e8 95 0c fd ff       	call   82cc4 <strcmp@plt>
+   b202f:	83 c4 10             	add    esp,0x10
+   b2032:	85 c0                	test   eax,eax
+   b2034:	75 07                	jne    b203d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x4d9>
+   b2036:	c7 45 f8 20 00 00 00 	mov    DWORD PTR [ebp-0x8],0x20
+   b203d:	80 7d ff 00          	cmp    BYTE PTR [ebp-0x1],0x0
+   b2041:	74 78                	je     b20bb <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x557>
+   b2043:	8b 83 c0 17 00 00    	mov    eax,DWORD PTR [ebx+0x17c0]
+   b2049:	8b 93 0c 13 00 00    	mov    edx,DWORD PTR [ebx+0x130c]
+   b204f:	8b 00                	mov    eax,DWORD PTR [eax]
+   b2051:	6a 00                	push   0x0
+   b2053:	6a 00                	push   0x0
+   b2055:	50                   	push   eax
+   b2056:	6a 02                	push   0x2
+   b2058:	8b 82 b8 00 00 00    	mov    eax,DWORD PTR [edx+0xb8]
+   b205e:	ff d0                	call   eax
+   b2060:	83 c4 10             	add    esp,0x10
+   b2063:	83 c4 f4             	add    esp,0xfffffff4
+   b2066:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   b206c:	8b 4d f4             	mov    ecx,DWORD PTR [ebp-0xc]
+   b206f:	51                   	push   ecx
+   b2070:	8b 86 c0 00 00 00    	mov    eax,DWORD PTR [esi+0xc0]
+   b2076:	ff d0                	call   eax
+   b2078:	83 c4 f4             	add    esp,0xfffffff4
+   b207b:	8b 7d 0c             	mov    edi,DWORD PTR [ebp+0xc]
+   b207e:	83 c4 10             	add    esp,0x10
+   b2081:	8b 07                	mov    eax,DWORD PTR [edi]
+   b2083:	83 c4 f4             	add    esp,0xfffffff4
+   b2086:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b208c:	50                   	push   eax
+   b208d:	8b 86 1c 01 00 00    	mov    eax,DWORD PTR [esi+0x11c]
+   b2093:	ff d0                	call   eax
+   b2095:	83 c4 10             	add    esp,0x10
+   b2098:	50                   	push   eax
+   b2099:	8b 86 c0 00 00 00    	mov    eax,DWORD PTR [esi+0xc0]
+   b209f:	ff d0                	call   eax
+   b20a1:	83 c4 f4             	add    esp,0xfffffff4
+   b20a4:	8b 45 f8             	mov    eax,DWORD PTR [ebp-0x8]
+   b20a7:	50                   	push   eax
+   b20a8:	8b 86 c0 00 00 00    	mov    eax,DWORD PTR [esi+0xc0]
+   b20ae:	ff d0                	call   eax
+   b20b0:	8b 86 bc 00 00 00    	mov    eax,DWORD PTR [esi+0xbc]
+   b20b6:	83 c4 20             	add    esp,0x20
+   b20b9:	ff d0                	call   eax
+   b20bb:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b20be:	c7 45 ec 00 00 00 00 	mov    DWORD PTR [ebp-0x14],0x0
+   b20c5:	8b 11                	mov    edx,DWORD PTR [ecx]
+   b20c7:	3b 55 10             	cmp    edx,DWORD PTR [ebp+0x10]
+   b20ca:	0f 85 e0 00 00 00    	jne    b21b0 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x64c>
+   b20d0:	8b 7d 10             	mov    edi,DWORD PTR [ebp+0x10]
+   b20d3:	83 bf ac 01 00 00 01 	cmp    DWORD PTR [edi+0x1ac],0x1
+   b20da:	75 54                	jne    b2130 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x5cc>
+   b20dc:	83 c4 f8             	add    esp,0xfffffff8
+   b20df:	8b 45 dc             	mov    eax,DWORD PTR [ebp-0x24]
+   b20e2:	50                   	push   eax
+   b20e3:	8d 83 7b f9 fb ff    	lea    eax,[ebx-0x40685]
+   b20e9:	50                   	push   eax
+   b20ea:	83 c4 f4             	add    esp,0xfffffff4
+   b20ed:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   b20f3:	8b 87 08 02 00 00    	mov    eax,DWORD PTR [edi+0x208]
+   b20f9:	50                   	push   eax
+   b20fa:	8b 86 3c 02 00 00    	mov    eax,DWORD PTR [esi+0x23c]
+   b2100:	ff d0                	call   eax
+   b2102:	83 c4 10             	add    esp,0x10
+   b2105:	50                   	push   eax
+   b2106:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   b2109:	8b 02                	mov    eax,DWORD PTR [edx]
+   b210b:	83 c4 f4             	add    esp,0xfffffff4
+   b210e:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b2114:	50                   	push   eax
+   b2115:	8b 86 c4 01 00 00    	mov    eax,DWORD PTR [esi+0x1c4]
+   b211b:	ff d0                	call   eax
+   b211d:	83 c4 10             	add    esp,0x10
+   b2120:	50                   	push   eax
+   b2121:	8b 83 08 13 00 00    	mov    eax,DWORD PTR [ebx+0x1308]
+   b2127:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b212a:	8b 10                	mov    edx,DWORD PTR [eax]
+   b212c:	8b 01                	mov    eax,DWORD PTR [ecx]
+   b212e:	eb 55                	jmp    b2185 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x621>
+   b2130:	83 c4 f8             	add    esp,0xfffffff8
+   b2133:	8b 7d dc             	mov    edi,DWORD PTR [ebp-0x24]
+   b2136:	57                   	push   edi
+   b2137:	8d 83 ac f9 fb ff    	lea    eax,[ebx-0x40654]
+   b213d:	50                   	push   eax
+   b213e:	83 c4 f4             	add    esp,0xfffffff4
+   b2141:	8b 55 10             	mov    edx,DWORD PTR [ebp+0x10]
+   b2144:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   b214a:	8b 82 08 02 00 00    	mov    eax,DWORD PTR [edx+0x208]
+   b2150:	50                   	push   eax
+   b2151:	8b 86 3c 02 00 00    	mov    eax,DWORD PTR [esi+0x23c]
+   b2157:	ff d0                	call   eax
+   b2159:	83 c4 10             	add    esp,0x10
+   b215c:	50                   	push   eax
+   b215d:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b2160:	8b 01                	mov    eax,DWORD PTR [ecx]
+   b2162:	83 c4 f4             	add    esp,0xfffffff4
+   b2165:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b216b:	50                   	push   eax
+   b216c:	8b 86 c4 01 00 00    	mov    eax,DWORD PTR [esi+0x1c4]
+   b2172:	ff d0                	call   eax
+   b2174:	83 c4 10             	add    esp,0x10
+   b2177:	50                   	push   eax
+   b2178:	8b 83 08 13 00 00    	mov    eax,DWORD PTR [ebx+0x1308]
+   b217e:	8b 7d 0c             	mov    edi,DWORD PTR [ebp+0xc]
+   b2181:	8b 10                	mov    edx,DWORD PTR [eax]
+   b2183:	8b 07                	mov    eax,DWORD PTR [edi]
+   b2185:	8b 80 d0 01 00 00    	mov    eax,DWORD PTR [eax+0x1d0]
+   b218b:	03 82 98 00 00 00    	add    eax,DWORD PTR [edx+0x98]
+   b2191:	50                   	push   eax
+   b2192:	8d 83 68 00 fc ff    	lea    eax,[ebx-0x3ff98]
+   b2198:	50                   	push   eax
+   b2199:	e8 26 e0 fc ff       	call   801c4 <UTIL_LogPrintf__FPce@plt>
+   b219e:	83 c4 20             	add    esp,0x20
+   b21a1:	c7 45 ec 00 00 00 00 	mov    DWORD PTR [ebp-0x14],0x0
+   b21a8:	e9 c8 03 00 00       	jmp    b2575 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xa11>
+   b21ad:	8d 76 00             	lea    esi,[esi+0x0]
+   b21b0:	8b 45 10             	mov    eax,DWORD PTR [ebp+0x10]
+   b21b3:	f6 80 a4 01 00 00 08 	test   BYTE PTR [eax+0x1a4],0x8
+   b21ba:	0f 84 28 03 00 00    	je     b24e8 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x984>
+   b21c0:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b21c6:	85 c0                	test   eax,eax
+   b21c8:	75 1a                	jne    b21e4 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x680>
+   b21ca:	83 c4 f4             	add    esp,0xfffffff4
+   b21cd:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b21d3:	6a 00                	push   0x0
+   b21d5:	8b 80 14 01 00 00    	mov    eax,DWORD PTR [eax+0x114]
+   b21db:	ff d0                	call   eax
+   b21dd:	83 c4 10             	add    esp,0x10
+   b21e0:	85 c0                	test   eax,eax
+   b21e2:	74 08                	je     b21ec <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x688>
+   b21e4:	8b 40 7c             	mov    eax,DWORD PTR [eax+0x7c]
+   b21e7:	89 45 e8             	mov    DWORD PTR [ebp-0x18],eax
+   b21ea:	eb 07                	jmp    b21f3 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x68f>
+   b21ec:	c7 45 e8 00 00 00 00 	mov    DWORD PTR [ebp-0x18],0x0
+   b21f3:	8b 55 10             	mov    edx,DWORD PTR [ebp+0x10]
+   b21f6:	83 ba ac 01 00 00 01 	cmp    DWORD PTR [edx+0x1ac],0x1
+   b21fd:	0f 85 e5 00 00 00    	jne    b22e8 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x784>
+   b2203:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b2206:	8b 11                	mov    edx,DWORD PTR [ecx]
+   b2208:	83 ba ac 01 00 00 01 	cmp    DWORD PTR [edx+0x1ac],0x1
+   b220f:	75 6b                	jne    b227c <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x718>
+   b2211:	83 c4 f8             	add    esp,0xfffffff8
+   b2214:	8b 7d dc             	mov    edi,DWORD PTR [ebp-0x24]
+   b2217:	57                   	push   edi
+   b2218:	8d 83 7b f9 fb ff    	lea    eax,[ebx-0x40685]
+   b221e:	89 45 e4             	mov    DWORD PTR [ebp-0x1c],eax
+   b2221:	50                   	push   eax
+   b2222:	83 c4 f4             	add    esp,0xfffffff4
+   b2225:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   b222b:	8b 82 08 02 00 00    	mov    eax,DWORD PTR [edx+0x208]
+   b2231:	50                   	push   eax
+   b2232:	8b 86 3c 02 00 00    	mov    eax,DWORD PTR [esi+0x23c]
+   b2238:	ff d0                	call   eax
+   b223a:	83 c4 10             	add    esp,0x10
+   b223d:	50                   	push   eax
+   b223e:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   b2241:	8b 02                	mov    eax,DWORD PTR [edx]
+   b2243:	83 c4 f4             	add    esp,0xfffffff4
+   b2246:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b224c:	50                   	push   eax
+   b224d:	8b 86 c4 01 00 00    	mov    eax,DWORD PTR [esi+0x1c4]
+   b2253:	ff d0                	call   eax
+   b2255:	83 c4 10             	add    esp,0x10
+   b2258:	50                   	push   eax
+   b2259:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b225c:	8b bb 08 13 00 00    	mov    edi,DWORD PTR [ebx+0x1308]
+   b2262:	8b 01                	mov    eax,DWORD PTR [ecx]
+   b2264:	8b 17                	mov    edx,DWORD PTR [edi]
+   b2266:	8b 80 d0 01 00 00    	mov    eax,DWORD PTR [eax+0x1d0]
+   b226c:	03 82 98 00 00 00    	add    eax,DWORD PTR [edx+0x98]
+   b2272:	50                   	push   eax
+   b2273:	8b 45 e4             	mov    eax,DWORD PTR [ebp-0x1c]
+   b2276:	e9 4a 01 00 00       	jmp    b23c5 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x861>
+   b227b:	90                   	nop
+   b227c:	83 c4 f8             	add    esp,0xfffffff8
+   b227f:	8b 45 dc             	mov    eax,DWORD PTR [ebp-0x24]
+   b2282:	50                   	push   eax
+   b2283:	8d 83 ac f9 fb ff    	lea    eax,[ebx-0x40654]
+   b2289:	50                   	push   eax
+   b228a:	83 c4 f4             	add    esp,0xfffffff4
+   b228d:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   b2293:	8b 82 08 02 00 00    	mov    eax,DWORD PTR [edx+0x208]
+   b2299:	50                   	push   eax
+   b229a:	8b 86 3c 02 00 00    	mov    eax,DWORD PTR [esi+0x23c]
+   b22a0:	ff d0                	call   eax
+   b22a2:	83 c4 10             	add    esp,0x10
+   b22a5:	50                   	push   eax
+   b22a6:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   b22a9:	8b 02                	mov    eax,DWORD PTR [edx]
+   b22ab:	83 c4 f4             	add    esp,0xfffffff4
+   b22ae:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b22b4:	50                   	push   eax
+   b22b5:	8b 86 c4 01 00 00    	mov    eax,DWORD PTR [esi+0x1c4]
+   b22bb:	ff d0                	call   eax
+   b22bd:	83 c4 10             	add    esp,0x10
+   b22c0:	50                   	push   eax
+   b22c1:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b22c4:	8b bb 08 13 00 00    	mov    edi,DWORD PTR [ebx+0x1308]
+   b22ca:	8b 01                	mov    eax,DWORD PTR [ecx]
+   b22cc:	8b 17                	mov    edx,DWORD PTR [edi]
+   b22ce:	8b 80 d0 01 00 00    	mov    eax,DWORD PTR [eax+0x1d0]
+   b22d4:	03 82 98 00 00 00    	add    eax,DWORD PTR [edx+0x98]
+   b22da:	50                   	push   eax
+   b22db:	8d 83 7b f9 fb ff    	lea    eax,[ebx-0x40685]
+   b22e1:	e9 df 00 00 00       	jmp    b23c5 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x861>
+   b22e6:	89 f6                	mov    esi,esi
+   b22e8:	8b 45 0c             	mov    eax,DWORD PTR [ebp+0xc]
+   b22eb:	8b 10                	mov    edx,DWORD PTR [eax]
+   b22ed:	83 ba ac 01 00 00 01 	cmp    DWORD PTR [edx+0x1ac],0x1
+   b22f4:	75 6a                	jne    b2360 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x7fc>
+   b22f6:	83 c4 f8             	add    esp,0xfffffff8
+   b22f9:	8b 4d dc             	mov    ecx,DWORD PTR [ebp-0x24]
+   b22fc:	51                   	push   ecx
+   b22fd:	8d 83 7b f9 fb ff    	lea    eax,[ebx-0x40685]
+   b2303:	50                   	push   eax
+   b2304:	83 c4 f4             	add    esp,0xfffffff4
+   b2307:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   b230d:	8b 82 08 02 00 00    	mov    eax,DWORD PTR [edx+0x208]
+   b2313:	50                   	push   eax
+   b2314:	8b 86 3c 02 00 00    	mov    eax,DWORD PTR [esi+0x23c]
+   b231a:	ff d0                	call   eax
+   b231c:	83 c4 10             	add    esp,0x10
+   b231f:	50                   	push   eax
+   b2320:	8b 7d 0c             	mov    edi,DWORD PTR [ebp+0xc]
+   b2323:	8b 07                	mov    eax,DWORD PTR [edi]
+   b2325:	83 c4 f4             	add    esp,0xfffffff4
+   b2328:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b232e:	50                   	push   eax
+   b232f:	8b 86 c4 01 00 00    	mov    eax,DWORD PTR [esi+0x1c4]
+   b2335:	ff d0                	call   eax
+   b2337:	83 c4 10             	add    esp,0x10
+   b233a:	50                   	push   eax
+   b233b:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b233e:	8b bb 08 13 00 00    	mov    edi,DWORD PTR [ebx+0x1308]
+   b2344:	8b 01                	mov    eax,DWORD PTR [ecx]
+   b2346:	8b 17                	mov    edx,DWORD PTR [edi]
+   b2348:	8b 80 d0 01 00 00    	mov    eax,DWORD PTR [eax+0x1d0]
+   b234e:	03 82 98 00 00 00    	add    eax,DWORD PTR [edx+0x98]
+   b2354:	50                   	push   eax
+   b2355:	8d 83 ac f9 fb ff    	lea    eax,[ebx-0x40654]
+   b235b:	eb 68                	jmp    b23c5 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x861>
+   b235d:	8d 76 00             	lea    esi,[esi+0x0]
+   b2360:	83 c4 f8             	add    esp,0xfffffff8
+   b2363:	8b 45 dc             	mov    eax,DWORD PTR [ebp-0x24]
+   b2366:	50                   	push   eax
+   b2367:	8d 8b ac f9 fb ff    	lea    ecx,[ebx-0x40654]
+   b236d:	89 4d e0             	mov    DWORD PTR [ebp-0x20],ecx
+   b2370:	51                   	push   ecx
+   b2371:	83 c4 f4             	add    esp,0xfffffff4
+   b2374:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   b237a:	8b 82 08 02 00 00    	mov    eax,DWORD PTR [edx+0x208]
+   b2380:	50                   	push   eax
+   b2381:	8b 86 3c 02 00 00    	mov    eax,DWORD PTR [esi+0x23c]
+   b2387:	ff d0                	call   eax
+   b2389:	83 c4 10             	add    esp,0x10
+   b238c:	50                   	push   eax
+   b238d:	8b 7d 0c             	mov    edi,DWORD PTR [ebp+0xc]
+   b2390:	8b 07                	mov    eax,DWORD PTR [edi]
+   b2392:	83 c4 f4             	add    esp,0xfffffff4
+   b2395:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b239b:	50                   	push   eax
+   b239c:	8b 86 c4 01 00 00    	mov    eax,DWORD PTR [esi+0x1c4]
+   b23a2:	ff d0                	call   eax
+   b23a4:	83 c4 10             	add    esp,0x10
+   b23a7:	50                   	push   eax
+   b23a8:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b23ab:	8b bb 08 13 00 00    	mov    edi,DWORD PTR [ebx+0x1308]
+   b23b1:	8b 01                	mov    eax,DWORD PTR [ecx]
+   b23b3:	8b 17                	mov    edx,DWORD PTR [edi]
+   b23b5:	8b 80 d0 01 00 00    	mov    eax,DWORD PTR [eax+0x1d0]
+   b23bb:	03 82 98 00 00 00    	add    eax,DWORD PTR [edx+0x98]
+   b23c1:	50                   	push   eax
+   b23c2:	8b 45 e0             	mov    eax,DWORD PTR [ebp-0x20]
+   b23c5:	50                   	push   eax
+   b23c6:	8b 55 e8             	mov    edx,DWORD PTR [ebp-0x18]
+   b23c9:	8b 02                	mov    eax,DWORD PTR [edx]
+   b23cb:	83 c4 f4             	add    esp,0xfffffff4
+   b23ce:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b23d4:	50                   	push   eax
+   b23d5:	8b 86 3c 02 00 00    	mov    eax,DWORD PTR [esi+0x23c]
+   b23db:	ff d0                	call   eax
+   b23dd:	83 c4 10             	add    esp,0x10
+   b23e0:	50                   	push   eax
+   b23e1:	8b 4d e8             	mov    ecx,DWORD PTR [ebp-0x18]
+   b23e4:	8b 01                	mov    eax,DWORD PTR [ecx]
+   b23e6:	83 c4 f4             	add    esp,0xfffffff4
+   b23e9:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b23ef:	50                   	push   eax
+   b23f0:	8b 86 c4 01 00 00    	mov    eax,DWORD PTR [esi+0x1c4]
+   b23f6:	ff d0                	call   eax
+   b23f8:	83 c4 10             	add    esp,0x10
+   b23fb:	50                   	push   eax
+   b23fc:	8b 17                	mov    edx,DWORD PTR [edi]
+   b23fe:	8b 7d e8             	mov    edi,DWORD PTR [ebp-0x18]
+   b2401:	8b 07                	mov    eax,DWORD PTR [edi]
+   b2403:	8b 80 d0 01 00 00    	mov    eax,DWORD PTR [eax+0x1d0]
+   b2409:	03 82 98 00 00 00    	add    eax,DWORD PTR [edx+0x98]
+   b240f:	50                   	push   eax
+   b2410:	8d 83 a8 00 fc ff    	lea    eax,[ebx-0x3ff58]
+   b2416:	50                   	push   eax
+   b2417:	e8 a8 dd fc ff       	call   801c4 <UTIL_LogPrintf__FPce@plt>
+   b241c:	83 c4 30             	add    esp,0x30
+   b241f:	83 7d 14 00          	cmp    DWORD PTR [ebp+0x14],0x0
+   b2423:	0f 84 4c 01 00 00    	je     b2575 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xa11>
+   b2429:	8b 55 10             	mov    edx,DWORD PTR [ebp+0x10]
+   b242c:	8b 82 08 02 00 00    	mov    eax,DWORD PTR [edx+0x208]
+   b2432:	85 c0                	test   eax,eax
+   b2434:	75 1a                	jne    b2450 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x8ec>
+   b2436:	83 c4 f4             	add    esp,0xfffffff4
+   b2439:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b243f:	6a 00                	push   0x0
+   b2441:	8b 80 14 01 00 00    	mov    eax,DWORD PTR [eax+0x114]
+   b2447:	ff d0                	call   eax
+   b2449:	83 c4 10             	add    esp,0x10
+   b244c:	85 c0                	test   eax,eax
+   b244e:	74 08                	je     b2458 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x8f4>
+   b2450:	8b 40 7c             	mov    eax,DWORD PTR [eax+0x7c]
+   b2453:	eb 05                	jmp    b245a <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x8f6>
+   b2455:	8d 76 00             	lea    esi,[esi+0x0]
+   b2458:	31 c0                	xor    eax,eax
+   b245a:	8b 80 68 04 00 00    	mov    eax,DWORD PTR [eax+0x468]
+   b2460:	85 c0                	test   eax,eax
+   b2462:	0f 84 0d 01 00 00    	je     b2575 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xa11>
+   b2468:	8b 80 7c 01 00 00    	mov    eax,DWORD PTR [eax+0x17c]
+   b246e:	48                   	dec    eax
+   b246f:	83 f8 12             	cmp    eax,0x12
+   b2472:	0f 87 f6 00 00 00    	ja     b256e <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xa0a>
+   b2478:	89 d9                	mov    ecx,ebx
+   b247a:	2b 8c 83 8c c2 f0 ff 	sub    ecx,DWORD PTR [ebx+eax*4-0xf3d74]
+   b2481:	ff e1                	jmp    ecx
+   b2483:	90                   	nop
+   b2484:	28 3d 0f 00 28 3d    	sub    BYTE PTR ds:0x3d28000f,bh
+   b248a:	0f 00 8a 3c 0f 00 8a 	str    WORD PTR [edx-0x75fff0c4]
+   b2491:	3c 0f                	cmp    al,0xf
+   b2493:	00 8a 3c 0f 00 1c    	add    BYTE PTR [edx+0x1c000f3c],cl
+   b2499:	3d 0f 00 8a 3c       	cmp    eax,0x3c8a000f
+   b249e:	0f 00 8a 3c 0f 00 1c 	str    WORD PTR [edx+0x1c000f3c]
+   b24a5:	3d 0f 00 8a 3c       	cmp    eax,0x3c8a000f
+   b24aa:	0f 00 8a 3c 0f 00 8a 	str    WORD PTR [edx-0x75fff0c4]
+   b24b1:	3c 0f                	cmp    al,0xf
+   b24b3:	00 1c 3d 0f 00 1c 3d 	add    BYTE PTR [edi*1+0x3d1c000f],bl
+   b24ba:	0f 00 1c 3d 0f 00 1c 	ltr    WORD PTR [edi*1+0x3d1c000f]
+   b24c1:	3d 
+   b24c2:	0f 00 8a 3c 0f 00 8a 	str    WORD PTR [edx-0x75fff0c4]
+   b24c9:	3c 0f                	cmp    al,0xf
+   b24cb:	00 28                	add    BYTE PTR [eax],ch
+   b24cd:	3d 0f 00 c7 45       	cmp    eax,0x45c7000f
+   b24d2:	ec                   	in     al,dx
+   b24d3:	07                   	pop    es
+   b24d4:	00 00                	add    BYTE PTR [eax],al
+   b24d6:	00 e9                	add    cl,ch
+   b24d8:	99                   	cdq
+   b24d9:	00 00                	add    BYTE PTR [eax],al
+   b24db:	00 c7                	add    bh,al
+   b24dd:	45                   	inc    ebp
+   b24de:	ec                   	in     al,dx
+   b24df:	05 00 00 00 e9       	add    eax,0xe9000000
+   b24e4:	8d 00                	lea    eax,[eax]
+   b24e6:	00 00                	add    BYTE PTR [eax],al
+   b24e8:	83 ba ac 01 00 00 01 	cmp    DWORD PTR [edx+0x1ac],0x1
+   b24ef:	75 0f                	jne    b2500 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x99c>
+   b24f1:	83 c4 f8             	add    esp,0xfffffff8
+   b24f4:	8b 7d dc             	mov    edi,DWORD PTR [ebp-0x24]
+   b24f7:	57                   	push   edi
+   b24f8:	8d 83 7b f9 fb ff    	lea    eax,[ebx-0x40685]
+   b24fe:	eb 0d                	jmp    b250d <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0x9a9>
+   b2500:	83 c4 f8             	add    esp,0xfffffff8
+   b2503:	8b 7d dc             	mov    edi,DWORD PTR [ebp-0x24]
+   b2506:	57                   	push   edi
+   b2507:	8d 83 ac f9 fb ff    	lea    eax,[ebx-0x40654]
+   b250d:	50                   	push   eax
+   b250e:	83 c4 f4             	add    esp,0xfffffff4
+   b2511:	8b b3 0c 13 00 00    	mov    esi,DWORD PTR [ebx+0x130c]
+   b2517:	8b 82 08 02 00 00    	mov    eax,DWORD PTR [edx+0x208]
+   b251d:	50                   	push   eax
+   b251e:	8b 86 3c 02 00 00    	mov    eax,DWORD PTR [esi+0x23c]
+   b2524:	ff d0                	call   eax
+   b2526:	83 c4 10             	add    esp,0x10
+   b2529:	50                   	push   eax
+   b252a:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   b252d:	8b 02                	mov    eax,DWORD PTR [edx]
+   b252f:	83 c4 f4             	add    esp,0xfffffff4
+   b2532:	8b 80 08 02 00 00    	mov    eax,DWORD PTR [eax+0x208]
+   b2538:	50                   	push   eax
+   b2539:	8b 86 c4 01 00 00    	mov    eax,DWORD PTR [esi+0x1c4]
+   b253f:	ff d0                	call   eax
+   b2541:	83 c4 10             	add    esp,0x10
+   b2544:	50                   	push   eax
+   b2545:	8b 83 08 13 00 00    	mov    eax,DWORD PTR [ebx+0x1308]
+   b254b:	8b 4d 0c             	mov    ecx,DWORD PTR [ebp+0xc]
+   b254e:	8b 10                	mov    edx,DWORD PTR [eax]
+   b2550:	8b 01                	mov    eax,DWORD PTR [ecx]
+   b2552:	8b 80 d0 01 00 00    	mov    eax,DWORD PTR [eax+0x1d0]
+   b2558:	03 82 98 00 00 00    	add    eax,DWORD PTR [edx+0x98]
+   b255e:	50                   	push   eax
+   b255f:	8d 83 e8 00 fc ff    	lea    eax,[ebx-0x3ff18]
+   b2565:	50                   	push   eax
+   b2566:	e8 59 dc fc ff       	call   801c4 <UTIL_LogPrintf__FPce@plt>
+   b256b:	83 c4 20             	add    esp,0x20
+   b256e:	c7 45 ec 04 00 00 00 	mov    DWORD PTR [ebp-0x14],0x4
+   b2575:	31 f6                	xor    esi,esi
+   b2577:	31 ff                	xor    edi,edi
+   b2579:	83 7d 14 00          	cmp    DWORD PTR [ebp+0x14],0x0
+   b257d:	74 22                	je     b25a1 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xa3d>
+   b257f:	8b 45 14             	mov    eax,DWORD PTR [ebp+0x14]
+   b2582:	83 c4 f4             	add    esp,0xfffffff4
+   b2585:	8b 90 08 02 00 00    	mov    edx,DWORD PTR [eax+0x208]
+   b258b:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b2591:	52                   	push   edx
+   b2592:	8b 80 18 01 00 00    	mov    eax,DWORD PTR [eax+0x118]
+   b2598:	ff d0                	call   eax
+   b259a:	83 c4 10             	add    esp,0x10
+   b259d:	85 c0                	test   eax,eax
+   b259f:	75 05                	jne    b25a6 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xa42>
+   b25a1:	bf 01 00 00 00       	mov    edi,0x1
+   b25a6:	85 ff                	test   edi,edi
+   b25a8:	75 2a                	jne    b25d4 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xa70>
+   b25aa:	8b 55 14             	mov    edx,DWORD PTR [ebp+0x14]
+   b25ad:	8b 82 08 02 00 00    	mov    eax,DWORD PTR [edx+0x208]
+   b25b3:	85 c0                	test   eax,eax
+   b25b5:	75 77                	jne    b262e <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xaca>
+   b25b7:	83 c4 f4             	add    esp,0xfffffff4
+   b25ba:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b25c0:	6a 00                	push   0x0
+   b25c2:	8b 80 14 01 00 00    	mov    eax,DWORD PTR [eax+0x114]
+   b25c8:	ff d0                	call   eax
+   b25ca:	83 c4 10             	add    esp,0x10
+   b25cd:	85 c0                	test   eax,eax
+   b25cf:	75 5d                	jne    b262e <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xaca>
+   b25d1:	eb 61                	jmp    b2634 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xad0>
+   b25d3:	90                   	nop
+   b25d4:	31 ff                	xor    edi,edi
+   b25d6:	83 7d 10 00          	cmp    DWORD PTR [ebp+0x10],0x0
+   b25da:	74 22                	je     b25fe <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xa9a>
+   b25dc:	8b 4d 10             	mov    ecx,DWORD PTR [ebp+0x10]
+   b25df:	83 c4 f4             	add    esp,0xfffffff4
+   b25e2:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b25e8:	8b 91 08 02 00 00    	mov    edx,DWORD PTR [ecx+0x208]
+   b25ee:	52                   	push   edx
+   b25ef:	8b 80 18 01 00 00    	mov    eax,DWORD PTR [eax+0x118]
+   b25f5:	ff d0                	call   eax
+   b25f7:	83 c4 10             	add    esp,0x10
+   b25fa:	85 c0                	test   eax,eax
+   b25fc:	75 05                	jne    b2603 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xa9f>
+   b25fe:	bf 01 00 00 00       	mov    edi,0x1
+   b2603:	85 ff                	test   edi,edi
+   b2605:	75 31                	jne    b2638 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xad4>
+   b2607:	8b 7d 10             	mov    edi,DWORD PTR [ebp+0x10]
+   b260a:	8b 87 08 02 00 00    	mov    eax,DWORD PTR [edi+0x208]
+   b2610:	85 c0                	test   eax,eax
+   b2612:	75 1a                	jne    b262e <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xaca>
+   b2614:	83 c4 f4             	add    esp,0xfffffff4
+   b2617:	8b 83 0c 13 00 00    	mov    eax,DWORD PTR [ebx+0x130c]
+   b261d:	6a 00                	push   0x0
+   b261f:	8b 80 14 01 00 00    	mov    eax,DWORD PTR [eax+0x114]
+   b2625:	ff d0                	call   eax
+   b2627:	83 c4 10             	add    esp,0x10
+   b262a:	85 c0                	test   eax,eax
+   b262c:	74 06                	je     b2634 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xad0>
+   b262e:	8b 40 7c             	mov    eax,DWORD PTR [eax+0x7c]
+   b2631:	eb 03                	jmp    b2636 <DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i+0xad2>
+   b2633:	90                   	nop
+   b2634:	31 c0                	xor    eax,eax
+   b2636:	89 c6                	mov    esi,eax
+   b2638:	83 c4 fc             	add    esp,0xfffffffc
+   b263b:	8b 45 ec             	mov    eax,DWORD PTR [ebp-0x14]
+   b263e:	50                   	push   eax
+   b263f:	56                   	push   esi
+   b2640:	8b 55 0c             	mov    edx,DWORD PTR [ebp+0xc]
+   b2643:	52                   	push   edx
+   b2644:	e8 fb 16 fd ff       	call   83d44 <UTIL_SendDirectorMessage__FP11CBaseEntityT0i@plt>
+   b2649:	8d 65 c8             	lea    esp,[ebp-0x38]
+   b264c:	5b                   	pop    ebx
+   b264d:	5e                   	pop    esi
+   b264e:	5f                   	pop    edi
+   b264f:	89 ec                	mov    esp,ebp
+   b2651:	5d                   	pop    ebp
+   b2652:	c3                   	ret
+
+Disassembly of section .fini:
+
+============================================================
+== PlayerKilled__11CSPDoDRulesP11CBasePlayerP9entvars_sT2i
+============================================================
+
+/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler/research/dod_i386.so.atl-24.04:     file format elf32-i386
+
+
+Disassembly of section .init:
+
+Disassembly of section .plt:
+
+Disassembly of section .text:
+
+00105598 <PlayerKilled__11CSPDoDRulesP11CBasePlayerP9entvars_sT2i>:
+  105598:	55                   	push   ebp
+  105599:	89 e5                	mov    ebp,esp
+  10559b:	89 ec                	mov    esp,ebp
+  10559d:	5d                   	pop    ebp
+  10559e:	c3                   	ret
+
+Disassembly of section .fini:
+
+============================================================
+== DeathNotice__11CSPDoDRulesP11CBasePlayerP9entvars_sT2i
+============================================================
+
+/mnt/n/Nein_/KTP Git Projects/KTPMatchHandler/research/dod_i386.so.atl-24.04:     file format elf32-i386
+
+
+Disassembly of section .init:
+
+Disassembly of section .plt:
+
+Disassembly of section .text:
+
+001055a0 <DeathNotice__11CSPDoDRulesP11CBasePlayerP9entvars_sT2i>:
+  1055a0:	55                   	push   ebp
+  1055a1:	89 e5                	mov    ebp,esp
+  1055a3:	89 ec                	mov    esp,ebp
+  1055a5:	5d                   	pop    ebp
+  1055a6:	c3                   	ret
+
+Disassembly of section .fini:
+

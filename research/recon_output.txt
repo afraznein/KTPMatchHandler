@@ -1,0 +1,153 @@
+=== ELF header ===
+ELF Header:
+  Magic:   7f 45 4c 46 01 01 01 00 00 00 00 00 00 00 00 00 
+  Class:                             ELF32
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              DYN (Shared object file)
+  Machine:                           Intel 80386
+  Version:                           0x1
+  Entry point address:               0x84480
+  Start of program headers:          52 (bytes into file)
+
+=== Symbol table size summary ===
+6926
+6062
+
+=== Class methods related to scoring/killing (text section symbols) ===
+0014bb90 W AddPointsToTeam__11CBaseEntityii
+000f3b94 T AddPointsToTeam__11CBasePlayerii
+0014bb88 W AddPoints__11CBaseEntityii
+000f3a38 T AddPoints__11CBasePlayerii
+000c6970 T Killed__10CBreakableP9entvars_si
+0009cb54 T Killed__11CBaseEntityP9entvars_si
+000f1344 T Killed__11CBasePlayerP9entvars_si
+000ad1dc T Killed__11CControllerP9entvars_si
+000a4570 T Killed__12CBaseMonsterP9entvars_si
+0010f918 T Killed__12CTalkMonsterP9entvars_si
+0008efb0 T Killed__13CAlliedBarneyP9entvars_si
+0010af48 T Killed__13CSquadMonsterP9entvars_si
+000fcf74 T Killed__4CRatP9entvars_si
+000fdad8 T Killed__6CRoachP9entvars_si
+000ffcbc T Killed__6CSargeP9entvars_si
+000d0e58 T Killed__8CGrenadeP9entvars_si
+00105598 T PlayerKilled__11CSPDoDRulesP11CBasePlayerP9entvars_sT2i
+000b2654 T PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i
+
+=== ALL functions with 'kill' / 'death' / 'score' / 'frag' in name (text only) ===
+000f3870 T AddFrags__11CBasePlayerii
+000f396c T AddObjScore__11CBasePlayerii
+0014bb90 W AddPointsToTeam__11CBaseEntityii
+000f3b94 T AddPointsToTeam__11CBasePlayerii
+0014bb88 W AddPoints__11CBaseEntityii
+000f3a38 T AddPoints__11CBasePlayerii
+0014fc7c W AddToTeamScores__10CGameRulesii
+00105740 T AddToTeamScores__11CSPDoDRulesii
+000b82d8 T AddToTeamScores__12CDoDTeamPlayii
+00151af4 W AllowNegativeScore__10CGameScore
+00151b0c W AwardToTeam__10CGameScore
+000bdef8 T BeamUpdatePoints__10CLightning
+000a2ba8 T ClientKill__FP7edict_s
+0014bb18 W DeathNotice__11CBaseEntityP9entvars_s
+001055a0 T DeathNotice__11CSPDoDRulesP11CBasePlayerP9entvars_sT2i
+000b1b64 T DeathNotice__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i
+00094510 T DeathSound__10CAxisGrunt
+000f0278 T DeathSound__11CBasePlayer
+000ad4c4 T DeathSound__11CController
+00090f4c T DeathSound__12CAlliedGrunt
+001529a0 W DeathSound__12CBaseMonster
+0008e908 T DeathSound__13CAlliedBarney
+000fee88 T DeathSound__6CSarge
+001511f0 W GetClassPtr__H1Z10CGameScore_PX01_PX01
+00152f30 W GetClassPtr__H1Z11CScoreEvent_PX01_PX01
+000a41ac T GetDeathActivity__12CBaseMonster
+00105abc T GetSkillCvar__FPc
+0010558c T IPointsForKill__11CSPDoDRulesP11CBasePlayerT1
+000b7844 T IPointsForKill__12CDoDTeamPlayP11CBasePlayerT1
+001053f4 T IsDeathmatch__11CSPDoDRules
+000b74cc T IsDeathmatch__12CDoDTeamPlay
+000d59e4 T KeyValue__10CGameScoreP14KeyValueData_s
+000e5d4c T KeyValue__11CScoreEventP14KeyValueData_s
+0012b7c4 T KillThink__11CDodAmmoBox
+00129160 T Kill__10CWeaponBox
+0012a19c T Kill__15CBasePlayerItem
+000c6970 T Killed__10CBreakableP9entvars_si
+0009cb54 T Killed__11CBaseEntityP9entvars_si
+000f1344 T Killed__11CBasePlayerP9entvars_si
+000ad1dc T Killed__11CControllerP9entvars_si
+000a4570 T Killed__12CBaseMonsterP9entvars_si
+0010f918 T Killed__12CTalkMonsterP9entvars_si
+0008efb0 T Killed__13CAlliedBarneyP9entvars_si
+0010af48 T Killed__13CSquadMonsterP9entvars_si
+000fcf74 T Killed__4CRatP9entvars_si
+000fdad8 T Killed__6CRoachP9entvars_si
+000ffcbc T Killed__6CSargeP9entvars_si
+000d0e58 T Killed__8CGrenadeP9entvars_si
+000f2c08 T PlayerDeathThink__11CBasePlayer
+00105aa0 T PlayerDeathThink__11CSPDoDRulesP11CBasePlayer
+000b4eb4 T PlayerDeathThink__12CDoDTeamPlayP11CBasePlayer
+00105598 T PlayerKilled__11CSPDoDRulesP11CBasePlayerP9entvars_sT2i
+000b2654 T PlayerKilled__12CDoDTeamPlayP11CBasePlayerP9entvars_sT2i
+000c2118 T PointsInit__5CBeamRC6VectorT1
+00151ac0 W Points__10CGameScore
+000cdfe4 T RefreshSkillData__10CGameRules
+000b52a4 T RefreshSkillData__12CDoDTeamPlay
+000e6064 T ScoreEventUse__11CScoreEventP11CBaseEntityT18USE_TYPEf
+000e5e9c T ScoreThink__11CScoreEvent
+0014fc64 W SendTeamScores__10CGameRulesi
+
+=== References to score/deaths string literals ===
+  240b5 DeathSound__13CAlliedBarney
+  25343 DeathSound__12CAlliedGrunt
+  25abf DeathSound__12CBaseMonster
+  261f2 DeathSound__10CAxisGrunt
+  2945c _11CController.pDeathSounds
+  29c6d DeathSound__11CController
+  2adb2 gmsgScoreInfoLong
+  2ade0 gmsgScoreInfo
+  36555 ScoreThink__11CScoreEvent
+  3656f ScoreEventUse__11CScoreEventP11CBaseEntityT18USE_TYPEf
+  3849b DeathSound__11CBasePlayer
+  39b18 DeathSound__6CSarge
+ 16e27e score_resetitemtime
+ 16e292 score_points
+ 16e29f score_resetplayerstime
+ 16e2b6 score_nextmap
+ 16e2c4 score_nextmapdelay
+ 16f4e4 ScoreInfo
+ 16f4ee ScoreInfoLong
+ 16f65a ScoreShort
+ 17b880 Deaths
+ 1e67a9 gmsgScoreInfo
+ 1e9337 ScoreThink__11CScoreEvent
+ 1f06c1 DeathSound__12CBaseMonster
+ 1f4273 DeathSound__11CController
+ 1f5829 DeathSound__10CAxisGrunt
+ 1f66f0 DeathSound__6CSarge
+ 1f7566 DeathSound__11CBasePlayer
+ 1f9703 gmsgScoreInfoLong
+ 1fae80 ScoreEventUse__11CScoreEventP11CBaseEntityT18USE_TYPEf
+
+=== Largest data symbols (suspect class instance layouts) ===
+00001000 D weaponnames
+0000128f T Host_Say__FP7edict_si
+000013da T DrawBox__FPA2_fUcUcUc
+000013ec T ResetEnts__Fv
+0000148c T BuildNodeGraph__9CTestHull
+000016cf T ClientCommand__12CDoDTeamPlayP11CBasePlayerPCc
+00001751 T ClientPrecache__Fv
+00001861 T StartTask__12CBaseMonsterP6Task_t
+000018cb T GameDLLInit__Fv
+00001a00 B grgszTextureName
+00001a28 T FireBullets__11CBaseEntityUiG6VectorN22fiiiP9entvars_s
+00001ddc D g_ParaClassInfo
+000020cc B WorldGraph
+000027d0 D g_ClassInfo
+000028a0 B rgsentenceg
+00002ba8 T SV_StudioSetupBones__FP7model_sfiPCfT3PCUcT5iPC7edict_s
+000037bc D P_WpnInfo
+00004718 b gTextureMaterials
+00006000 B gszallsentencenames
+0002bf00 b g_PVSStatus
