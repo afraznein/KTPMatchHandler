@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.132"
+#define PLUGIN_VERSION "0.10.133"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -119,6 +119,45 @@ new g_acEndPayload[256];             // JSON body buffer for POST /api/match/end
 #if defined HAS_CURL
 new curl_slist: g_acCurlHeaders = SList_Empty;  // persistent headers slist (never freed — async safety)
 #endif
+
+// ---------- 0.5.0 Weapon Timeline Enrichment ----------
+// Ring buffers for the dod_client_weaponswitch + client_damage forwards.
+// Flushed every WEAPON_FLUSH_INTERVAL seconds via amxxcurl POST to
+// /api/match/weapon-timeline-batch. On overflow we LIFO-drop oldest entries
+// rather than block the forward — losing 0.01% of weapon events on a fire-
+// storm is preferable to introducing back-pressure on the game tick.
+//
+// Sized for ~30s window of a 12-player match: typical switches ~5-10/min/player
+// = 30-60 in 30s across the fleet, peak hits during a heavy engagement
+// ~5-10/sec aggregate = up to ~300 in 30s. Buffers accordingly. JSON payload
+// fits in ~14KB (well under the 16KB COPYPOSTFIELDS reasonable ceiling).
+//
+// Design doc: KTPAntiCheat/docs/WEAPON_ID_ENRICHMENT_DESIGN.md
+#define WEAPON_FLUSH_INTERVAL 30.0
+#define WEAPON_SW_BUFFER_SIZE 64
+#define WEAPON_HIT_BUFFER_SIZE 128
+
+// Parallel-array storage (Pawn has no structs). steam_id stored as authid string
+// because that's the canonical AC ID; weapon_id maps to DODW_* enum from dodconst.inc.
+// Timestamps are floats from get_gametime() (monotonic from server boot); the API
+// stores them as BIGINT ms — multiply by 1000 at JSON build time.
+new g_swSteamId[WEAPON_SW_BUFFER_SIZE][32];
+new g_swWeaponId[WEAPON_SW_BUFFER_SIZE];
+new Float:g_swTimestamp[WEAPON_SW_BUFFER_SIZE];
+new g_swCount = 0;
+new g_swDropped = 0;                            // observability for buffer-overflow events
+
+new g_hitAttSteamId[WEAPON_HIT_BUFFER_SIZE][32];
+new g_hitVicSteamId[WEAPON_HIT_BUFFER_SIZE][32];
+new g_hitWeaponId[WEAPON_HIT_BUFFER_SIZE];
+new Float:g_hitTimestamp[WEAPON_HIT_BUFFER_SIZE];
+new g_hitDamage[WEAPON_HIT_BUFFER_SIZE];
+new g_hitHitplace[WEAPON_HIT_BUFFER_SIZE];
+new g_hitTeamAttack[WEAPON_HIT_BUFFER_SIZE];
+new g_hitCount = 0;
+new g_hitDropped = 0;
+
+new g_weaponTimelineJsonBuf[14336];             // 14KB JSON payload scratch — preallocated, NEVER on stack
 
 // ---------- Match Types ----------
 enum MatchType {
@@ -2351,6 +2390,13 @@ stock send_ac_match_announce(const matchId[]) {
 stock send_ac_match_end(const matchId[]) {
     if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !matchId[0] || !g_acServerEndpoint[0]) return;
 
+    // 0.5.0 — drain any pending weapon-timeline events BEFORE marking the
+    // match ended. Otherwise the next 30s periodic flush would either
+    // (a) see an empty match_id and drop the events on the floor, or
+    // (b) attribute the events to a different match if a new one started.
+    // Order matters: drain → mark ended.
+    send_ac_weapon_timeline_batch();
+
     formatex(g_acEndPayload, charsmax(g_acEndPayload),
         "{^"matchId^":^"%s^",^"serverEndpoint^":^"%s^"}",
         matchId, g_acServerEndpoint);
@@ -2374,7 +2420,156 @@ stock send_ac_match_end(const matchId[]) {
     curl_easy_perform(curl, "ac_callback");
 }
 
+// ================ 0.5.0 Weapon Timeline Batch Flush ================
+// Builds the JSON payload from the ring buffers and POSTs to
+// /api/match/weapon-timeline-batch. Called from the periodic flush task +
+// at match end. Clears the buffers on send regardless of HTTP outcome —
+// retries on transient API outage would risk infinite buffer growth, and
+// the 30d retention on the API side means brief gaps are acceptable.
+stock send_ac_weapon_timeline_batch() {
+    if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !g_acServerEndpoint[0]) return;
+    if (g_swCount == 0 && g_hitCount == 0) return;
+
+    new matchId[64];
+    dodx_get_match_id(matchId, charsmax(matchId));
+    if (!matchId[0]) {
+        // No active match — drain the buffers silently. Switches/hits captured
+        // during warmup or pre-match shouldn't be associated with whatever
+        // future match-id eventually gets assigned.
+        g_swCount = 0;
+        g_hitCount = 0;
+        return;
+    }
+
+    // Build JSON. formatex returns the bytes written; we accumulate the cursor
+    // manually so we can chain efficiently. The pre-allocated buffer is
+    // 14336 bytes; each switch is ~70 bytes max, each hit is ~180 bytes max.
+    // Buffer guards (g_weaponTimelineJsonBuf - 256) leave headroom for the
+    // closing braces.
+    new pos = 0;
+    new buflen = sizeof(g_weaponTimelineJsonBuf) - 1;
+    new headroom = buflen - 256;
+
+    pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos,
+        "{^"matchId^":^"%s^",^"switches^":[", matchId);
+
+    new emitted = 0;
+    for (new i = 0; i < g_swCount && pos < headroom; i++) {
+        new ts_ms = floatround(g_swTimestamp[i] * 1000.0);
+        pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos,
+            "%s{^"steamId^":^"%s^",^"weaponId^":%d,^"tsMs^":%d}",
+            (emitted > 0 ? "," : ""),
+            g_swSteamId[i], g_swWeaponId[i], ts_ms);
+        emitted++;
+    }
+    new swEmitted = emitted;
+
+    pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos, "],^"hits^":[");
+
+    emitted = 0;
+    for (new i = 0; i < g_hitCount && pos < headroom; i++) {
+        new ts_ms = floatround(g_hitTimestamp[i] * 1000.0);
+        pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos,
+            "%s{^"attSteamId^":^"%s^",^"vicSteamId^":^"%s^",^"weaponId^":%d,^"tsMs^":%d,^"damage^":%d,^"hitplace^":%d,^"teamAttack^":%d}",
+            (emitted > 0 ? "," : ""),
+            g_hitAttSteamId[i], g_hitVicSteamId[i], g_hitWeaponId[i],
+            ts_ms, g_hitDamage[i], g_hitHitplace[i], g_hitTeamAttack[i]);
+        emitted++;
+    }
+    new hitEmitted = emitted;
+
+    pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos, "]}");
+
+    new url[256];
+    formatex(url, charsmax(url), "%s/api/match/weapon-timeline-batch", g_acApiBaseUrl);
+
+    new CURL:curl = curl_easy_init();
+    if (!curl) {
+        log_ktp("event=AC_ERROR reason='curl_init_failed' endpoint=weapon-timeline-batch");
+        // Still clear buffers — retry would just keep failing and balloon memory.
+        g_swCount = 0;
+        g_hitCount = 0;
+        return;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_acCurlHeaders);
+    curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_weaponTimelineJsonBuf);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
+
+    log_ktp("event=AC_WEAPON_TIMELINE_SEND match_id=%s sw=%d hit=%d dropped_sw=%d dropped_hit=%d bytes=%d",
+        matchId, swEmitted, hitEmitted, g_swDropped, g_hitDropped, pos);
+
+    curl_easy_perform(curl, "ac_callback");
+
+    g_swCount = 0;
+    g_hitCount = 0;
+    g_swDropped = 0;
+    g_hitDropped = 0;
+}
+
 #endif  // HAS_CURL
+
+// ================ 0.5.0 Weapon Timeline Forward Handlers ================
+// Append-to-ring-buffer handlers for dod_client_weaponswitch + client_damage.
+// Gated on: AC config loaded + active match + player alive + non-spectator.
+// LIFO-drop on overflow; bump the dropped-counter for observability.
+
+public dod_client_weaponswitch(id, wpnew, wpnold) {
+    if (!g_acApiBaseUrl[0]) return;             // AC integration disabled
+    if (!is_user_alive(id)) return;             // dead or spectator
+    if (get_user_team(id) == 0) return;         // explicit spectator filter
+    if (!dodx_get_match_id(g_weaponTimelineJsonBuf, 1)) return;  // no active match (1-byte probe)
+
+    // wpnew is the DODW_* weapon ID being switched TO. wpnold is what they
+    // had before. We only care about the destination weapon — the consumer
+    // wants "what was equipped at time T", so wpnew gives us the answer.
+    if (wpnew <= 0) return;
+
+    if (g_swCount >= WEAPON_SW_BUFFER_SIZE) {
+        g_swDropped++;
+        return;
+    }
+
+    new steam_id[32];
+    get_user_authid(id, steam_id, charsmax(steam_id));
+    copy(g_swSteamId[g_swCount], charsmax(g_swSteamId[]), steam_id);
+    g_swWeaponId[g_swCount] = wpnew;
+    g_swTimestamp[g_swCount] = get_gametime();
+    g_swCount++;
+}
+
+public client_damage(att, vic, dmg, wpn, hitplace, TA) {
+    if (!g_acApiBaseUrl[0]) return;
+    if (!is_user_alive(att) || !is_user_alive(vic)) return;
+    if (get_user_team(att) == 0 || get_user_team(vic) == 0) return;
+    if (!dodx_get_match_id(g_weaponTimelineJsonBuf, 1)) return;
+    if (wpn <= 0) return;
+
+    if (g_hitCount >= WEAPON_HIT_BUFFER_SIZE) {
+        g_hitDropped++;
+        return;
+    }
+
+    new att_id[32], vic_id[32];
+    get_user_authid(att, att_id, charsmax(att_id));
+    get_user_authid(vic, vic_id, charsmax(vic_id));
+    copy(g_hitAttSteamId[g_hitCount], charsmax(g_hitAttSteamId[]), att_id);
+    copy(g_hitVicSteamId[g_hitCount], charsmax(g_hitVicSteamId[]), vic_id);
+    g_hitWeaponId[g_hitCount] = wpn;
+    g_hitTimestamp[g_hitCount] = get_gametime();
+    g_hitDamage[g_hitCount] = dmg;
+    g_hitHitplace[g_hitCount] = hitplace;
+    g_hitTeamAttack[g_hitCount] = TA;
+    g_hitCount++;
+}
+
+public task_flush_weapon_timeline() {
+#if defined HAS_CURL
+    send_ac_weapon_timeline_batch();
+#endif
+}
 
 // ================= INI map→cfg =================
 stock load_map_mappings() {
@@ -3673,6 +3868,11 @@ public plugin_init() {
 
     g_lastUnpauseBy[0] = EOS;
     g_lastPauseBy[0] = EOS;
+
+    // 0.5.0 — weapon timeline batch flush task. Fires every WEAPON_FLUSH_INTERVAL
+    // seconds; if buffers are empty or AC integration is disabled, the call
+    // is a cheap no-op. The 'b' flag makes it repeating.
+    set_task(WEAPON_FLUSH_INTERVAL, "task_flush_weapon_timeline", 0, _, _, "b");
 
     // read CVARs to apply live values
     ktp_sync_config_from_cvars();

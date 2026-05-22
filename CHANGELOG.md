@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.133] - 2026-05-23
+
+### Added
+
+#### Weapon timeline enrichment for KTPAntiCheat 0.5.0 (SuspiciousRecoilControl v1 prerequisite)
+
+Hooks `dod_client_weaponswitch` + `client_damage` forwards into ring buffers, flushes batched to the AC API every 30s via amxxcurl POST to `/api/match/weapon-timeline-batch`. Feeds the v1 SuspiciousRecoilControl detector (in `KTPAntiCheat.Desktop`'s `InputMonitorService`) which gates the negative-dY mouse-burst signature on a known-spray-pattern weapon window — gives the detector enough context to distinguish "recoil-controller on MP44" from "player aiming down at a low target."
+
+**Architectural constraint that drove the design (per memory `extension_mode_no_fakemeta.md`):** production KTPAMXX runs in REHLDS extension mode without Metamod, so `RegisterHam Ham_Weapon_PrimaryAttack` is unavailable (fakemeta / hamsandwich won't load). Per-shot tracking via Ham was the original sketch; replaced with existing DODX forwards which work in extension mode.
+
+**State:**
+- `g_swSteamId[64][32]` / `g_swWeaponId[64]` / `Float:g_swTimestamp[64]` — switch ring buffer
+- `g_hitAttSteamId[128][32]` / `g_hitVicSteamId[128][32]` / `g_hitWeaponId[128]` / `Float:g_hitTimestamp[128]` / `g_hitDamage[128]` / `g_hitHitplace[128]` / `g_hitTeamAttack[128]` — hit ring buffer
+- `g_swDropped` / `g_hitDropped` counters for buffer-overflow observability (logged on each flush)
+- `g_weaponTimelineJsonBuf[14336]` — preallocated 14KB JSON scratch (NEVER on stack)
+
+**Gating:**
+- AC integration disabled (no `ac.ini` or missing keys) → forwards no-op immediately, zero overhead
+- Player dead / spectator → not captured
+- No active `dodx_get_match_id` → not captured (warmup events silently dropped)
+- Buffer at cap → drop new entry + bump dropped-counter (LIFO drop; prefer losing 0.01% to back-pressure on the game tick)
+
+**Flush:**
+- Periodic `task_flush_weapon_timeline` every 30s via `set_task(WEAPON_FLUSH_INTERVAL, ..., "b")`
+- Match-end: `send_ac_match_end()` now calls `send_ac_weapon_timeline_batch()` FIRST, so pending events are attributed to the closing match before `dodx_get_match_id` clears
+- Half-end: no explicit flush yet — events carry their own timestamps and the next 30s periodic flush picks them up; `dodx_get_match_id` stays stable across half boundary so the events still get the right match-id attribution. (If we observe gaps in production, half-end becomes a future flush trigger.)
+
+**JSON payload format (`POST /api/match/weapon-timeline-batch`):**
+```json
+{"matchId":"1768174986-ATL1",
+ "switches":[{"steamId":"STEAM_0:1:1234","weaponId":7,"tsMs":152340},...],
+ "hits":[{"attSteamId":"STEAM_0:1:1234","vicSteamId":"STEAM_0:0:5678",
+          "weaponId":7,"tsMs":152892,"damage":35,"hitplace":2,"teamAttack":0},...]}
+```
+
+Buffer truncates safely if JSON would exceed 14KB headroom (256-byte tail margin reserved for closing braces). At 12-player matchday peaks the worst-case 30s flush is ~14KB; sub-cap flushes are typical.
+
+**Observability:** every flush logs `event=AC_WEAPON_TIMELINE_SEND match_id=<m> sw=<count> hit=<count> dropped_sw=<n> dropped_hit=<n> bytes=<size>`.
+
+**Cross-repo dependency:** KTPAntiCheat 0.5.0 SQL migration `2026-05-23-weapon-timeline.sql` creates the `ktp_ac_weapon_switches` + `ktp_ac_weapon_hits` tables on the data server. Until that migration is applied, the plugin POSTs land 500 (table missing) and amxxcurl logs `event=AC_HTTP_ERROR http=500` — no crash, no game-side impact. Plugin can ship before the migration runs; events just get dropped on the API side.
+
+Design doc: `KTPAntiCheat/docs/WEAPON_ID_ENRICHMENT_DESIGN.md`.
+
+---
+
 ## [0.10.132] - 2026-05-21
 
 ### Added
