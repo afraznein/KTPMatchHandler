@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.134] - 2026-05-22
+
+### Added
+
+#### `ktp_ac_baseline_mode` cvar for solo spray-baseline captures
+
+Lets a single operator (no opposing team, no `.scrim` ready handshake) record per-weapon spray-pattern reference data that still reaches the AC API. When `ktp_ac_baseline_mode "1"`, `send_ac_weapon_timeline_batch()` synthesizes a stable `baseline-<hostname>-<unixts>` match_id and uploads under that instead of dropping the buffers as it does during regular warmup.
+
+Use case: 0.5.0 SuspiciousRecoilControl baseline collection — the analyzer needs ground-truth weapon-equipped windows from the server to cross-reference against client mouse-input clusters, but the standard match flow requires both teams to `.confirm` + `.rdy` which a single tester can't satisfy. This cvar bypasses the gate purely for the upload path; nothing else in the match state machine is affected.
+
+**Implementation:**
+- New cvar `ktp_ac_baseline_mode` registered in `plugin_cfg` (default `"0"` — off).
+- New `g_baselineMatchId[64]` cache; first batch after enable synthesizes the id, subsequent batches within the same session reuse it (so the API correlates them as one continuous capture). Cleared whenever the cvar reads 0 so re-enabling produces a fresh id.
+- Synth uses `g_serverHostname` (the already-cached hostname cvar) + `get_systime()`.
+- Logs `event=AC_BASELINE_MATCH_ID_SYNTH match_id=<id>` once per session for observability.
+
+**Out-of-scope:** doesn't bypass the match-flow `.rdy` gate, doesn't emit pre-match-start / mid-match Discord events, doesn't satisfy any of the existing match-id-required code paths beyond the weapon timeline upload itself. If you start a real match while baseline_mode is on, the real `dodx_get_match_id()` takes precedence — the baseline id is only used as a fallback.
+
+**Verification path:** `rcon ktp_ac_baseline_mode 1` → spawn solo → switch to weapon → fire → wait 30s → tail log for `event=AC_WEAPON_TIMELINE_SEND match_id=baseline-...`.
+
+---
+
 ## [0.10.133] - 2026-05-23
 
 ### Added

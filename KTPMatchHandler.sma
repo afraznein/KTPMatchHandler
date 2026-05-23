@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.133"
+#define PLUGIN_VERSION "0.10.134"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -158,6 +158,15 @@ new g_hitCount = 0;
 new g_hitDropped = 0;
 
 new g_weaponTimelineJsonBuf[14336];             // 14KB JSON payload scratch — preallocated, NEVER on stack
+
+// Baseline recording mode — when ktp_ac_baseline_mode is 1, weapon-timeline
+// batches upload under a synthetic match_id ("baseline-<host>-<unixts>")
+// instead of being dropped during warmup. Lets a single operator capture
+// per-weapon spray references without the .scrim two-team-ready ceremony.
+// The synthesized id is stable across flushes within one session (so the API
+// can correlate them) and is cleared as soon as the cvar reads 0 again.
+new g_cvarAcBaselineMode;
+new g_baselineMatchId[64];
 
 // ---------- Match Types ----------
 enum MatchType {
@@ -2433,12 +2442,23 @@ stock send_ac_weapon_timeline_batch() {
     new matchId[64];
     dodx_get_match_id(matchId, charsmax(matchId));
     if (!matchId[0]) {
-        // No active match — drain the buffers silently. Switches/hits captured
-        // during warmup or pre-match shouldn't be associated with whatever
-        // future match-id eventually gets assigned.
-        g_swCount = 0;
-        g_hitCount = 0;
-        return;
+        // No active match. If baseline-mode is on, fall back to a synthetic
+        // match_id so spray-baseline captures still upload; otherwise drain
+        // the buffers silently (warmup/pre-match events shouldn't be
+        // associated with whatever future match-id eventually gets assigned).
+        if (get_pcvar_num(g_cvarAcBaselineMode) > 0) {
+            if (!g_baselineMatchId[0]) {
+                formatex(g_baselineMatchId, charsmax(g_baselineMatchId),
+                    "baseline-%s-%d", g_serverHostname, get_systime());
+                log_ktp("event=AC_BASELINE_MATCH_ID_SYNTH match_id=%s", g_baselineMatchId);
+            }
+            copy(matchId, charsmax(matchId), g_baselineMatchId);
+        } else {
+            g_baselineMatchId[0] = EOS;     // session boundary — next enable gets fresh id
+            g_swCount = 0;
+            g_hitCount = 0;
+            return;
+        }
     }
 
     // Build JSON. formatex returns the bytes written; we accumulate the cursor
@@ -3873,6 +3893,11 @@ public plugin_init() {
     // seconds; if buffers are empty or AC integration is disabled, the call
     // is a cheap no-op. The 'b' flag makes it repeating.
     set_task(WEAPON_FLUSH_INTERVAL, "task_flush_weapon_timeline", 0, _, _, "b");
+
+    // 0.10.134 — baseline recording mode (set to 1 for solo spray-baseline
+    // captures; weapon-timeline batches upload under a synthetic match_id).
+    g_cvarAcBaselineMode = register_cvar("ktp_ac_baseline_mode", "0");
+    g_baselineMatchId[0] = EOS;
 
     // read CVARs to apply live values
     ktp_sync_config_from_cvars();
