@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.134"
+#define PLUGIN_VERSION "0.10.135"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -2536,11 +2536,23 @@ stock send_ac_weapon_timeline_batch() {
 // Gated on: AC config loaded + active match + player alive + non-spectator.
 // LIFO-drop on overflow; bump the dropped-counter for observability.
 
+// 0.10.135: shared append-time gate. Accepts "real match active" OR
+// "baseline mode on". The previous gate (0.10.133/.134) probed
+// dodx_get_match_id() only, which dropped every event before it could
+// reach the ring buffer during a solo baseline session — the flush-side
+// baseline branch then had empty buffers and emitted nothing.
+stock bool: ac_timeline_should_record() {
+    new probe[2];
+    if (dodx_get_match_id(probe, 1)) return true;             // real match active
+    if (get_pcvar_num(g_cvarAcBaselineMode) > 0) return true; // solo baseline session
+    return false;
+}
+
 public dod_client_weaponswitch(id, wpnew, wpnold) {
     if (!g_acApiBaseUrl[0]) return;             // AC integration disabled
     if (!is_user_alive(id)) return;             // dead or spectator
     if (get_user_team(id) == 0) return;         // explicit spectator filter
-    if (!dodx_get_match_id(g_weaponTimelineJsonBuf, 1)) return;  // no active match (1-byte probe)
+    if (!ac_timeline_should_record()) return;   // no match AND no baseline mode
 
     // wpnew is the DODW_* weapon ID being switched TO. wpnold is what they
     // had before. We only care about the destination weapon — the consumer
@@ -2564,7 +2576,7 @@ public client_damage(att, vic, dmg, wpn, hitplace, TA) {
     if (!g_acApiBaseUrl[0]) return;
     if (!is_user_alive(att) || !is_user_alive(vic)) return;
     if (get_user_team(att) == 0 || get_user_team(vic) == 0) return;
-    if (!dodx_get_match_id(g_weaponTimelineJsonBuf, 1)) return;
+    if (!ac_timeline_should_record()) return;
     if (wpn <= 0) return;
 
     if (g_hitCount >= WEAPON_HIT_BUFFER_SIZE) {

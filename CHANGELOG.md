@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.135] - 2026-05-22
+
+### Fixed
+
+#### Baseline-mode events were dropped at the append step
+
+0.10.134 added `ktp_ac_baseline_mode` and relaxed the match-id gate in `send_ac_weapon_timeline_batch()`, but missed a *second* match-id gate inside the forward handlers themselves (`dod_client_weaponswitch` line 2543, `client_damage` line 2567). Every weapon switch and damage event during a 0.10.134 baseline session was dropped at append time — the 30s flush then saw empty ring buffers and emitted nothing. Symptom: `AC_BASELINE_MATCH_ID_SYNTH` and `AC_WEAPON_TIMELINE_SEND` never logged regardless of player activity.
+
+Caught during the first live baseline session on ATL5 (2026-05-22 ~23:55 ET).
+
+**Fix:** extracted the append-time gate into a `ac_timeline_should_record()` stock that accepts either a real match_id OR `ktp_ac_baseline_mode > 0`. Both forwards now consult it instead of probing `dodx_get_match_id()` directly. Flush-side logic from 0.10.134 unchanged.
+
+---
+
 ## [0.10.134] - 2026-05-22
 
 ### Added
