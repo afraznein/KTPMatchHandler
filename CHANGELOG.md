@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.137] - 2026-05-28
+
+### Fixed
+
+#### Multi-fire of `ktp_match_start` downstream fan-out (defensive guard)
+
+Production log evidence from ATL1 2026-05-08 (`1.3-5885-ATL1`) showed the whole Phase 2 deferred chain (`ROSTER_SNAPSHOT → HOSTNAME_UPDATE → DISCORD_MATCH_EMBED_CREATE → ROSTER_SAVED_1ST_HALF → MATCH_WINDOW_OPEN → FWD_MATCH_START → AC_MATCH_ANNOUNCE_SEND → PROACTIVE_CONTEXT_SAVE`) firing 5x within ~1s for a single match-start. The HLTV-renamer's existing dedup absorbed the user-visible cost, but every downstream consumer (KTPHLTVRecorder `/state` poll + `record` POST, KTPAntiCheat API `/match/announce`, KTPHudObserver `ktp_match_start` profiler warning) paid the duplicate work — ~12-15ms of wasted forward-fire per occurrence plus 4 redundant HTTP requests per match.
+
+The upstream re-entry mechanism is still unidentified (only one production `set_task` site exists for this task and `remove_task` runs first), but the symptom is bounded by a one-shot guard at the function entry. Added `g_deferredDiscordFwdFired` global, reset on each cmd_ready all-ready entry (and in `cleanup_match_state` + the test-only `cmd_test_advance_live`), checked at the top of `task_deferred_discord_fwd`. Suppressed re-fires emit a single `event=DEFERRED_FWD_SUPPRESSED reason=already_fired` line so future investigation has a fingerprint.
+
+**Scope:** purely defensive — no behavior change for the legitimate first fire. 2nd-half, OT-round, and fresh-match starts re-arm cleanly via the reset at the cmd_ready schedule site.
+
+**Cross-reference:** `TODO.md` HLTV pipeline follow-up "Plugin-side root cause for `ktp_match_start` h1 double-fire" — symptom-side mitigation lands here; root-cause investigation remains open.
+
+---
+
+## [0.10.136] - 2026-05-24
+
+### Added (test-mode only — production binary unchanged)
+
+#### Three new test-mode rcons for Tier 2 coverage gaps
+
+All gated by `#if defined KTP_TEST_MODE` — production-mode build is byte-equivalent to 0.10.135 modulo the version string. Code/data growth lands only in the `KTP_TEST_MODE=1` build (~11.8 KB code + 19.5 KB data added).
+
+- **`amx_ktp_test_tech_pause`** — drives `execute_pause("KTP-TEST", "tech_pause")` directly, skipping the 5s prepause countdown UX and the player-id-based validation in `cmd_tech_pause`. Synthesizes the minimum tech-pause state (owner team, budget, start time) so the unpause path works cleanly afterward. Pair with the new driver helper `MatchDriver.tech_pause()`.
+- **`amx_ktp_test_tech_unpause`** — sibling helper, drives `ktp_unpause_now("test")` directly. Clears tech-pause state on completion to match production unpause flow. Pair with `MatchDriver.tech_unpause()`.
+- **`amx_ktp_test_abandon_match`** extended — accepts optional `<mode> [<reg_s1> <reg_s2>]` args. No-arg or `"h2"` preserves the existing 2nd-half-abandon shape (test 16 contract unchanged). `"ot1"` / `"ot2"` + optional regulation scores drives the OT-abandon production code path (`finalize_abandoned_match` line 4572) and emits the production-shape `"MATCH ENDED (OT%d) - Regulation: %s %d - %d %s (tied)"` embed update. Used by the new test 16b OT-abandon variant.
+
+**Why now:** closes two of the five low-priority Tier 2 follow-up enhancements from the test-infrastructure plan (`TODO.md` § Tier 2 follow-up enhancements). Tests 10/11 were design-skipped 2026-05-05 (the original "pause emits Discord embed" spec turned out to be the feature not existing — production pause is HUD-only). Repurposed to **negative-path regression catchers**: assert that the production pause/unpause helpers do NOT emit any Discord traffic, so a future regression that wires `send_match_embed_update` into the pause path lands as a test failure rather than a silent matchday surprise. Test 16b extends test 16's coverage to the OT-abandon branch, completing the abandon-path embed-shape pinning across both 2nd-half + OT shapes.
+
+**No production behavior change.** Production binary staged from this version differs from 0.10.135 only in the `PLUGIN_VERSION` constant.
+
+---
+
 ## [0.10.135] - 2026-05-22
 
 ### Fixed

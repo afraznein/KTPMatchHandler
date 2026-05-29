@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.135"
+#define PLUGIN_VERSION "0.10.137"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -477,6 +477,11 @@ new g_task13InputTimeoutId = 55627;         // Task ID for 1.3 Community Queue I
 new g_taskSetMatchIdId = 55620;             // Task ID for delayed dodx_set_match_id after round restart
 new g_taskDeferredStatsId = 55621;          // Task ID for deferred stats flush/reset (phase 1, 0.1s)
 new g_taskDeferredDiscordFwdId = 55622;     // Task ID for deferred Discord + forward (phase 2, 0.2s)
+new bool:g_deferredDiscordFwdFired = false; // One-shot guard: bounds the downstream fan-out (Discord embed,
+                                            // ktp_match_start forward, AC announce) to one fire per match-start.
+                                            // Reset on each all-ready entry; root mechanism for the prod multi-
+                                            // fire (5x within ~1s, ATL1 2026-05-08) is still unidentified, so
+                                            // this gates the symptom regardless of the upstream re-entry path.
 new g_taskMatchConfigApplyId = 55628;       // Task ID for deferred map-config exec + restartround (phase 0.05s)
 new g_taskRestartHalfStatsId = 55623;       // Task ID for deferred restarthalf stats (phase 1, 0.1s)
 new g_taskRestartHalfDiscordId = 55624;     // Task ID for deferred restarthalf Discord (phase 2, 0.2s)
@@ -3941,7 +3946,11 @@ public plugin_init() {
     register_concmd("amx_ktp_test_end_first_half", "cmd_test_end_first_half", ADMIN_RCON,
         "[TEST-MODE] <s1> <s2> — call handle_first_half_end() with the supplied half-1 scores; emits 1st Half Complete embed update");
     register_concmd("amx_ktp_test_abandon_match", "cmd_test_abandon_match", ADMIN_RCON,
-        "[TEST-MODE] — emit production-shape 2nd-half-abandon embed update (MATCH ENDED) using current g_team1Name/g_team2Name/g_firstHalfScore");
+        "[TEST-MODE] [<mode> [<reg_s1> <reg_s2>]] — emit production-shape abandon embed update. No-arg / 'h2' = 2nd-half-abandon (current g_team1Name/g_team2Name/g_firstHalfScore). 'ot1'/'ot2' + optional regulation scores = OT-abandon shape (MATCH ENDED (OT%d) - Regulation: ...)");
+    register_concmd("amx_ktp_test_tech_pause", "cmd_test_tech_pause", ADMIN_RCON,
+        "[TEST-MODE] — call execute_pause() directly (skips 5s countdown). Asserts negative-path: pause does NOT emit Discord notifications");
+    register_concmd("amx_ktp_test_tech_unpause", "cmd_test_tech_unpause", ADMIN_RCON,
+        "[TEST-MODE] — call ktp_unpause_now() directly. Sibling to amx_ktp_test_tech_pause; asserts unpause also does NOT emit Discord notifications");
     register_concmd("amx_ktp_test_fire_match_start_log", "cmd_test_fire_match_start_log", ADMIN_RCON,
         "[TEST-MODE] — emit KTP_MATCH_START log_message + ROUNDLIVE_MATCH_START_LOG log_ktp event (mirrors task_roundlive_match_context)");
     register_concmd("amx_ktp_test_forcereset", "cmd_test_forcereset", ADMIN_RCON,
@@ -7137,6 +7146,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     remove_task(g_taskMatchConfigApplyId);
     remove_task(g_taskDeferredStatsId);
     remove_task(g_taskDeferredDiscordFwdId);
+    g_deferredDiscordFwdFired = false;
     remove_task(g_taskRestartHalfStatsId);
     remove_task(g_taskRestartHalfDiscordId);
     remove_task(g_taskPendingPhaseId);
@@ -7691,6 +7701,7 @@ public cmd_ready(id) {
         copy(g_deferredHalfText, charsmax(g_deferredHalfText), halfText);
         remove_task(g_taskDeferredStatsId);
         remove_task(g_taskDeferredDiscordFwdId);
+        g_deferredDiscordFwdFired = false;  // Arm for this match-start (gate in task_deferred_discord_fwd)
         set_task(0.1, "task_deferred_stats", g_taskDeferredStatsId);
         set_task(0.2, "task_deferred_discord_fwd", g_taskDeferredDiscordFwdId);
 
@@ -7888,6 +7899,19 @@ public task_deferred_stats() {
 public task_deferred_discord_fwd() {
     // Guard: if match was reset in the 0.2s window, abort
     if (!g_matchLive) return;
+
+    // One-shot guard for this match-start. ATL1 2026-05-08 fired this whole body
+    // 5x within ~1s for `1.3-5885-ATL1`, duplicating ROSTER_SNAPSHOT, DISCORD,
+    // FWD_MATCH_START, AC_MATCH_ANNOUNCE, and PROACTIVE_CONTEXT_SAVE. Renamer-side
+    // dedup absorbed the user-visible cost, but every downstream consumer
+    // (KTPHLTVRecorder, KTPAntiCheat API, KTPHudObserver) paid the duplicate
+    // work. Reset happens in cmd_ready's all-ready entry (right before set_task),
+    // so legitimate 2nd-half / OT / fresh-match starts re-arm cleanly.
+    if (g_deferredDiscordFwdFired) {
+        log_ktp("event=DEFERRED_FWD_SUPPRESSED match_id=%s reason=already_fired", g_matchId);
+        return;
+    }
+    g_deferredDiscordFwdFired = true;
 
     // Deferred from Phase 0: capture roster snapshot (loops all players, ~5-10ms)
     capture_roster_snapshot();
@@ -8281,6 +8305,7 @@ public cmd_test_advance_live(id) {
         g_matchId, half, g_currentMap, _:g_matchType);
 
     remove_task(g_taskDeferredDiscordFwdId);
+    g_deferredDiscordFwdFired = false;
     set_task(0.2, "task_deferred_discord_fwd", g_taskDeferredDiscordFwdId);
 
     console_print(id, "KTP_TEST_LIVE: ok match_id=%s half=%d", g_matchId, half);
@@ -8471,7 +8496,53 @@ public cmd_test_fire_match_start_log(id) {
 public cmd_test_abandon_match(id) {
     if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
 
-    log_ktp("event=TEST_ABANDON_MATCH match_id=%s h1=%d-%d team1=%s team2=%s",
+    // Mode arg: "h2" (default — backward compatible with the original 0.10.126
+    // single-shape contract used by test 16) or "ot1"/"ot2" (OT-abandon shape,
+    // added 0.10.136 for the test 16b OT variant — KTPMatchHandler.sma:4572-4612
+    // production OT-abandon branch with status string
+    // "MATCH ENDED (OT%d) - Regulation: %s %d - %d %s (tied)").
+    new modeArg[8];
+    read_argv(1, modeArg, charsmax(modeArg));
+    if (!modeArg[0]) copy(modeArg, charsmax(modeArg), "h2");
+
+    if (equal(modeArg, "ot1") || equal(modeArg, "ot2")) {
+        new otRound = str_to_num(modeArg[2]);
+        // Optional regulation-score args; default to 0-0 if absent. Production
+        // OT-abandon reads from LOCALINFO_REG_SCORES (set during regulation
+        // end); we accept them directly here since the test driver chain
+        // doesn't include a full regulation-finish step.
+        new regArg1[8], regArg2[8];
+        read_argv(2, regArg1, charsmax(regArg1));
+        read_argv(3, regArg2, charsmax(regArg2));
+        new regS1 = str_to_num(regArg1);
+        new regS2 = str_to_num(regArg2);
+
+        log_ktp("event=TEST_ABANDON_MATCH match_id=%s mode=ot%d reg=%d-%d team1=%s team2=%s",
+            g_matchId, otRound, regS1, regS2, g_team1Name, g_team2Name);
+
+        #if defined HAS_CURL
+        if (!g_disableDiscord) {
+            new abandonedStatus[128];
+            formatex(abandonedStatus, charsmax(abandonedStatus),
+                "MATCH ENDED (OT%d) - Regulation: %s %d - %d %s (tied)",
+                otRound, g_team1Name, regS1, regS2, g_team2Name);
+            send_match_embed_update(abandonedStatus);
+        }
+        #endif
+
+        g_matchLive = false;
+        g_preStartPending = false;
+        g_matchPending = false;
+        g_inOvertime = false;
+        g_otRound = 0;
+
+        console_print(id, "KTP_TEST_ABANDON: ok match_id=%s mode=ot%d reg=%d-%d",
+            g_matchId, otRound, regS1, regS2);
+        return PLUGIN_HANDLED;
+    }
+
+    // Default path: 2nd-half-abandon shape (existing contract).
+    log_ktp("event=TEST_ABANDON_MATCH match_id=%s mode=h2 h1=%d-%d team1=%s team2=%s",
         g_matchId, g_firstHalfScore[1], g_firstHalfScore[2], g_team1Name, g_team2Name);
 
     #if defined HAS_CURL
@@ -8490,6 +8561,58 @@ public cmd_test_abandon_match(id) {
 
     console_print(id, "KTP_TEST_ABANDON: ok match_id=%s h1=%d-%d",
         g_matchId, g_firstHalfScore[1], g_firstHalfScore[2]);
+    return PLUGIN_HANDLED;
+}
+
+// Drive the production tech-pause helper directly. Skips the 5s pre-pause
+// countdown (UX surface) and the cmd_tech_pause id-based validation
+// (KTPMatchHandler.sma:5654 — team lookup, budget check, spectator guard) so
+// the test can fire pause without a real player. Calls execute_pause() exactly
+// as the prepause_countdown_tick final tick does on the production path
+// (KTPMatchHandler.sma:2881).
+//
+// Negative-path test contract (Tier 2 tests 10/11): pause should NOT cause any
+// Discord embed update — pause status is a HUD-only feature
+// (ReHLDS RH_SV_UpdatePausedHUD; see CLAUDE.md § Pause System). This rcon
+// exercises the real execute_pause helper so a regression that adds Discord
+// emission to the pause path is caught by the negative-path assertion.
+//
+// Use AFTER advance_live so g_matchLive=true (production guard at line 5655).
+public cmd_test_tech_pause(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    // Synthesize the minimum tech-pause state so unpause works cleanly + the
+    // hostname update reflects the right owner. Production cmd_tech_pause sets
+    // these before trigger_pause_countdown (KTPMatchHandler.sma:5694-5717).
+    g_pauseOwnerTeam = 1;
+    g_unpauseRequested = false;
+    g_unpauseConfirmedOther = false;
+    g_isTechPause = true;
+    g_pauseDurationSec = 60;
+    g_techPauseStartTime = get_systime();
+
+    log_ktp("event=TEST_TECH_PAUSE match_id=%s", g_matchId);
+    execute_pause("KTP-TEST", "tech_pause");
+
+    console_print(id, "KTP_TEST_TECH_PAUSE: ok paused=%d", g_isPaused);
+    return PLUGIN_HANDLED;
+}
+
+// Sibling to cmd_test_tech_pause — drives the production unpause helper
+// (KTPMatchHandler.sma:2814). Same negative-path test contract: unpause should
+// NOT emit Discord notifications. Pairs with cmd_test_tech_pause so the
+// pause/unpause window can be asserted as a unit.
+public cmd_test_tech_unpause(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    log_ktp("event=TEST_TECH_UNPAUSE match_id=%s", g_matchId);
+    ktp_unpause_now("test");
+
+    // Clear tech-pause state to match production unpause-completion flow.
+    g_isTechPause = false;
+    g_pauseOwnerTeam = 0;
+
+    console_print(id, "KTP_TEST_TECH_UNPAUSE: ok paused=%d", g_isPaused);
     return PLUGIN_HANDLED;
 }
 
