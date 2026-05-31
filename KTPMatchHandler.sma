@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.137"
+#define PLUGIN_VERSION "0.10.140"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -144,6 +144,9 @@ new curl_slist: g_acCurlHeaders = SList_Empty;  // persistent headers slist (nev
 new g_swSteamId[WEAPON_SW_BUFFER_SIZE][32];
 new g_swWeaponId[WEAPON_SW_BUFFER_SIZE];
 new Float:g_swTimestamp[WEAPON_SW_BUFFER_SIZE];
+// v2 (firedAtUtc): NTP-synced wall-clock unix seconds at record time — gives the AC
+// recoil detector a per-event anchor accurate to the second vs ingested_at's ~30s lag.
+new g_swFiredAt[WEAPON_SW_BUFFER_SIZE];
 new g_swCount = 0;
 new g_swDropped = 0;                            // observability for buffer-overflow events
 
@@ -151,6 +154,7 @@ new g_hitAttSteamId[WEAPON_HIT_BUFFER_SIZE][32];
 new g_hitVicSteamId[WEAPON_HIT_BUFFER_SIZE][32];
 new g_hitWeaponId[WEAPON_HIT_BUFFER_SIZE];
 new Float:g_hitTimestamp[WEAPON_HIT_BUFFER_SIZE];
+new g_hitFiredAt[WEAPON_HIT_BUFFER_SIZE];   // v2 firedAtUtc — unix seconds at record time
 new g_hitDamage[WEAPON_HIT_BUFFER_SIZE];
 new g_hitHitplace[WEAPON_HIT_BUFFER_SIZE];
 new g_hitTeamAttack[WEAPON_HIT_BUFFER_SIZE];
@@ -477,11 +481,15 @@ new g_task13InputTimeoutId = 55627;         // Task ID for 1.3 Community Queue I
 new g_taskSetMatchIdId = 55620;             // Task ID for delayed dodx_set_match_id after round restart
 new g_taskDeferredStatsId = 55621;          // Task ID for deferred stats flush/reset (phase 1, 0.1s)
 new g_taskDeferredDiscordFwdId = 55622;     // Task ID for deferred Discord + forward (phase 2, 0.2s)
-new bool:g_deferredDiscordFwdFired = false; // One-shot guard: bounds the downstream fan-out (Discord embed,
-                                            // ktp_match_start forward, AC announce) to one fire per match-start.
-                                            // Reset on each all-ready entry; root mechanism for the prod multi-
-                                            // fire (5x within ~1s, ATL1 2026-05-08) is still unidentified, so
-                                            // this gates the symptom regardless of the upstream re-entry path.
+new g_deferredDiscordFwdCount = 0;          // Fire counter (0.10.137 was bool guard; promoted to int 0.10.138
+                                            // so DEFERRED_FWD_SUPPRESSED log lines carry count=N — distinguishes
+                                            // "scheduled 1x, fired 5x" (engine bug) from "scheduled 5x, suppressed
+                                            // 4x" (caller bug). Reset on each all-ready entry; first invocation
+                                            // bumps to 1 and runs the body; count>=2 suppresses.
+new g_lastDeferredScheduleSrc[24];          // Caller-identifying stamp set at every set_task(..., task_deferred_
+                                            // discord_fwd, ...) site (cmd_ready, cmd_test_advance_live, future
+                                            // callers). Logged at body entry + on suppression so the next
+                                            // multi-fire occurrence names the trigger.
 new g_taskMatchConfigApplyId = 55628;       // Task ID for deferred map-config exec + restartround (phase 0.05s)
 new g_taskRestartHalfStatsId = 55623;       // Task ID for deferred restarthalf stats (phase 1, 0.1s)
 new g_taskRestartHalfDiscordId = 55624;     // Task ID for deferred restarthalf Discord (phase 2, 0.2s)
@@ -2482,9 +2490,9 @@ stock send_ac_weapon_timeline_batch() {
     for (new i = 0; i < g_swCount && pos < headroom; i++) {
         new ts_ms = floatround(g_swTimestamp[i] * 1000.0);
         pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos,
-            "%s{^"steamId^":^"%s^",^"weaponId^":%d,^"tsMs^":%d}",
+            "%s{^"steamId^":^"%s^",^"weaponId^":%d,^"tsMs^":%d,^"firedAtUtc^":%d}",
             (emitted > 0 ? "," : ""),
-            g_swSteamId[i], g_swWeaponId[i], ts_ms);
+            g_swSteamId[i], g_swWeaponId[i], ts_ms, g_swFiredAt[i]);
         emitted++;
     }
     new swEmitted = emitted;
@@ -2495,10 +2503,10 @@ stock send_ac_weapon_timeline_batch() {
     for (new i = 0; i < g_hitCount && pos < headroom; i++) {
         new ts_ms = floatround(g_hitTimestamp[i] * 1000.0);
         pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos,
-            "%s{^"attSteamId^":^"%s^",^"vicSteamId^":^"%s^",^"weaponId^":%d,^"tsMs^":%d,^"damage^":%d,^"hitplace^":%d,^"teamAttack^":%d}",
+            "%s{^"attSteamId^":^"%s^",^"vicSteamId^":^"%s^",^"weaponId^":%d,^"tsMs^":%d,^"damage^":%d,^"hitplace^":%d,^"teamAttack^":%d,^"firedAtUtc^":%d}",
             (emitted > 0 ? "," : ""),
             g_hitAttSteamId[i], g_hitVicSteamId[i], g_hitWeaponId[i],
-            ts_ms, g_hitDamage[i], g_hitHitplace[i], g_hitTeamAttack[i]);
+            ts_ms, g_hitDamage[i], g_hitHitplace[i], g_hitTeamAttack[i], g_hitFiredAt[i]);
         emitted++;
     }
     new hitEmitted = emitted;
@@ -2574,6 +2582,7 @@ public dod_client_weaponswitch(id, wpnew, wpnold) {
     copy(g_swSteamId[g_swCount], charsmax(g_swSteamId[]), steam_id);
     g_swWeaponId[g_swCount] = wpnew;
     g_swTimestamp[g_swCount] = get_gametime();
+    g_swFiredAt[g_swCount] = get_systime();   // v2 firedAtUtc — wall-clock at record time
     g_swCount++;
 }
 
@@ -2596,6 +2605,7 @@ public client_damage(att, vic, dmg, wpn, hitplace, TA) {
     copy(g_hitVicSteamId[g_hitCount], charsmax(g_hitVicSteamId[]), vic_id);
     g_hitWeaponId[g_hitCount] = wpn;
     g_hitTimestamp[g_hitCount] = get_gametime();
+    g_hitFiredAt[g_hitCount] = get_systime();   // v2 firedAtUtc — wall-clock at record time
     g_hitDamage[g_hitCount] = dmg;
     g_hitHitplace[g_hitCount] = hitplace;
     g_hitTeamAttack[g_hitCount] = TA;
@@ -4021,7 +4031,13 @@ public plugin_cfg() {
         new acIp[32];
         get_cvar_string("ip", acIp, charsmax(acIp));
         if (!acIp[0]) copy(acIp, charsmax(acIp), "0.0.0.0");
-        new acPort = get_cvar_num("port");
+        // Use "hostport" (the actual -port listen port), NOT "port": the "port"
+        // cvar holds the default 27015 on every instance regardless of -port, so
+        // the old code announced :27015 fleet-wide and AC clients on 27016-27019
+        // never matched their /api/match/current lookup (2026-05-30). hostport
+        // reflects -port (verified 27016 on chicago2). Fall back to port → 27015.
+        new acPort = get_cvar_num("hostport");
+        if (!acPort) acPort = get_cvar_num("port");
         if (!acPort) acPort = 27015;
         formatex(g_acServerEndpoint, charsmax(g_acServerEndpoint), "%s:%d", acIp, acPort);
         log_ktp("event=AC_SERVER_ENDPOINT endpoint=%s", g_acServerEndpoint);
@@ -7146,7 +7162,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     remove_task(g_taskMatchConfigApplyId);
     remove_task(g_taskDeferredStatsId);
     remove_task(g_taskDeferredDiscordFwdId);
-    g_deferredDiscordFwdFired = false;
+    g_deferredDiscordFwdCount = 0;
     remove_task(g_taskRestartHalfStatsId);
     remove_task(g_taskRestartHalfDiscordId);
     remove_task(g_taskPendingPhaseId);
@@ -7701,7 +7717,10 @@ public cmd_ready(id) {
         copy(g_deferredHalfText, charsmax(g_deferredHalfText), halfText);
         remove_task(g_taskDeferredStatsId);
         remove_task(g_taskDeferredDiscordFwdId);
-        g_deferredDiscordFwdFired = false;  // Arm for this match-start (gate in task_deferred_discord_fwd)
+        g_deferredDiscordFwdCount = 0;  // Arm for this match-start (gate in task_deferred_discord_fwd)
+        copy(g_lastDeferredScheduleSrc, charsmax(g_lastDeferredScheduleSrc), "cmd_ready_all_ready");
+        log_ktp("event=DEFERRED_FWD_SCHEDULED src=%s frame=%.3f match_id=%s",
+            g_lastDeferredScheduleSrc, get_gametime(), g_matchId);
         set_task(0.1, "task_deferred_stats", g_taskDeferredStatsId);
         set_task(0.2, "task_deferred_discord_fwd", g_taskDeferredDiscordFwdId);
 
@@ -7907,11 +7926,21 @@ public task_deferred_discord_fwd() {
     // (KTPHLTVRecorder, KTPAntiCheat API, KTPHudObserver) paid the duplicate
     // work. Reset happens in cmd_ready's all-ready entry (right before set_task),
     // so legitimate 2nd-half / OT / fresh-match starts re-arm cleanly.
-    if (g_deferredDiscordFwdFired) {
-        log_ktp("event=DEFERRED_FWD_SUPPRESSED match_id=%s reason=already_fired", g_matchId);
+    //
+    // 0.10.138 diagnostics: count promoted bool->int + caller src stamp so the
+    // next multi-fire occurrence names the trigger via DEFERRED_FWD_SUPPRESSED
+    // (count=N + src=…) and the paired DEFERRED_FWD_SCHEDULED log at each
+    // scheduler site. Pair count vs schedule-event count to disambiguate
+    // "scheduled 1x, fired Nx" (engine bug) from "scheduled Nx, suppressed N-1x"
+    // (caller bug).
+    g_deferredDiscordFwdCount++;
+    if (g_deferredDiscordFwdCount > 1) {
+        log_ktp("event=DEFERRED_FWD_SUPPRESSED match_id=%s reason=already_fired count=%d src=%s frame=%.3f",
+            g_matchId, g_deferredDiscordFwdCount, g_lastDeferredScheduleSrc, get_gametime());
         return;
     }
-    g_deferredDiscordFwdFired = true;
+    log_ktp("event=DEFERRED_FWD_FIRED match_id=%s src=%s frame=%.3f",
+        g_matchId, g_lastDeferredScheduleSrc, get_gametime());
 
     // Deferred from Phase 0: capture roster snapshot (loops all players, ~5-10ms)
     capture_roster_snapshot();
@@ -8305,7 +8334,10 @@ public cmd_test_advance_live(id) {
         g_matchId, half, g_currentMap, _:g_matchType);
 
     remove_task(g_taskDeferredDiscordFwdId);
-    g_deferredDiscordFwdFired = false;
+    g_deferredDiscordFwdCount = 0;
+    copy(g_lastDeferredScheduleSrc, charsmax(g_lastDeferredScheduleSrc), "test_advance_live");
+    log_ktp("event=DEFERRED_FWD_SCHEDULED src=%s frame=%.3f match_id=%s",
+        g_lastDeferredScheduleSrc, get_gametime(), g_matchId);
     set_task(0.2, "task_deferred_discord_fwd", g_taskDeferredDiscordFwdId);
 
     console_print(id, "KTP_TEST_LIVE: ok match_id=%s half=%d", g_matchId, half);

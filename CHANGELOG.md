@@ -6,6 +6,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.140] - 2026-05-30
+
+### Added
+
+#### `firedAtUtc` per weapon-timeline event (AC recoil clock-bridge v2)
+
+Each weapon switch + hit in the `/api/match/weapon-timeline-batch` payload now carries `firedAtUtc` — the wall-clock unix seconds captured at record time via `get_systime()` (NTP-synced through chrony on the game hosts). New parallel arrays `g_swFiredAt[]` / `g_hitFiredAt[]` populated alongside the existing `get_gametime()` capture.
+
+The AC's `SuspiciousRecoilControlAnalyzer` previously bridged client burst times against `ingested_at` (the API's batch-receipt time, lagging actual fire by up to the 30s flush interval). `firedAtUtc` gives it a per-event wall-clock anchor accurate to the second, so weapon attribution during a spray burst is no longer smeared by batch latency. Backward compatible: the API stores it nullable and falls back to `ingested_at` when absent, so this plugin works against both old and new API builds.
+
+Carries forward the 0.10.139 Bug A fix (`hostport` endpoint). Supersedes the 0.10.139 `.new`.
+
+## [0.10.139] - 2026-05-30
+
+### Fixed
+
+#### AC match-linkage: announce the real listen port, not `:27015` (Bug A)
+
+`g_acServerEndpoint` (sent in every `/api/match/announce` + `/api/match/end` payload, and the key AC clients query via `/api/match/current`) was built from `get_cvar_num("port")`. That cvar holds the **default 27015 on every instance regardless of `-port`** (verified on chicago2: `port`=`27015` but `hostport`=`27016`). So the entire fleet announced `<ip>:27015`, and AC clients connecting to instances on ports 27016–27019 could never match their match-current lookup — `match_id` linkage silently failed for 4 of every 5 instances. Confirmed 2026-05-30 via arachnid's 5/28 chicago2 scrims (`1780015195-CHI2` / `1780018306-CHI2` both announced `:27015`; client resolved no match).
+
+- Endpoint now reads `get_cvar_num("hostport")` (the actual `-port` listen port), falling back to `port` → `27015` only if unset.
+- The match_id alias (`…-CHI2`) was already correct — it's hostname-derived (`generate_match_id` → `get_short_hostname_code`), independent of the port cvar. Only the endpoint was wrong.
+- Server-side linkage (AC API) remains the authoritative backstop for sessions that start before the match; this fix restores the client-side endpoint path as a correct secondary signal.
+
+---
+
+## [0.10.138] - 2026-05-29
+
+### Added (diagnostics only — no behavior change)
+
+#### Caller-identifying diagnostics for the `task_deferred_discord_fwd` multi-fire
+
+The 0.10.137 symptom guard catches re-entry but doesn't reveal what triggered it. 0.10.138 adds three targeted diagnostics so the next organic occurrence pins root cause definitively, without shipping a speculative behavioral fix.
+
+- **`g_deferredDiscordFwdFired` promoted bool → int** as `g_deferredDiscordFwdCount`. First entry bumps to 1 and runs the body; count ≥ 2 emits the existing SUPPRESSED log with the actual count attached. Distinguishes "scheduled 1x, fired 5x" (engine-level set_task bug) from "scheduled 5x, suppressed 4x" (caller re-entry bug).
+- **`g_lastDeferredScheduleSrc[24]`** — caller stamp set immediately before every `set_task(..., "task_deferred_discord_fwd", ...)` site (`cmd_ready` all-ready entry stamps `"cmd_ready_all_ready"`; test-mode `cmd_test_advance_live` stamps `"test_advance_live"`). Body's entry + suppression log lines carry `src=%s`, naming the trigger.
+- **`event=DEFERRED_FWD_SCHEDULED`** log_ktp emit at each scheduler site (paired with the existing `DEFERRED_FWD_FIRED` / `DEFERRED_FWD_SUPPRESSED` body lines). Pair count vs schedule count to disambiguate the bug class.
+
+New log shape on next occurrence:
+
+```
+event=DEFERRED_FWD_SCHEDULED src=cmd_ready_all_ready frame=… match_id=…
+event=DEFERRED_FWD_FIRED match_id=… src=cmd_ready_all_ready frame=…
+... body runs ...
+event=DEFERRED_FWD_SUPPRESSED match_id=… reason=already_fired count=2 src=… frame=…
+event=DEFERRED_FWD_SUPPRESSED match_id=… reason=already_fired count=3 src=… frame=…
+...
+```
+
+**Scope:** purely additive log emits + a bool→int promotion. No control-flow change. Production binary stays gated on the 0.10.137 fix; this version layers diagnostics on top.
+
+**Cross-reference:** `TODO.md` HLTV pipeline follow-up "Plugin-side root cause for `ktp_match_start` h1 double-fire" — root-cause investigation work-in-flight. Once the next re-fire is captured, the SUPPRESSED + SCHEDULED log pair names both the caller and whether the count matches the schedule count, which closes the open hypothesis space (engine bug vs. yet-unfound code path).
+
+---
+
 ## [0.10.137] - 2026-05-28
 
 ### Fixed
