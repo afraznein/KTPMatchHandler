@@ -296,6 +296,7 @@ new g_taskUnreadyReminderId = 55607;  // Periodic reminder of unready players
 // ---------- Forwards (for external plugins) ----------
 new g_fwdMatchStart;    // ktp_match_start(matchId[], map[], matchType, half) - half: 1,2,101+
 new g_fwdMatchEnd;      // ktp_match_end(matchId[], map[], matchType, team1Score, team2Score)
+new g_fwdHalfEnd;       // ktp_half_end(matchId[], map[], matchType, half, team1Score, team2Score) - fires at 1st-half end (pre-changelevel)
 
 // ---------- Team Names (customizable) ----------
 new g_teamName[3][32] = {"", "Allies", "Axis"};  // [1]=Current Allies name, [2]=Current Axis name
@@ -1053,6 +1054,15 @@ stock handle_first_half_end() {
 
     // Save first half scores
     save_first_half_scores();
+
+    // Fire ktp_half_end forward for external plugins (KTPHudObserver, etc.). Fires
+    // here (pre-changelevel, gameplay just ended) so consumers can snapshot 1st-half
+    // state before the map change wipes context. half=1; scores are the just-saved
+    // 1st-half totals (team1=Allies, team2=Axis in the 1st half).
+    {
+        new ret;
+        ExecuteForward(g_fwdHalfEnd, ret, g_matchId, g_matchMap, g_matchType, 1, g_firstHalfScore[1], g_firstHalfScore[2]);
+    }
 
     log_ktp("event=HALF_END half=1st map=%s next_map=%s match_id=%s score=%s_%d-%d_%s",
             g_matchMap, g_matchMap, g_matchId,
@@ -3627,6 +3637,11 @@ public plugin_init() {
     // ktp_match_start(matchId[], map[], matchType, half) - half: 1=1st, 2=2nd, 101+=OT round
     g_fwdMatchStart = CreateMultiForward("ktp_match_start", ET_IGNORE, FP_STRING, FP_STRING, FP_CELL, FP_CELL);
     g_fwdMatchEnd = CreateMultiForward("ktp_match_end", ET_IGNORE, FP_STRING, FP_STRING, FP_CELL, FP_CELL, FP_CELL);
+    // ktp_half_end(matchId[], map[], matchType, half, team1Score, team2Score) — fires once at
+    // 1st-half end (in handle_first_half_end, before the changelevel) so HUD/stats consumers get
+    // an authoritative half-1-end signal. The log-line path (KTP_HALF_END) does not reach AMXX
+    // plugin_log in extension mode, so a forward is the only reliable signal — mirrors match start/end.
+    g_fwdHalfEnd = CreateMultiForward("ktp_half_end", ET_IGNORE, FP_STRING, FP_STRING, FP_CELL, FP_CELL, FP_CELL, FP_CELL);
 
     new tmpCnt[8];
     new tmpPre[8];
