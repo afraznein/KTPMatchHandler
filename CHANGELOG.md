@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.141] - 2026-07-05
+
+Plugin-side half of the score-persistence fix wave from the 2026-07-05 full-stack code review (companion to KTPAMXX 2.7.20's DODX-side `g_observedDeaths` lifecycle fixes). Deploy alongside or after 2.7.20 — the validation gate only starts passing once the DODX counter resets land.
+
+### Fixed
+
+#### Score persistence: slot leak on failed validation (P0 #5)
+
+A save that failed the offset-validation gate zeroed the row's SID but never freed the slot, and `find_or_alloc_score_slot` only appended — so every failure permanently burned one of the 16 rows. One half-end mass-DC burst of failures filled the table (`SCORE_PERSIST_SAVE_OVERFLOW count=16`, observed NYC 2026-07-04 18:51) and legitimate mid-half disconnect saves were dropped for the rest of the match. Freed rows (empty SID) are now reused before appending.
+
+#### Score persistence: half-end mass saves + cross-half stale rows (P0 #6)
+
+`save_player_score` ran for the whole roster on the half-end changelevel mass disconnect (match still flagged live). Those saves are boundary noise — and because Pawn globals survive the map change in extension mode, they persisted into half 2 as stale rows. Sides swap between halves, so a stale h1 row could pass the same-team-number gate and restore h1 frags/deaths onto the fresh h2 scoreboard (masked until now only because validation rejected everything). Three-part fix:
+
+- saves are skipped during intermission (same `is_in_intermission()` gate the auto-DC path uses);
+- `g_inIntermission` is now also set on the **first-half** changelevel branch — it was only ever set on the 2nd-half/OT branch, so the h1 boundary (the exact boundary in the stale-restore hazard) wasn't covered, and as a pre-existing quirk a disconnect during the h1 scoreboard could start an auto-DC tech-pause countdown;
+- `clear_saved_scores()` runs in the same frame `g_matchLive` flips true at go-live (Phase 0 — deferring it to Phase 1 left a ~100ms window where a rejoining player's team-pick could restore stale rows) and at half restart (`task_restarthalf_stats`).
+
+#### Persistent roster never survived the half — localinfo 127-byte cap (P0 #4)
+
+`save_roster_to_localinfo` wrote each team's roster as one `name|sid;name|sid;...` string (~210 bytes for 6v6), but the engine caps a single info value at 127 bytes and rejects longer ones with only a console print — `_ktp_r1`/`_ktp_r2` never actually persisted for a real match. Rosters are now chunked one entry per key (`_ktp_r1_<i>`, ≤79 bytes each), unused keys are written empty so shrinking rosters can't leave stale tails, and both clear sites use a shared `clear_roster_localinfo()` (which also clears the legacy whole-team keys). `sanitize_name_for_localinfo` additionally strips `"` and `\` and collapses `.` runs — the engine silently rejects any info value containing `..`, which a player name could trigger. Every roster write is read-back verified (`event=ROSTER_SAVE_KEY_REJECTED` + a `failed=` count on the save log line) so a rejected write — e.g. the 4KB total localinfo buffer filling on a pathological 24+24 roster — is visible instead of silently truncating the restore at the gap, the exact failure mode that hid the v1 bug.
+
+#### Per-map cvar overrides of KTP tunables silently didn't work (P1 #10)
+
+`cmd_ready`'s comment claimed cvars are re-synced "when configs are executed," but nothing called `ktp_sync_config_from_cvars()` after `exec_map_config()` — a map cfg setting `ktp_tech_budget_seconds` etc. changed the cvar but never the cached values the pause system reads. Now re-synced at the end of `task_apply_match_config_and_start`, and because Phase 0 seeds `g_techBudget[]` from the cache 50ms before the config executes, a changed `ktp_tech_budget_seconds` also re-seeds the budgets (`event=TECH_BUDGET_RESEED`) — guarded to a fresh 1st-half match with untouched budgets, since budget is per-match and a consumed budget must never refill. Pause duration/extension cvars are read from the cache at pause time and apply same-match without re-seeding. Scope note: pending-phase reminder intervals were scheduled before the config exec and still pick up overrides one cycle late.
+
+#### `.whoneedsready` was a phantom command
+
+Listed in the `.commands` help text for years with no handler registered anywhere. Now a real command: prints both teams' unready lists (the data the periodic reminder already builds) to the requester during the pending phase.
+
+### Changed
+
+- **ReAPI hook registration order + guards** — the changelevel hooks (match-state persistence) now register before the cosmetic pause-HUD hook, so a runtime error in a later registration can't skip them; every `RegisterHookChain` result is checked and a failure logs `event=HOOK_REGISTER_FAILED` instead of passing silently.
+- **`execute_pause` zero-budget fallback is now loud** — a zero/negative duration reaching the 300s fallback logs `event=PAUSE_DURATION_FALLBACK` (for a tech pause that means an upstream budget gate broke and a free 300s was just granted; unreachable today).
+- **AC timeline gate no longer calls `dodx_get_match_id()` per damage event** — match-context state is a cached bool maintained by the new `ktp_set_match_context()` wrapper (all seven `dodx_set_match_id` call sites routed through it); the baseline-mode pcvar check stays live since it can flip via rcon.
+- **`.commands` list corrections** — `.changemap` moved from Status & Info to the admin section with `(KTPAdminAudit)` attribution (it is admin-gated and lives in that plugin); `.h2restart` alias now shown next to `.restarthalf`.
+- **Weapon-timeline flush task uses a dedicated task ID** (was bare `0`).
+- **`add_to_match_roster` overflow now logs** `event=ROSTER_ADD_OVERFLOW` instead of returning false silently.
+
+### Removed
+
+- **Orphaned `handle_pause_chat_relay` / `handle_pause_chat_relay_team`** — never registered; the say hooks call `relay_pause_chat()` directly.
+
 ## [0.10.140] - 2026-05-30
 
 ### Added

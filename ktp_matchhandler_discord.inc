@@ -367,12 +367,18 @@ stock bool:add_to_match_roster(const name[], const authid[], team) {
     formatex(entry, charsmax(entry), "%s|%s", safeName, authid);
 
     if (team == 1) {
-        if (g_matchRosterTeam1Count >= MAX_ROSTER_ENTRIES) return false;
+        if (g_matchRosterTeam1Count >= MAX_ROSTER_ENTRIES) {
+            log_ktp("event=ROSTER_ADD_OVERFLOW team=1 sid=%s count=%d", authid, g_matchRosterTeam1Count);
+            return false;
+        }
         copy(g_matchRosterTeam1[g_matchRosterTeam1Count], charsmax(g_matchRosterTeam1[]), entry);
         g_matchRosterTeam1Count++;
         return true;
     } else if (team == 2) {
-        if (g_matchRosterTeam2Count >= MAX_ROSTER_ENTRIES) return false;
+        if (g_matchRosterTeam2Count >= MAX_ROSTER_ENTRIES) {
+            log_ktp("event=ROSTER_ADD_OVERFLOW team=2 sid=%s count=%d", authid, g_matchRosterTeam2Count);
+            return false;
+        }
         copy(g_matchRosterTeam2[g_matchRosterTeam2Count], charsmax(g_matchRosterTeam2[]), entry);
         g_matchRosterTeam2Count++;
         return true;
@@ -498,76 +504,90 @@ stock build_roster_from_stored(output[], maxlen, team, &count) {
 }
 
 // Save roster to localinfo (for map change persistence)
-// Format: "name|sid;name|sid;..." (semicolon separates entries)
+// One entry per key (_ktp_r1_0 .. _ktp_r1_23): the engine caps a single
+// info value at 127 bytes and rejects longer ones with only a console
+// print, so the old whole-team "name|sid;..." string (~210 bytes for 6v6)
+// never actually persisted. Per-entry values are <=79 bytes. Unused keys
+// are written empty so a shrinking roster can't leave stale tails.
 stock save_roster_to_localinfo() {
-    new buf[2048];
-
-    // Save Team 1 roster
-    buf[0] = EOS;
-    for (new i = 0; i < g_matchRosterTeam1Count; i++) {
-        if (i > 0) add(buf, charsmax(buf), ";");
-        add(buf, charsmax(buf), g_matchRosterTeam1[i]);
+    new key[16], failed = 0;
+    for (new i = 0; i < MAX_ROSTER_ENTRIES; i++) {
+        formatex(key, charsmax(key), "%s_%d", LOCALINFO_ROSTER1, i);
+        if (i < g_matchRosterTeam1Count) {
+            failed += save_roster_entry_verified(key, g_matchRosterTeam1[i]);
+        } else {
+            set_localinfo(key, "");
+        }
+        formatex(key, charsmax(key), "%s_%d", LOCALINFO_ROSTER2, i);
+        if (i < g_matchRosterTeam2Count) {
+            failed += save_roster_entry_verified(key, g_matchRosterTeam2[i]);
+        } else {
+            set_localinfo(key, "");
+        }
     }
-    set_localinfo(LOCALINFO_ROSTER1, buf);
+    log_ktp("event=ROSTER_SAVED_LOCALINFO team1=%d team2=%d chunked=1 failed=%d", g_matchRosterTeam1Count, g_matchRosterTeam2Count, failed);
+}
 
-    // Save Team 2 roster
-    buf[0] = EOS;
-    for (new i = 0; i < g_matchRosterTeam2Count; i++) {
-        if (i > 0) add(buf, charsmax(buf), ";");
-        add(buf, charsmax(buf), g_matchRosterTeam2[i]);
+// set_localinfo can silently drop a write (info buffer full, rejected chars).
+// The v1 whole-team format died silently for exactly that reason — verify
+// each write with a read-back so a failure is at least visible in the log.
+// Returns 1 on mismatch (for the caller's failure counter), 0 on success.
+stock save_roster_entry_verified(const key[], const value[]) {
+    set_localinfo(key, value);
+    new check[80];
+    get_localinfo(key, check, charsmax(check));
+    if (!equal(check, value)) {
+        log_ktp("event=ROSTER_SAVE_KEY_REJECTED key=%s len=%d", key, strlen(value));
+        return 1;
     }
-    set_localinfo(LOCALINFO_ROSTER2, buf);
+    return 0;
+}
 
-    log_ktp("event=ROSTER_SAVED_LOCALINFO team1=%d team2=%d", g_matchRosterTeam1Count, g_matchRosterTeam2Count);
+// Clear all roster localinfo keys (chunked + the legacy whole-team keys)
+stock clear_roster_localinfo() {
+    new key[16];
+    for (new i = 0; i < MAX_ROSTER_ENTRIES; i++) {
+        formatex(key, charsmax(key), "%s_%d", LOCALINFO_ROSTER1, i);
+        set_localinfo(key, "");
+        formatex(key, charsmax(key), "%s_%d", LOCALINFO_ROSTER2, i);
+        set_localinfo(key, "");
+    }
+    set_localinfo(LOCALINFO_ROSTER1, "");
+    set_localinfo(LOCALINFO_ROSTER2, "");
 }
 
 // Restore roster from localinfo (after map change)
+// Reads the chunked per-entry keys. Entries are written contiguously, so
+// the first empty key ends the team. An empty first key means no saved
+// roster — keep whatever is in memory (same semantic as the old format).
 stock restore_roster_from_localinfo() {
-    new buf[2048];
+    new key[16], entry[80];
 
     // Restore Team 1 roster
-    get_localinfo(LOCALINFO_ROSTER1, buf, charsmax(buf));
-    if (buf[0]) {
+    formatex(key, charsmax(key), "%s_0", LOCALINFO_ROSTER1);
+    get_localinfo(key, entry, charsmax(entry));
+    if (entry[0]) {
         g_matchRosterTeam1Count = 0;
-        new entry[80], pos = 0, bufLen = strlen(buf);
-        while (pos < bufLen && g_matchRosterTeam1Count < MAX_ROSTER_ENTRIES) {
-            // Find next semicolon or end of string
-            new endPos = pos;
-            while (buf[endPos] && buf[endPos] != ';') endPos++;
-
-            // Extract entry
-            new len = endPos - pos;
-            if (len > 0 && len < sizeof(entry)) {
-                copy(entry, len, buf[pos]);
-                entry[len] = EOS;
-                copy(g_matchRosterTeam1[g_matchRosterTeam1Count], charsmax(g_matchRosterTeam1[]), entry);
-                g_matchRosterTeam1Count++;
-            }
-
-            pos = endPos + 1;
-            if (!buf[endPos]) break;
+        for (new i = 0; i < MAX_ROSTER_ENTRIES; i++) {
+            formatex(key, charsmax(key), "%s_%d", LOCALINFO_ROSTER1, i);
+            get_localinfo(key, entry, charsmax(entry));
+            if (!entry[0]) break;
+            copy(g_matchRosterTeam1[g_matchRosterTeam1Count], charsmax(g_matchRosterTeam1[]), entry);
+            g_matchRosterTeam1Count++;
         }
     }
 
     // Restore Team 2 roster
-    get_localinfo(LOCALINFO_ROSTER2, buf, charsmax(buf));
-    if (buf[0]) {
+    formatex(key, charsmax(key), "%s_0", LOCALINFO_ROSTER2);
+    get_localinfo(key, entry, charsmax(entry));
+    if (entry[0]) {
         g_matchRosterTeam2Count = 0;
-        new entry[80], pos = 0, bufLen = strlen(buf);
-        while (pos < bufLen && g_matchRosterTeam2Count < MAX_ROSTER_ENTRIES) {
-            new endPos = pos;
-            while (buf[endPos] && buf[endPos] != ';') endPos++;
-
-            new len = endPos - pos;
-            if (len > 0 && len < sizeof(entry)) {
-                copy(entry, len, buf[pos]);
-                entry[len] = EOS;
-                copy(g_matchRosterTeam2[g_matchRosterTeam2Count], charsmax(g_matchRosterTeam2[]), entry);
-                g_matchRosterTeam2Count++;
-            }
-
-            pos = endPos + 1;
-            if (!buf[endPos]) break;
+        for (new i = 0; i < MAX_ROSTER_ENTRIES; i++) {
+            formatex(key, charsmax(key), "%s_%d", LOCALINFO_ROSTER2, i);
+            get_localinfo(key, entry, charsmax(entry));
+            if (!entry[0]) break;
+            copy(g_matchRosterTeam2[g_matchRosterTeam2Count], charsmax(g_matchRosterTeam2[]), entry);
+            g_matchRosterTeam2Count++;
         }
     }
 

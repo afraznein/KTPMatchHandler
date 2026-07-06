@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.140"
+#define PLUGIN_VERSION "0.10.141"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -265,8 +265,8 @@ new const LOCALINFO_OT_SCORES[]    = "_ktp_ots";      // OT rounds: "t1,t2|t1,t2
 new const LOCALINFO_OT_STATE[]     = "_ktp_otst";     // "techA,techX,side" (OT tech budgets + starting side)
 
 // Persistent roster keys (survives map changes)
-new const LOCALINFO_ROSTER1[]      = "_ktp_r1";       // Team 1 roster: "name|sid;name|sid;..."
-new const LOCALINFO_ROSTER2[]      = "_ktp_r2";       // Team 2 roster: "name|sid;name|sid;..."
+new const LOCALINFO_ROSTER1[]      = "_ktp_r1";       // Team 1 roster key prefix: _ktp_r1_<i> = "name|sid" (chunked; whole-team values blew the 127-byte info cap)
+new const LOCALINFO_ROSTER2[]      = "_ktp_r2";       // Team 2 roster key prefix: _ktp_r2_<i> = "name|sid"
 
 // ---------- Match ID System ----------
 new g_matchId[64];              // Unique match identifier (format: KTP-{timestamp}-{mapname})
@@ -498,6 +498,7 @@ new g_taskPendingPhaseId = 55625;           // Task ID for deferred enter_pendin
 new g_taskRoundLiveTimeoutId = 55626;      // Task ID for roundlive timeout fallback
 new g_taskContinuationAnnounceId = 55629;  // Task ID for deferred 2nd-half/OT announce (clients reconnect window)
 new g_taskContinuationReminderId = 55630;  // Task ID base for early ".ready" chat reminders (uses +1 for 2nd reminder)
+new g_taskWeaponFlushId = 55632;           // Task ID for repeating AC weapon-timeline flush (55631 reserved: reminder base +1)
 
 // Delayed match start log data (for HLStatsX UDP timing issue)
 new g_delayedMatchId[64];                   // Match ID for delayed log
@@ -715,6 +716,11 @@ public OnPfnChangeLevel(const map[], const landmark[]) {
 stock dispatch_changelevel_match_end(const map[], const bool:isPfnHook) {
     // ----- First half end: redirect to same map for 2nd half -----
     if (g_currentHalf == 1 && !g_inOvertime) {
+        // Intermission starts here for the h1 boundary too — without this,
+        // the h1-end mass disconnect still ran the auto-DC countdown and
+        // score saves (the flag was only set on the 2nd-half/OT branch
+        // below). Cleared at go-live and force-reset like that branch's.
+        g_inIntermission = true;
         if (isPfnHook) {
             if (!g_matchMap[0]) {
                 copy(g_matchMap, charsmax(g_matchMap), g_currentMap);
@@ -799,7 +805,7 @@ stock bool:process_second_half_end_changelevel() {
         new flushed = dodx_flush_all_stats();
         log_ktp("event=STATS_FLUSH type=match_end players=%d match_id=%s", flushed, g_matchId);
         log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^")", g_matchId, g_matchMap);
-        dodx_set_match_id("");
+        ktp_set_match_context("");
     }
     #endif
 
@@ -1041,7 +1047,7 @@ stock handle_first_half_end() {
 
         // Clear match context BEFORE map change to prevent warmup kills on the new map
         // from being tagged with the match_id. It will be re-set when players .rdy for half 2.
-        dodx_set_match_id("");
+        ktp_set_match_context("");
         log_ktp("event=MATCH_ID_CLEARED reason=halftime");
     }
     #endif
@@ -1511,7 +1517,7 @@ public task_delayed_match_start_log() {
 public task_delayed_set_match_id() {
     #if defined HAS_DODX
     if (g_hasDodxStatsNatives) {
-        dodx_set_match_id(g_delayedMatchId);
+        ktp_set_match_context(g_delayedMatchId);
         log_ktp("event=MATCH_ID_SET_DELAYED match_id=%s", g_delayedMatchId);
     }
     #endif
@@ -1581,7 +1587,7 @@ public task_roundlive_match_context() {
 
     #if defined HAS_DODX
     if (g_hasDodxStatsNatives) {
-        dodx_set_match_id(g_delayedMatchId);
+        ktp_set_match_context(g_delayedMatchId);
         log_ktp("event=MATCH_ID_SET_ROUNDLIVE match_id=%s", g_delayedMatchId);
     }
     #endif
@@ -2227,8 +2233,14 @@ stock get_user_team_id(id) {
 stock sanitize_name_for_localinfo(const src[], dest[], maxlen) {
     new j = 0;
     for (new i = 0; src[i] && j < maxlen; i++) {
-        if (src[i] != '|' && src[i] != ';')
-            dest[j++] = src[i];
+        // our own delimiters, plus chars Info_SetValueForStarKey rejects
+        // outright ('"' and backslash) — a rejected value vanishes silently
+        if (src[i] == '|' || src[i] == ';' || src[i] == '"' || src[i] == '\')
+            continue;
+        // collapse '.' runs — the engine silently rejects values containing ".."
+        if (src[i] == '.' && j > 0 && dest[j - 1] == '.')
+            continue;
+        dest[j++] = src[i];
     }
     dest[j] = EOS;
 }
@@ -2564,9 +2576,22 @@ stock send_ac_weapon_timeline_batch() {
 // dodx_get_match_id() only, which dropped every event before it could
 // reach the ring buffer during a solo baseline session — the flush-side
 // baseline branch then had empty buffers and emitted nothing.
+//
+// 0.10.141: the match-context half is a cached bool maintained by
+// ktp_set_match_context() — this gate runs on every damage event and was
+// paying a dodx_get_match_id() native call each time. The baseline-mode
+// pcvar stays a live read (it can flip via rcon mid-session).
+new bool:g_acTimelineMatchActive = false;
+
+// INVARIANT: every dodx_set_match_id write in this plugin must go through
+// this wrapper, or the cached bool desyncs from the real DODX match context.
+stock ktp_set_match_context(const matchId[]) {
+    dodx_set_match_id(matchId);
+    g_acTimelineMatchActive = (matchId[0] != 0);
+}
+
 stock bool: ac_timeline_should_record() {
-    new probe[2];
-    if (dodx_get_match_id(probe, 1)) return true;             // real match active
+    if (g_acTimelineMatchActive) return true;                 // real match active
     if (get_pcvar_num(g_cvarAcBaselineMode) > 0) return true; // solo baseline session
     return false;
 }
@@ -2947,7 +2972,14 @@ stock execute_pause(const who[], const reason[]) {
         }
         g_pauseDurationSec = cachedDur;
     }
-    if (g_pauseDurationSec <= 0) g_pauseDurationSec = 300;  // fallback
+    if (g_pauseDurationSec <= 0) {
+        // Callers gate tech pauses on budget > 0, so this firing for a tech
+        // pause means a gate broke upstream and we just granted a free 300s —
+        // make that visible instead of silent.
+        log_ktp("event=PAUSE_DURATION_FALLBACK tech=%d initiator='%s' reason='%s' - zero/negative duration reached execute_pause",
+                g_isTechPause ? 1 : 0, who, reason);
+        g_pauseDurationSec = 300;
+    }
 
     new totalDuration = get_total_pause_duration();
     new buf[16];
@@ -3852,6 +3884,13 @@ public plugin_init() {
     register_clcmd("say .cmds", "cmd_commands");
     register_clcmd("say_team .cmds", "cmd_commands");
 
+    // Unready-player list (was in the .commands help text for years with no
+    // handler behind it — registered for real in 0.10.141)
+    register_clcmd("say /whoneedsready", "cmd_whoneedsready");
+    register_clcmd("say_team /whoneedsready", "cmd_whoneedsready");
+    register_clcmd("say .whoneedsready", "cmd_whoneedsready");
+    register_clcmd("say_team .whoneedsready", "cmd_whoneedsready");
+
     // Overtime break commands
     register_clcmd("say /otbreak", "cmd_otbreak");
     register_clcmd("say_team /otbreak", "cmd_otbreak");
@@ -3912,21 +3951,41 @@ public plugin_init() {
 
     g_hudSync = CreateHudSyncObj();
 
-    // Register ReAPI hook for automatic pause HUD updates (KTP-ReHLDS)
-    RegisterHookChain(RH_SV_UpdatePausedHUD, "OnPausedHUDUpdate", .post = false);
-    log_amx("[KTP] Registered RH_SV_UpdatePausedHUD hook (KTP-ReHLDS mode)");
+    // Changelevel hooks first: they own match-state persistence, so they must
+    // register before anything that could abort plugin_init (a runtime error
+    // in a later RegisterHookChain skips the rest of this function). The
+    // cosmetic pause-HUD hook therefore registers LAST.
 
     // Register ReAPI hook for game DLL pfnChangeLevel interception (KTP-ReHLDS)
     // This is the PRIMARY hook - fires when game DLL requests level change (timelimit, objectives)
-    RegisterHookChain(RH_PF_changelevel_I, "OnPfnChangeLevel", .post = false);
-    log_amx("[KTP] Registered RH_PF_changelevel_I hook (KTP-ReHLDS mode)");
+    new HookChain:hookPfn = RegisterHookChain(RH_PF_changelevel_I, "OnPfnChangeLevel", .post = false);
+    if (hookPfn) {
+        log_amx("[KTP] Registered RH_PF_changelevel_I hook (KTP-ReHLDS mode)");
+    } else {
+        log_amx("[KTP] ERROR: RH_PF_changelevel_I hook registration FAILED - match-state persistence degraded");
+        log_ktp("event=HOOK_REGISTER_FAILED hook=RH_PF_changelevel_I");
+    }
 
     // Register ReAPI hook for console changelevel interception (KTP-ReHLDS)
     // SECONDARY hook - fires when changelevel console command executes (admin/RCON)
     // Skips processing if already handled by PF_changelevel_I above
-    RegisterHookChain(RH_Host_Changelevel_f, "OnChangeLevel", .post = false);
-    log_amx("[KTP] Registered RH_Host_Changelevel_f hook (KTP-ReHLDS mode)");
-    log_ktp("event=CHANGELEVEL_HOOKS_REGISTERED");
+    new HookChain:hookHost = RegisterHookChain(RH_Host_Changelevel_f, "OnChangeLevel", .post = false);
+    if (hookHost) {
+        log_amx("[KTP] Registered RH_Host_Changelevel_f hook (KTP-ReHLDS mode)");
+    } else {
+        log_amx("[KTP] ERROR: RH_Host_Changelevel_f hook registration FAILED - match-state persistence degraded");
+        log_ktp("event=HOOK_REGISTER_FAILED hook=RH_Host_Changelevel_f");
+    }
+    log_ktp("event=CHANGELEVEL_HOOKS_REGISTERED pfn=%d host=%d", hookPfn ? 1 : 0, hookHost ? 1 : 0);
+
+    // Register ReAPI hook for automatic pause HUD updates (KTP-ReHLDS) — cosmetic, so last
+    new HookChain:hookHud = RegisterHookChain(RH_SV_UpdatePausedHUD, "OnPausedHUDUpdate", .post = false);
+    if (hookHud) {
+        log_amx("[KTP] Registered RH_SV_UpdatePausedHUD hook (KTP-ReHLDS mode)");
+    } else {
+        log_amx("[KTP] WARNING: RH_SV_UpdatePausedHUD hook registration failed - pause HUD updates disabled");
+        log_ktp("event=HOOK_REGISTER_FAILED hook=RH_SV_UpdatePausedHUD");
+    }
 
     g_lastUnpauseBy[0] = EOS;
     g_lastPauseBy[0] = EOS;
@@ -3934,7 +3993,7 @@ public plugin_init() {
     // 0.5.0 — weapon timeline batch flush task. Fires every WEAPON_FLUSH_INTERVAL
     // seconds; if buffers are empty or AC integration is disabled, the call
     // is a cheap no-op. The 'b' flag makes it repeating.
-    set_task(WEAPON_FLUSH_INTERVAL, "task_flush_weapon_timeline", 0, _, _, "b");
+    set_task(WEAPON_FLUSH_INTERVAL, "task_flush_weapon_timeline", g_taskWeaponFlushId, _, _, "b");
 
     // 0.10.134 — baseline recording mode (set to 1 for solo spray-baseline
     // captures; weapon-timeline batches upload under a synthetic match_id).
@@ -4889,6 +4948,15 @@ stock find_saved_score_slot(const sid[]) {
 stock find_or_alloc_score_slot(const sid[]) {
     new idx = find_saved_score_slot(sid);
     if (idx >= 0) return idx;
+    // Reuse rows freed by a failed validation (SID zeroed) — without this,
+    // every failed save burned a slot permanently and one mass-DC burst of
+    // failures filled the 16-row table for the rest of the match.
+    for (new i = 0; i < g_savedScoreCount; i++) {
+        if (!g_savedScoreSid[i][0]) {
+            copy(g_savedScoreSid[i], 43, sid);
+            return i;
+        }
+    }
     if (g_savedScoreCount >= SAVED_SCORE_MAX) return -1;
     idx = g_savedScoreCount;
     // Explicit row size (44 - 1 = 43) — earlier `charsmax(g_savedScoreSid[])`
@@ -4915,6 +4983,10 @@ stock clear_saved_scores() {
 
 stock bool:save_player_score(id) {
     if (!g_matchLive || g_matchEnded) return false;
+    // Half-end changelevel mass-disconnects the whole roster while the match
+    // is still flagged live; those saves are boundary noise, not rejoin
+    // candidates, and they filled the table (same gate as auto-DC above).
+    if (is_in_intermission()) return false;
     if (is_user_bot(id) || is_user_hltv(id)) return false;
     new tid = get_user_team_id(id);
     if (tid != 1 && tid != 2) return false;
@@ -5357,16 +5429,7 @@ stock handle_resume_request(id, const name[], const sid[], const team[], teamId)
 // ========== PAUSE CHAT RELAY ==========
 // During pause, normal chat broadcast is blocked by the engine.
 // This relays chat via client_print which bypasses the block (same mechanism as HUD).
-
-public handle_pause_chat_relay(id) {
-    if (!g_isPaused) return PLUGIN_CONTINUE;
-    return relay_pause_chat(id, false);
-}
-
-public handle_pause_chat_relay_team(id) {
-    if (!g_isPaused) return PLUGIN_CONTINUE;
-    return relay_pause_chat(id, true);
-}
+// Called from cmd_say_hook / cmd_say_team_hook — not registered standalone.
 
 stock relay_pause_chat(id, bool:teamOnly) {
     // Only relay during pause
@@ -5972,14 +6035,14 @@ public cmd_commands(id) {
     client_print(id, print_console, "  .whoneedsready   - Show unready players");
     client_print(id, print_console, "  .score           - Show current match score");
     client_print(id, print_console, "  .cfg             - Show match configuration");
-    client_print(id, print_console, "  .changemap       - Map selection menu (when no match active)");
     client_print(id, print_console, "  .commands / .cmds - Show this command list");
 
     // Admin Commands (RCON flag)
     client_print(id, print_console, "");
     client_print(id, print_console, "--- Admin Commands (RCON flag) ---");
     client_print(id, print_console, "  .forcereset      - Force reset all match state (requires confirmation)");
-    client_print(id, print_console, "  .restarthalf     - Restart 2nd half to 0-0 (requires confirmation)");
+    client_print(id, print_console, "  .restarthalf / .h2restart - Restart 2nd half to 0-0 (requires confirmation)");
+    client_print(id, print_console, "  .changemap       - Map selection menu, no match active (KTPAdminAudit)");
     client_print(id, print_console, "  .hltvrestart     - Restart paired HLTV instance");
 
     // Other KTP Plugin Commands
@@ -6841,7 +6904,7 @@ public cmd_cancel(id) {
             new flushed = dodx_flush_all_stats();
             log_ktp("event=STATS_FLUSH type=secondhalf_cancel players=%d match_id=%s", flushed, savedMatchId);
             log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"cancelled^")", savedMatchId, g_currentMap);
-            dodx_set_match_id("");
+            ktp_set_match_context("");
         }
         #endif
 
@@ -6898,8 +6961,7 @@ public cmd_cancel(id) {
 
         // Clear all localinfo persistence
         clear_localinfo_match_context();
-        set_localinfo(LOCALINFO_ROSTER1, "");
-        set_localinfo(LOCALINFO_ROSTER2, "");
+        clear_roster_localinfo();
         set_localinfo(LOCALINFO_CAPTAINS, "");
 
         // Reset match type
@@ -7123,7 +7185,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
         new flushed = dodx_flush_all_stats();
         log_ktp("event=STATS_FLUSH type=forcereset players=%d match_id=%s", flushed, g_matchId);
         log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"forcereset^")", g_matchId, g_currentMap);
-        dodx_set_match_id("");
+        ktp_set_match_context("");
     }
     #endif
 
@@ -7203,8 +7265,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
 
     // Clear all localinfo keys
     clear_localinfo_match_context();
-    set_localinfo(LOCALINFO_ROSTER1, "");
-    set_localinfo(LOCALINFO_ROSTER2, "");
+    clear_roster_localinfo();
     set_localinfo(LOCALINFO_CAPTAINS, "");
 
     // Reset hostname
@@ -7362,6 +7423,10 @@ stock execute_restart_half(id, const name[], const sid[], const ip[]) {
 // =============== Deferred restarthalf — Phase 1 (0.1s) ===============
 public task_restarthalf_stats() {
     if (!g_matchLive) return;
+
+    // Same boundary rule as task_deferred_stats: a half restart re-baselines
+    // the scoreboard, so pre-restart saves must not restore into it.
+    clear_saved_scores();
 
     #if defined HAS_DODX
     if (g_hasDodxStatsNatives) {
@@ -7656,7 +7721,7 @@ public cmd_ready(id) {
                 new flushed = dodx_flush_all_stats();
                 log_ktp("event=STATS_FLUSH type=match_abandoned players=%d match_id=%s", flushed, g_matchId);
                 log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (reason ^"abandoned^")", g_matchId, g_matchMap);
-                dodx_set_match_id("");
+                ktp_set_match_context("");
                 log_ktp("event=MATCH_ABANDONED previous_map=%s new_map=%s match_id=%s", g_matchMap, g_currentMap, g_matchId);
             }
             #endif
@@ -7700,6 +7765,12 @@ public cmd_ready(id) {
         g_inIntermission  = false;  // Clear intermission flag for new match
         g_changeLevelHandled = false;  // Reset changelevel guard - prevents stale flag from blocking half-end processing
         set_localinfo(LOCALINFO_LIVE, "1");  // Persist live state for abandoned match detection
+
+        // Drop saves from the previous half in the SAME frame live flips on —
+        // deferring this to Phase 1 left a ~100ms window where a rejoining
+        // player's team-pick could restore stale cross-half rows (sides swap,
+        // so the team-number gate alone doesn't block them).
+        clear_saved_scores();
 
         // Set competitive mode indicator for other plugins (KTPCvarChecker)
         // Only .ktp and .ktpOT are competitive; 12man/scrim/draft are casual
@@ -7883,6 +7954,23 @@ public task_apply_match_config_and_start() {
     // Single server_exec() processes all queued commands (timelimit + restart)
     server_cmd("mp_clan_restartround 1");
     server_exec();
+
+    // Re-read cached KTP tunables now that the map config has executed —
+    // cmd_ready's comment promised this happened "when configs are executed"
+    // but nothing did it, so per-map ktp_* overrides silently never applied.
+    new prevBudgetSecs = g_techBudgetSecs;
+    ktp_sync_config_from_cvars();
+
+    // Phase 0 seeded g_techBudget[] from the pre-config cache 50ms ago. If the
+    // map config just changed ktp_tech_budget_seconds, re-seed — but only a
+    // fresh match with untouched budgets (budget is per-match; a consumed
+    // budget must never be refilled).
+    if (g_currentHalf == 1 && g_techBudgetSecs != prevBudgetSecs
+        && g_techBudget[1] == prevBudgetSecs && g_techBudget[2] == prevBudgetSecs) {
+        g_techBudget[1] = g_techBudgetSecs;
+        g_techBudget[2] = g_techBudgetSecs;
+        log_ktp("event=TECH_BUDGET_RESEED old=%d new=%d reason=map_config_override", prevBudgetSecs, g_techBudgetSecs);
+    }
 }
 
 // =============== Deferred match start — Phase 1 (0.1s after cmd_ready) ===============
@@ -7891,6 +7979,8 @@ public task_apply_match_config_and_start() {
 public task_deferred_stats() {
     // Guard: if match was reset in the 0.1s window, abort
     if (!g_matchLive) return;
+
+    // (Cross-half score-save clear happens in Phase 0, same frame live flips.)
 
     #if defined HAS_DODX
     if (g_hasDodxStatsNatives) {
@@ -8042,6 +8132,51 @@ public cmd_status(id) {
     if (readyList[0]) client_print(id, print_chat, "[KTP] Ready: %s", readyList);
     if (notReadyList[0]) client_print(id, print_chat, "[KTP] Not Ready: %s", notReadyList);
 
+    return PLUGIN_HANDLED;
+}
+
+// On-demand unready list for the requester (.whoneedsready). Same list the
+// periodic reminder builds, but both teams, printed only to the asker.
+public cmd_whoneedsready(id) {
+    if (!g_matchPending) {
+        client_print(id, print_chat, "[KTP] No pending match - nobody needs to ready.");
+        return PLUGIN_HANDLED;
+    }
+
+    // Global buffers, same rationale as unready_reminder_tick (AMX stack limit)
+    g_unreadyAllies[0] = EOS;
+    g_unreadyAxis[0] = EOS;
+    new alliesIdx = 0, axisIdx = 0;
+    new alliesCount = 0, axisCount = 0;
+
+    new ids[32], num;
+    get_players(ids, num, "ch");
+    for (new i = 0; i < num; i++) {
+        new player = ids[i];
+        new tid = get_user_team_id(player);
+        if ((tid == 1 || tid == 2) && !g_ready[player]) {
+            new name[32];
+            get_user_name(player, name, charsmax(name));
+            if (tid == 1) {
+                if (alliesIdx > 0) alliesIdx += formatex(g_unreadyAllies[alliesIdx], charsmax(g_unreadyAllies) - alliesIdx, ", ");
+                alliesIdx += formatex(g_unreadyAllies[alliesIdx], charsmax(g_unreadyAllies) - alliesIdx, "%s", name);
+                alliesCount++;
+            } else {
+                if (axisIdx > 0) axisIdx += formatex(g_unreadyAxis[axisIdx], charsmax(g_unreadyAxis) - axisIdx, ", ");
+                axisIdx += formatex(g_unreadyAxis[axisIdx], charsmax(g_unreadyAxis) - axisIdx, "%s", name);
+                axisCount++;
+            }
+        }
+    }
+
+    if (alliesCount == 0 && axisCount == 0) {
+        client_print(id, print_chat, "[KTP] Everyone on a team is ready.");
+        return PLUGIN_HANDLED;
+    }
+    if (alliesCount > 0)
+        client_print(id, print_chat, "[KTP] Allies not ready (%d): %s", alliesCount, g_unreadyAllies);
+    if (axisCount > 0)
+        client_print(id, print_chat, "[KTP] Axis not ready (%d): %s", axisCount, g_unreadyAxis);
     return PLUGIN_HANDLED;
 }
 
