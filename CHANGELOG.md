@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.142] - 2026-07-07
+
+Two CRITICAL overtime/changelevel bugs from the 2026-07-07 full-surface plugin assessment, plus the coupled OT roster-mapping fix (fixing the first critical un-masks it). Independent of the score-persistence wave; no DODX dependency.
+
+### Fixed
+
+#### CRITICAL: explicit-OT round 2+ state clobber
+
+The OT-init block in `cmd_ready` ran on every all-ready of a `.ktpOT`/`.draftOT` match, with no guard against already being in overtime. Restored OT rounds re-hit it and reset `g_otRound` to 1, zeroed the regulation and OT running scores, cancelled the side swap, and regenerated the match ID mid-match (forking HLTV/HLStatsX/AC onto a fresh match). Every multi-round overtime was affected — each round became independent sudden-death with no accumulation and no side swap. Now guarded on `!g_inOvertime`: only the first OT round initializes; restored rounds keep the round number, side, and totals they carry in localinfo. As a side benefit the guard stops the block from clearing `g_secondHalfPending`, which the go-live OT branch needs true to restore the grand-total scoreboard.
+
+#### CRITICAL: pfnChangeLevel debounce latch never reset
+
+`g_pfnChangeLevelProcessed` (the per-intermission debounce that stops the game DLL's ~9000 changelevel calls/sec from reprocessing) was never cleared. The in-code comment claimed it "resets on each map load (AMXX reinits globals)" — false in extension mode, where globals persist across map changes. After the first intermission on any map it latched true for the whole process life, permanently disabling: the primary changelevel hook's match-end handling (the redundant secondary hook masked this), the timelimit-expired-during-ready-up pending cleanup (NY1 2026-03-18 protection), and the general changelevel watchdog. Now cleared per map in `plugin_init` alongside its sibling guards, and the comment corrected.
+
+#### OT roster/ready side-mapping followed the hardcoded 2nd-half swap
+
+`get_ready_counts`, the persistent-roster update, and the half-captain fallback mapped roster team 1 to the Axis side unconditionally when a swap context was active. That is only correct in the 2nd half and on OT rounds where team 1 currently occupies Axis; on rounds where team 1 starts as Allies it inverted the ready counts and mis-rostered new joiners. Previously unreachable (the round-2+ clobber above kept the round counter pinned at 1), so fixing the clobber exposed it. All three sites now map by `g_otTeam1StartsAs` when in overtime — behavior-identical to the old code for the 2nd half and even OT rounds (where team 1 is on Axis), corrected for odd OT rounds (where team 1 is back on Allies).
+
 ## [0.10.141] - 2026-07-05
 
 Plugin-side half of the score-persistence fix wave from the 2026-07-05 full-stack code review (companion to KTPAMXX 2.7.20's DODX-side `g_observedDeaths` lifecycle fixes). Deploy alongside or after 2.7.20 — the validation gate only starts passing once the DODX counter resets land.

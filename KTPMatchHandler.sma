@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.141"
+#define PLUGIN_VERSION "0.10.142"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -632,7 +632,9 @@ public OnPfnChangeLevel(const map[], const landmark[]) {
     // intermission (~10 calls/frame x 900fps = ~9000 calls/sec). The engine's spawncount
     // guard silently drops all but the first, but this hook fires for every single one.
     // Only the first call per intermission cycle needs processing.
-    // g_pfnChangeLevelProcessed resets on each map load (AMXX reinits globals).
+    // g_pfnChangeLevelProcessed is cleared per map in plugin_init — extension-mode
+    // globals persist across map changes, so without that reset this latch would
+    // stay true for the whole process life after the first intermission.
 
     // === PRESTART or PENDING: block changelevel during ready-up ===
     // HC_SUPERCEDE prevents the changelevel from queuing in the command buffer.
@@ -3658,6 +3660,7 @@ public plugin_init() {
     // on implicit AMXX global reinit
     g_changeLevelHandled = false;
     g_changeLevelHandledTime = 0.0;
+    g_pfnChangeLevelProcessed = false;  // per-intermission debounce; extension-mode globals persist, so clear it per map here
 
     // Reset DODX stats pause — g_bStatsPaused (C++ global) survives map change,
     // but Pawn g_roundLive resets to true. Unconditional unpause ensures clean state.
@@ -4929,7 +4932,8 @@ stock bool:is_in_intermission() {
 //   2. client_putinserver -> set_task(1.5, "task_restore_player_score", id)
 //      (deferred so Steam validation + pev settle before we read/write)
 //   3. task_restore_player_score: lookup by sid, gate on same team, then
-//      set_user_frags + set_pev(deaths) + ScoreInfo broadcast for scoreboards
+//      set_entvar(var_frags) + dodx_set_user_deaths/_score +
+//      dodx_broadcast_scoreboard (extension-mode-safe; no fakemeta/fun)
 //
 // What this does NOT restore (DoD-specific, requires DODX native expansion):
 //   - DoD per-player Score column (the cap + kill + bonus aggregate)
@@ -5251,14 +5255,17 @@ stock get_ready_counts(&alliesPlayers, &axisPlayers, &alliesReady, &axisReady) {
         new tid;
 
         if (use2ndHalfRoster) {
-            // Use roster team identity, mapped to 2nd half positions
+            // Map roster team identity to the current side. In 2nd half team 1 is Axis;
+            // in OT team 1 is on side g_otTeam1StartsAs (swaps each round), so the mapping
+            // must follow that rather than the hardcoded 2nd-half swap.
             new rosterTeam = get_player_roster_team(id);
+            new team1Side = g_inOvertime ? g_otTeam1StartsAs : 2;
             if (rosterTeam == 1) {
-                tid = 2;  // Team 1 is now Axis in 2nd half
+                tid = team1Side;
             } else if (rosterTeam == 2) {
-                tid = 1;  // Team 2 is now Allies in 2nd half
+                tid = (team1Side == 1) ? 2 : 1;
             } else {
-                // Not in roster - use current game team (new player joining 2nd half)
+                // Not in roster - use current game team (new player joining)
                 tid = get_user_team_id(id);
             }
         } else {
@@ -7499,7 +7506,7 @@ public cmd_ready(id) {
     log_ktp("event=READY player='%s' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, g_currentMap);
 
     // --- Half-captain tracking (first .ready per team identity this half) ---
-    // 2nd-half uses roster-based team identity; 1st-half uses game team directly.
+    // 2nd-half / OT use roster-based team identity; 1st-half uses game team directly.
     new tid = get_user_team(id);
     new captainTeamId;
     if (g_secondHalfPending) {
@@ -7507,7 +7514,10 @@ public cmd_ready(id) {
         if (rosterTeam > 0) {
             captainTeamId = rosterTeam;
         } else {
-            captainTeamId = (tid == 1) ? 2 : 1;
+            // Not yet in the roster: map current side back to roster identity the same
+            // way the roster write does — team 1 is on side g_otTeam1StartsAs in OT,
+            // on Axis in the 2nd half.
+            captainTeamId = g_inOvertime ? ((tid == g_otTeam1StartsAs) ? 1 : 2) : ((tid == 1) ? 2 : 1);
         }
     } else {
         captainTeamId = tid;
@@ -7522,9 +7532,14 @@ public cmd_ready(id) {
         log_ktp("event=HALF_CAPTAIN_SET team=2 player='%s' steamid=%s", name, safe_sid(sid));
     }
 
-    // --- Persistent match roster update (sides swapped in 2nd half) ---
+    // --- Persistent match roster update (sides swapped in 2nd half / per OT round) ---
     new rosterTeamId;
-    if (g_secondHalfPending || g_currentHalf == 2) {
+    if (g_inOvertime) {
+        // OT: team 1 is on side g_otTeam1StartsAs this round (sides swap each round).
+        // For g_otTeam1StartsAs==2 this equals the 2nd-half mapping below; for ==1 it
+        // is the inverse — the previously-hardcoded swap was only right on even rounds.
+        rosterTeamId = (tid == g_otTeam1StartsAs) ? 1 : 2;
+    } else if (g_secondHalfPending || g_currentHalf == 2) {
         rosterTeamId = (tid == 1) ? 2 : 1;
     } else {
         rosterTeamId = tid;
@@ -7546,10 +7561,15 @@ public cmd_ready(id) {
 
     // Start match when both teams have enough ready players
     if (alliesReady >= need && axisReady >= need) {
-        // Initialize OT state for explicit OT match types (.ktpOT, .draftOT)
+        // Initialize OT state for explicit OT match types (.ktpOT, .draftOT).
         // Done SYNC because subsequent logic (halfText branch, OT scoreboard restore)
         // reads g_inOvertime / g_otRound in this same frame.
-        if (g_matchType == MATCH_TYPE_KTP_OT || g_matchType == MATCH_TYPE_DRAFT_OT) {
+        // Guard on !g_inOvertime: restored OT rounds (2+) already carry their round
+        // number, side, and running scores from localinfo — re-running this block
+        // would reset g_otRound to 1, wipe the OT totals, cancel the side swap, and
+        // mint a fresh match ID mid-match. Only the first .ktpOT/.draftOT round (no
+        // OT state yet) should initialize here.
+        if (!g_inOvertime && (g_matchType == MATCH_TYPE_KTP_OT || g_matchType == MATCH_TYPE_DRAFT_OT)) {
             g_inOvertime = true;
             g_otRound = 1;
             g_secondHalfPending = false;  // Fresh OT match, not awaiting 2nd half
