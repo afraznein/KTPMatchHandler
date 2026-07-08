@@ -69,29 +69,8 @@ stock send_discord_message(const message[]) {
         return;
     }
 
-    // Escape special characters for JSON (using global buffer)
-    new msgLen = strlen(message);
-    new j = 0;
-    for (new i = 0; i < msgLen; i++) {
-        // Ensure we have room for escape sequence (2 chars) + null terminator
-        if (j >= charsmax(g_discordEscapedMsg) - 3) break;
-
-        // Handle special characters that need escaping
-        switch (message[i]) {
-            case '"': { g_discordEscapedMsg[j++] = 92; g_discordEscapedMsg[j++] = '"'; }  // 92 = backslash
-            case 92: { g_discordEscapedMsg[j++] = 92; g_discordEscapedMsg[j++] = 92; }    // backslash
-            case 10: { g_discordEscapedMsg[j++] = 92; g_discordEscapedMsg[j++] = 'n'; }   // newline
-            case 13: { g_discordEscapedMsg[j++] = 92; g_discordEscapedMsg[j++] = 'r'; }   // carriage return
-            case 9: { g_discordEscapedMsg[j++] = 92; g_discordEscapedMsg[j++] = 't'; }    // tab
-            default: {
-                // Copy character as-is if printable, skip control chars
-                if (message[i] >= 32) {
-                    g_discordEscapedMsg[j++] = message[i];
-                }
-            }
-        }
-    }
-    g_discordEscapedMsg[j] = EOS;
+    // Escape for JSON via the shared strict escaper (see escape_for_json below)
+    ktp_discord_escape_json(message, g_discordEscapedMsg, charsmax(g_discordEscapedMsg));
 
     // Build JSON payload (using global buffer)
     // Note: No code block wrapper - let Discord render markdown formatting
@@ -181,28 +160,13 @@ stock send_discord_simple_embed(const title[], const description[], color) {
 #endif
 }
 
-// Escape a string for JSON string value (handles quotes, backslashes, newlines)
+// Escape a string for JSON string value. Delegates to the shared
+// RFC 3629-strict escaper (ktp_discord.inc): malformed UTF-8 bytes are
+// dropped instead of passed through, and truncation never splits a
+// multi-byte sequence — either would 400 the entire Discord embed for
+// the rest of the match (crafted-name griefable).
 stock escape_for_json(const input[], output[], maxlen) {
-    new j = 0;
-    new inputLen = strlen(input);
-    for (new i = 0; i < inputLen && j < maxlen - 2; i++) {
-        new ch = input[i];
-        switch (ch) {
-            case '"': { output[j++] = 92; output[j++] = '"'; }   // escape quote
-            case 92:  { output[j++] = 92; output[j++] = 92; }    // escape backslash
-            case 10:  { output[j++] = 92; output[j++] = 'n'; }   // escape newline
-            case 13:  { } // skip carriage return
-            case 9:   { output[j++] = 92; output[j++] = 't'; }   // escape tab (v0.10.118)
-            default:  {
-                // v0.10.118: drop other ASCII control chars (0x01-0x08, 0x0B-0x0C, 0x0E-0x1F)
-                // that would produce invalid JSON. Player names with such bytes are rare but
-                // possible via client exploits and would 400 the entire Discord embed otherwise.
-                if (ch < 32) continue;
-                output[j++] = ch;
-            }
-        }
-    }
-    output[j] = EOS;
+    ktp_discord_escape_json(input, output, maxlen);
 }
 
 // Global buffers for escaped roster strings (avoid stack overflow)

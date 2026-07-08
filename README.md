@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.142** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.143** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -34,9 +34,8 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 
 ### HLTV Recording Integration (v0.10.4+)
 - **Automatic Demo Recording**: [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) hooks into match events
-- **Match-Type Naming**: Demos named `<type>_<matchid>_<map>.dem` (e.g., `ktp_KTP-1735052400-dod_anzio_dod_anzio.dem`)
-- **Start/Stop Control**: Recording starts on 1st half LIVE, stops on match end
-- **UDP RCON**: Sends record/stoprecording commands to paired HLTV instance
+- **Always-On Recording (1.7.0+)**: HLTV records continuously via its own config; the data-server renamer names demos `<type>_<matchid>_<half>` from the `ktp_match_start`/`ktp_match_end` forwards this plugin fires
+- **Match Events**: KTPHLTVRecorder consumes the forwards and announces recording state in chat
 
 ### Advanced Pause System (ReAPI Native)
 - **ReAPI Pause Integration**: Direct pause control via `rh_set_server_pause()` - bypasses engine
@@ -46,8 +45,8 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **Real-Time HUD Updates**: MM:SS timer during pause (KTP-ReHLDS + KTP-ReAPI)
 - **Server Messages Work**: rcon say, join/leave events display during pause
 - **Player Chat**: Server processes, client rendering WIP (KTP-ReHLDS feature)
-- **Two Pause Types**: Tactical (1 per team) and Technical (5-min budget)
-- **Pause Extensions**: Up to 2× 2-minute extensions (9 minutes max)
+- **Pause Type**: Technical only (`.tech`, per-team time budget) — tactical pauses are disabled
+- **Pause Extensions**: optional via `ktp_pause_max_extensions` (default 0 = disabled)
 - **Auto-Warnings**: 30-second and 10-second countdown alerts
 - **Two-Team Unpause**: Both teams must confirm to resume
 - **Disconnect Protection**: Auto-pause with 30-second cancellable countdown
@@ -127,7 +126,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
    ktp_unpause_autorequest_secs "300"    // Auto-request unpause after 5 min
 
    // Match System
-   ktp_ready_required "6"                // Players needed to ready
+   // (ready count is fixed per match type: 6 for .ktp/.ktpOT, 5 for others)
    ktp_tech_budget_seconds "300"         // 5-min tech budget per team
    ktp_unready_reminder_secs "30"        // Unready reminder interval
    ktp_unpause_reminder_secs "15"        // Unpause reminder interval
@@ -231,13 +230,6 @@ Team 2: .go        ← Confirms (both teams must agree)
 .go                     Confirm unpause (other team)
 .ext, .extend           Extend pause +2 minutes
 .nodc, .stopdc          Cancel disconnect auto-pause
-```
-
-#### Overtime (when triggered)
-```
-.otbreak                Request 10-minute break before OT
-.skip                   Skip break / end break early
-.ext                    Extend break +5 minutes (2x per team)
 ```
 
 #### Team Names & Score
@@ -408,7 +400,7 @@ discord_auth_secret=your-secret-here
 // ===== Pause System =====
 ktp_pause_duration "300"              // Base pause duration (seconds) - Default: 5 min
 ktp_pause_extension "120"             // Extension time per .ext - Default: 2 min
-ktp_pause_max_extensions "2"          // Max extensions allowed - Default: 2
+ktp_pause_max_extensions "0"          // Max extensions allowed - Default: 0 (disabled; .ext hidden)
 ktp_prepause_seconds "5"              // Countdown before pause (live match)
 ktp_prematch_pause_seconds "5"        // Countdown before pause (pre-match)
 ktp_pause_countdown "5"               // Unpause countdown duration
@@ -416,15 +408,14 @@ ktp_unpause_autorequest_secs "300"    // Auto-request unpause after N seconds
 ktp_unpause_reminder_secs "15"        // Reminder interval for unpause confirmation
 
 // ===== Match System =====
-ktp_ready_required "6"                // Players needed to ready per team
+// (ready count is fixed per match type: 6 for .ktp/.ktpOT, 5 for scrim/12man/draft — the 12man 5/team is deliberate)
 ktp_tech_budget_seconds "300"         // Technical pause budget per team (5 min)
 ktp_unready_reminder_secs "30"        // Reminder interval for unready players
 
 // ===== File Paths (auto-detected, override only if needed) =====
 ktp_maps_file "<configsdir>/ktp_maps.ini"    // Auto-detected at runtime
 ktp_discord_ini "<configsdir>/discord.ini"   // Auto-detected at runtime
-ktp_match_logfile "ktp_match.log"
-ktp_cfg_basepath "dod/"               // Base path for map configs
+ktp_cfg_basepath "configs/"           // Base path for map configs (relative to the ktpamx/amxmodx dir)
 ```
 
 ---
@@ -1071,10 +1062,10 @@ For support and questions, please open an issue on GitHub.
 
 ## Status
 
-- **Current Version**: v0.10.67
-- **Status**: Stable (Score persistence and Discord embeds verified on VPS)
-- **Tested On**: KTP-ReHLDS + KTP-ReAPI + AMX ModX 1.10 / KTP AMX 2.6
-- **Last Updated**: February 2026
+- **Current Version**: v0.10.143
+- **Status**: Production (fleet-wide on KTP-ReHLDS extension mode; score persistence in live verification)
+- **Tested On**: KTP-ReHLDS + KTP-ReAPI + KTPAMXX 2.7.x (extension mode, no Metamod)
+- **Last Updated**: July 2026
 - **Platforms**: Day of Defeat 1.3
 
 ---
@@ -1083,7 +1074,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.67                     ║
+║             KTP MATCH HANDLER v0.10.143                    ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1097,17 +1088,10 @@ For support and questions, please open an issue on GitHub.
 ║  .score         View current match score                   ║
 ║                                                            ║
 ║  PAUSE CONTROL                                             ║
-║  .pause         Tactical pause (5-sec countdown)           ║
-║  .tech          Technical pause                            ║
+║  .tech          Technical pause (team time budget)         ║
 ║  .resume        Request unpause (your team)                ║
 ║  .go            Confirm unpause (other team)               ║
-║  .ext           Add 2 minutes (max 2×)                     ║
 ║  .nodc          Cancel disconnect auto-pause               ║
-║                                                            ║
-║  OVERTIME (when triggered)                                 ║
-║  .otbreak       Request 10-min break before OT             ║
-║  .skip          Skip/end break early                       ║
-║  .ext           Extend break +5 min (2× per team)          ║
 ║                                                            ║
 ║  TEAM NAMES                                                ║
 ║  .setallies     Set Allies team name                       ║
@@ -1124,4 +1108,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.67** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.143** - Making competitive Day of Defeat matches better, one pause at a time.

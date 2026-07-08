@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.142"
+#define PLUGIN_VERSION "0.10.143"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -123,9 +123,12 @@ new curl_slist: g_acCurlHeaders = SList_Empty;  // persistent headers slist (nev
 // ---------- 0.5.0 Weapon Timeline Enrichment ----------
 // Ring buffers for the dod_client_weaponswitch + client_damage forwards.
 // Flushed every WEAPON_FLUSH_INTERVAL seconds via amxxcurl POST to
-// /api/match/weapon-timeline-batch. On overflow we LIFO-drop oldest entries
-// rather than block the forward — losing 0.01% of weapon events on a fire-
-// storm is preferable to introducing back-pressure on the game tick.
+// /api/match/weapon-timeline-batch. On overflow the NEW event is dropped
+// (the buffer keeps the oldest) and the dropped-counter bumps; the JSON
+// headroom guard can additionally truncate buffered entries at build time.
+// Both losses are surfaced on AC_WEAPON_TIMELINE_SEND (dropped_*/trunc_*) —
+// read those before resizing the buffers; peak engagement windows are the
+// exact frames the AC recoil detector needs.
 //
 // Sized for ~30s window of a 12-player match: typical switches ~5-10/min/player
 // = 30-60 in 30s across the fleet, peak hits during a heavy engagement
@@ -353,7 +356,7 @@ const AUTO_REQUEST_MIN_SECS = 60;
 const AUTO_REQUEST_DEFAULT_SECS = 300;
 const AUTO_REQUEST_MAX_SECS = 3600; // 1 hour maximum
 // Auto-DC grace window length. Hard-coded (no cvar) by design — see comments at
-// cmd_tech_pause (~5060) and disconnect_countdown_tick (~2755) for the budget-clock
+// cmd_tech_pause and disconnect_countdown_tick for the budget-clock
 // asymmetry between this 30s grace and the 5s `.tech` pre-pause. Auto-DC pauses
 // are "punishment-free" (budget clock starts AFTER the grace), while `.tech`
 // charges the 5s pre-pause to the team's budget. If you change one, reconsider
@@ -541,6 +544,18 @@ public msg_TeamScore() {
 
     // Skip adjustment and localinfo save when no match is live
     if (!g_matchLive) return PLUGIN_CONTINUE;
+
+    // OBSERVE (0.10.143): g_matchScore stores the raw message value above,
+    // but game-sent h2 messages carry 2nd-half-only scores while our direct
+    // broadcasts (g_skipTeamScoreAdjust) carry grand totals — the cell's
+    // meaning depends on the last writer. One live h2 flag cap through this
+    // log settles whether downstream consumers double-count or see a
+    // transient; do not change the adjustment until then.
+    if (g_currentHalf == 2 && !g_inOvertime) {
+        log_ktp("event=TEAMSCORE_H2_OBSERVE team=%d raw=%d skip_adjust=%d h1=%d-%d",
+                teamId, originalScore, g_skipTeamScoreAdjust ? 1 : 0,
+                g_firstHalfScore[1], g_firstHalfScore[2]);
+    }
 
     // =============== 2ND HALF SCORE ADJUSTMENT ===============
     // In 2nd half, modify game-sent TeamScore messages to add 1st half scores
@@ -1183,6 +1198,12 @@ stock save_ot_state_for_next_round() {
     set_localinfo(LOCALINFO_TEAMNAME1, g_team1Name);
     set_localinfo(LOCALINFO_TEAMNAME2, g_team2Name);
 
+    // Discord message/channel IDs — the first-round save persists these, but
+    // without re-saving here the OT round 2+ map change loses them and the
+    // match embed can no longer be edited for the rest of the OT.
+    set_localinfo(LOCALINFO_DISCORD_MSG, g_discordMatchMsgId);
+    set_localinfo(LOCALINFO_DISCORD_CHAN, g_discordMatchChannelId);
+
     // Save OT state: techBudget1,techBudget2,startingSide
     formatex(buf, charsmax(buf), "%d,%d,%d", g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs);
     set_localinfo(LOCALINFO_OT_STATE, buf);
@@ -1191,12 +1212,22 @@ stock save_ot_state_for_next_round() {
     format_scores(buf, charsmax(buf), g_regulationScore[1], g_regulationScore[2]);
     set_localinfo(LOCALINFO_REG_SCORES, buf);
 
-    // Save all OT round scores
-    new ot_scores[512];  // MAX_OT_ROUNDS(31) x ~12 bytes per round = 372 bytes needed
+    // Save all OT round scores. The engine REJECTS localinfo values of
+    // MAX_KV_LEN(127) chars or more outright (info.cpp) — max storable is
+    // 126 — and a rejected write silently keeps the key's previous value.
+    // Cut at the last complete round boundary and warn; the string builds
+    // oldest-first, so the NEWEST rounds are the ones dropped past the cap.
+    new ot_scores[512];  // build size; persisted portion is capped below
     new pos = 0;
     for (new r = 1; r < g_otRound; r++) {
         if (pos > 0) ot_scores[pos++] = '|';
         pos += formatex(ot_scores[pos], charsmax(ot_scores) - pos, "%d,%d", g_otScores[r][1], g_otScores[r][2]);
+    }
+    if (pos >= 127) {
+        new cut = 126;
+        while (cut > 0 && ot_scores[cut] != '|') cut--;
+        ot_scores[cut] = EOS;
+        log_ktp("event=OT_SCORES_LOCALINFO_TRUNCATED rounds=%d kept_bytes=%d of=%d", g_otRound - 1, cut, pos);
     }
     set_localinfo(LOCALINFO_OT_SCORES, ot_scores);
 
@@ -1300,6 +1331,13 @@ stock reset_match_scores() {
 // Call this before any score calculations to ensure we have current values
 stock update_match_scores_from_dodx() {
 #if defined HAS_DODX
+    // Without a valid gamerules pointer the reads return 0 and would clobber
+    // g_matchScore to 0-0 — which feeds MATCH_END, the Discord finals, and
+    // the ktp_match_end forward. Keep the cached values instead.
+    if (!dodx_has_gamerules()) {
+        log_ktp("event=SCORE_FROM_DODX_SKIPPED reason=no_gamerules half=%d", g_currentHalf);
+        return;
+    }
     // Use dodx_get_team_score (reads gamerules directly) instead of dod_get_team_score
     // (reads DODX message-tracked AlliesScore/AxisScore). In extension mode, DODX's
     // Client_TeamScore message handler never receives TeamScore messages, so the
@@ -1591,6 +1629,21 @@ public task_roundlive_match_context() {
     if (g_hasDodxStatsNatives) {
         ktp_set_match_context(g_delayedMatchId);
         log_ktp("event=MATCH_ID_SET_ROUNDLIVE match_id=%s", g_delayedMatchId);
+
+        // Pin pdata deaths + the dodx observed counter to 0 for everyone at
+        // the go-live instant. dodx_reset_all_stats zeroes the observed
+        // counters ~1s before the clan restart actually executes, so death
+        // events in that window (and warmup deaths the restart leaves in
+        // pdata) skew the SAVE validation gate for the whole match.
+        // dodx_set_user_deaths re-baselines both sides atomically.
+        new ids[32], num, fails;
+        get_players(ids, num, "ch");
+        for (new i = 0; i < num; i++) {
+            // Returns 0 on missing edict/pdata — a failed write leaves that
+            // player's counters stale (the SAVE gate later refuses, safe).
+            if (!dodx_set_user_deaths(ids[i], 0)) fails++;
+        }
+        log_ktp("event=SCORE_PERSIST_BASELINE players=%d fails=%d match_id=%s", num, fails, g_delayedMatchId);
     }
     #endif
 
@@ -1882,6 +1935,13 @@ stock append_ot_score(buf[], maxlen, t1, t2) {
     } else {
         formatex(tmp, charsmax(tmp), "%d,%d", t1, t2);
     }
+    // All-or-nothing append: a truncated "t1,t2" pair would parse as garbage
+    // on restore. A round that doesn't fit is dropped whole (deep-OT
+    // degradation; the 127-byte localinfo cap makes this reachable ~10+ rounds).
+    if (strlen(buf) + strlen(tmp) > maxlen) {
+        log_ktp("event=OT_SCORES_APPEND_SKIPPED len=%d", strlen(buf));
+        return;
+    }
     add(buf, maxlen, tmp);
 }
 
@@ -1923,6 +1983,9 @@ stock extract_base_hostname(const input[], output[], maxlen) {
     // Match state patterns to strip (order matters - check longer patterns first)
     static const patterns[][] = {
         " - KTP OT - LIVE - OT",      // OT rounds (partial, will match OT1, OT2, etc.)
+        " - KTP OT - PENDING",        // fresh explicit-OT sits in PENDING before round 1
+        " - KTP OT - PAUSED",         // full match needed: the generic " - PAUSED" tail
+                                      // would strip mid-string and leave " - KTP OT"
         " - KTP - LIVE - 1ST HALF",
         " - KTP - LIVE - 2ND HALF",
         " - KTP - PAUSED",
@@ -1940,10 +2003,16 @@ stock extract_base_hostname(const input[], output[], maxlen) {
         " - DRAFT - PAUSED",
         " - DRAFT - PENDING",
         " - DRAFT OT - LIVE - OT",
+        " - DRAFT OT - PENDING",
+        " - DRAFT OT - PAUSED",
+        " - MATCH - LIVE",            // default typeStr fallback ("MATCH")
+        " - MATCH - PENDING",
+        " - MATCH - PAUSED",
         " - KTP Match In Progress",   // Legacy format
         " - Match in Progress",
         " - LIVE",
         " - PAUSED",
+        " - PENDING",
         " - PRE-MATCH",
         " - WARMUP",
         " - PRACTICE"
@@ -2115,15 +2184,6 @@ stock clear_match_id() {
     g_13CaptainId = 0;
 }
 
-stock pauses_left(teamId) {
-    if (teamId != 1 && teamId != 2) return 0;
-    new used = g_pauseCountTeam[teamId];
-    // Clamp used to 0-1 range
-    if (used < 0) used = 0;
-    else if (used > 1) used = 1;
-    return 1 - used;
-}
-
 stock get_full_identity(id, name[], nameLen, sid[], sidLen, ip[], ipLen, team[], teamLen, map[], mapLen) {
     get_identity(id, name, nameLen, sid, sidLen, ip, ipLen, team, teamLen);
     copy(map, mapLen, g_currentMap);  // OPTIMIZED: Use cached map name instead of get_mapname()
@@ -2131,9 +2191,6 @@ stock get_full_identity(id, name[], nameLen, sid[], sidLen, ip[], ipLen, team[],
 
 stock show_pause_hud_message(const pauseType[]) {
     if (!g_isPaused) return;
-
-    new pausesA = pauses_left(1);
-    new pausesX = pauses_left(2);
 
     // Get dynamic pause initiator name (updates if player changes name)
     new pausedByName[32];
@@ -2179,7 +2236,13 @@ stock show_pause_hud_message(const pauseType[]) {
     } else if (g_unpauseRequested && !g_unpauseConfirmedOther) {
         formatex(statusLine, charsmax(statusLine), "  .go to resume");
     } else if (!g_unpauseRequested) {
-        formatex(statusLine, charsmax(statusLine), "  .resume  |  .go  |  .ext");
+        // Only advertise .ext when extensions are actually enabled
+        // (ktp_pause_max_extensions defaults to 0 = disabled)
+        if (cachedMaxExt > 0) {
+            formatex(statusLine, charsmax(statusLine), "  .resume  |  .go  |  .ext");
+        } else {
+            formatex(statusLine, charsmax(statusLine), "  .resume  |  .go");
+        }
     } else {
         formatex(statusLine, charsmax(statusLine), "  Resuming...");
     }
@@ -2203,14 +2266,16 @@ stock show_pause_hud_message(const pauseType[]) {
     // chars at x=0.01) removed since they no longer serve as left-edge margin.
     set_hudmessage(255, 255, 255, 0.55, 0.25, 0, 0.0, 0.6, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
+    // "Pauses Left" was dropped: pause-count budgets were retired when .tech
+    // became the only pause type (time budget, not counts) — the stat was
+    // rendering meaningless numbers.
     ShowSyncHudMsg(0, g_hudSync,
-        "== GAME PAUSED ==^nType: %s^nBy: %s^n^nElapsed: %d:%02d%s | Remaining: %d:%02d^nExtensions: %d/%d^n^nPauses Left: A:%d X:%d^n^n%s",
+        "== GAME PAUSED ==^nType: %s^nBy: %s^n^nElapsed: %d:%02d%s | Remaining: %d:%02d^nExtensions: %d/%d^n^n%s",
         pauseType,
         pausedByName[0] ? pausedByName : "Server",
         elapsedMin, elapsedSec, frozenIndicator,
         remainMin, remainSec,
         g_pauseExtensions, cachedMaxExt,
-        pausesA, pausesX,
         statusLine);
 }
 
@@ -2555,8 +2620,13 @@ stock send_ac_weapon_timeline_batch() {
     curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_weaponTimelineJsonBuf);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
 
-    log_ktp("event=AC_WEAPON_TIMELINE_SEND match_id=%s sw=%d hit=%d dropped_sw=%d dropped_hit=%d bytes=%d",
-        matchId, swEmitted, hitEmitted, g_swDropped, g_hitDropped, pos);
+    // sw/hit = emitted into the payload; *_buf = what was buffered; trunc_* =
+    // buffered-but-not-emitted (JSON headroom guard); dropped_* = never
+    // buffered (ring overflow). trunc/dropped sustained >0 during matches is
+    // the signal to resize (W7 sizing gate).
+    log_ktp("event=AC_WEAPON_TIMELINE_SEND match_id=%s sw=%d hit=%d sw_buf=%d hit_buf=%d trunc_sw=%d trunc_hit=%d dropped_sw=%d dropped_hit=%d bytes=%d",
+        matchId, swEmitted, hitEmitted, g_swCount, g_hitCount,
+        g_swCount - swEmitted, g_hitCount - hitEmitted, g_swDropped, g_hitDropped, pos);
 
     curl_easy_perform(curl, "ac_callback");
 
@@ -2665,7 +2735,7 @@ stock load_map_mappings() {
 
     new fp = fopen(path, "rt");
     if (!fp) {
-        log_ktp("event=MAPS_LOAD status=error reason=\'file_not_found\' path=\'%s\'", path);
+        log_ktp("event=MAPS_LOAD status=error reason='file_not_found' path='%s'", path);
         return;
     }
 
@@ -2735,7 +2805,7 @@ stock load_map_mappings() {
         }
     }
 
-    log_ktp("event=MAPS_LOAD status=ok count=%d path=\'%s\'", g_mapRows, path);
+    log_ktp("event=MAPS_LOAD status=ok count=%d path='%s'", g_mapRows, path);
 }
 
 stock lookup_cfg_for_map(const map[], outCfg[], outLen) {
@@ -2838,7 +2908,7 @@ stock exec_map_config() {
         default: copy(match_type_str, charsmax(match_type_str), "competitive");
     }
 
-    log_ktp("event=MAPCFG status=exec map=%s cfg=%s path=\'%s\' match_type=%s specific=%d",
+    log_ktp("event=MAPCFG status=exec map=%s cfg=%s path='%s' match_type=%s specific=%d",
             g_currentMap, cfg, fullpath, match_type_str, use_specific);
     announce_all("Applying %s config: %s", match_type_str, cfg);
 
@@ -2986,7 +3056,9 @@ stock execute_pause(const who[], const reason[]) {
     new totalDuration = get_total_pause_duration();
     new buf[16];
     fmt_seconds(totalDuration, buf, charsmax(buf));
-    announce_all("Game paused by %s. Duration: %s. Type .ext for more time.",
+    announce_all(g_pauseMaxExtensions > 0 ?
+        "Game paused by %s. Duration: %s. Type .ext for more time." :
+        "Game paused by %s. Duration: %s.",
                  who, buf);
     log_ktp("event=PAUSE_EXECUTED initiator='%s' reason='%s' duration=%d", who, reason, g_pauseDurationSec);
     log_amx("KTP: Game PAUSED by %s (%s) - Duration: %d seconds", who, reason, g_pauseDurationSec);
@@ -3008,7 +3080,7 @@ public start_unpause_countdown(const who[]) {
     // NOTE: No need to remove pause timer task - using ReAPI hook instead
 
     // OPTIMIZED: Use cached map name instead of get_mapname()
-    log_ktp("event=COUNTDOWN begin=%d requested_by=\'%s\' map=%s", g_countdownLeft, who, g_currentMap);
+    log_ktp("event=COUNTDOWN begin=%d requested_by='%s' map=%s", g_countdownLeft, who, g_currentMap);
     log_amx("KTP: Unpause countdown started - %d seconds (by %s)", g_countdownLeft, who);
 
     announce_all("Unpausing in %d seconds...", g_countdownLeft);
@@ -3038,7 +3110,7 @@ public countdown_tick() {
     announce_all("=== LIVE! === (Unpaused by %s)", g_lastUnpauseBy[0] ? g_lastUnpauseBy : "unknown");
 
     // OPTIMIZED: Use cached map name instead of get_mapname()
-    log_ktp("event=LIVE map=%s requested_by=\'%s\'", g_currentMap, g_lastUnpauseBy[0] ? g_lastUnpauseBy : "unknown");
+    log_ktp("event=LIVE map=%s requested_by='%s'", g_currentMap, g_lastUnpauseBy[0] ? g_lastUnpauseBy : "unknown");
     log_amx("KTP: Game LIVE - Unpaused by %s", g_lastUnpauseBy[0] ? g_lastUnpauseBy : "unknown");
 
     ktp_unpause_now("countdown");
@@ -3120,7 +3192,7 @@ public disconnect_countdown_tick() {
         // NOT when their player dropped 30 seconds ago. The grace window is a
         // courtesy, not a cost.
         //
-        // Compare with cmd_tech_pause (~line 5070): manual `.tech` sets
+        // Compare with cmd_tech_pause: manual `.tech` sets
         // g_techPauseStartTime BEFORE its 5-second pre-pause countdown, so
         // those 5 seconds DO count against the team's budget. That asymmetry
         // is by design — see DISCONNECT_COUNTDOWN_SECS const declaration for
@@ -3220,7 +3292,9 @@ stock check_pause_timer_realtime() {
     // Warning at 30 seconds remaining (only once per pause)
     if (remaining <= 30 && remaining > 10 && lastWarning30 != g_pauseStartTime) {
         lastWarning30 = g_pauseStartTime;
-        announce_all("Pause ending in 30 seconds. Type .ext for more time.");
+        announce_all(g_pauseMaxExtensions > 0 ?
+            "Pause ending in 30 seconds. Type .ext for more time." :
+            "Pause ending in 30 seconds.");
         log_amx("KTP: Pause warning - 30 seconds remaining");
     }
 
@@ -3908,7 +3982,7 @@ public plugin_init() {
     // NOTE: We do NOT register the console "pause" command because KTP-ReHLDS has it built-in
     // Attempting to override it causes: "Cmd_AddMallocCommand: pause already defined"
     // Instead, we rely on:
-    //   - Chat commands: "say /pause" (registered above at line 1266)
+    //   - Chat commands: "say /pause" (registered above)
     //   - Server can use: ktp_pause command (registered below)
     // The engine's built-in pause still works, but without our custom countdown/tracking
 
@@ -4373,7 +4447,7 @@ stock restore_match_context_from_localinfo() {
         // Restore OT scores from previous rounds
         new otScoresBuf[128];
         get_localinfo(LOCALINFO_OT_SCORES, otScoresBuf, charsmax(otScoresBuf));
-        new numPrevRounds = parse_ot_scores(otScoresBuf, g_otScores, 31);
+        new numPrevRounds = parse_ot_scores(otScoresBuf, g_otScores, MAX_OT_ROUNDS);
 
         // Restore OT state: techA,techX,side
         new otStateBuf[32];
@@ -4581,6 +4655,10 @@ stock end_match_cleanup() {
     // Reset match type and Discord flag for next match
     g_matchType = MATCH_TYPE_COMPETITIVE;
     g_disableDiscord = false;
+    // CvarChecker keys enforcement off this cvar; without the reset it kept
+    // enforcing competitive rules on pub play after every match (only the
+    // .forcereset path cleared it).
+    set_cvar_num("ktp_match_competitive", 0);
 
     // Reset OT state
     g_inOvertime = false;
@@ -5043,25 +5121,10 @@ stock bool:save_player_score(id) {
     return true;
 }
 
-stock score_refresh_broadcast(id) {
-    new msgid = get_user_msgid("ScoreInfo");
-    if (msgid <= 0) return;
-
-    new frags  = get_user_frags(id);
-    new deaths = get_user_deaths(id);
-    new team   = get_user_team_id(id);
-
-    // 5-field ScoreInfo: player_id, frags, deaths, class, team. We don't
-    // track per-player class for restoration purposes — pass 0; DoD's
-    // scoreboard doesn't render class from this message.
-    message_begin(MSG_ALL, msgid);
-    write_byte(id);
-    write_short(frags);
-    write_short(deaths);
-    write_short(0);
-    write_short(team);
-    message_end();
-}
+// (score_refresh_broadcast was deleted here: dead since the restore path
+// moved to dodx_broadcast_scoreboard, and it carried the exact AMX
+// message_begin pattern that segfaulted ATL:27019 — see the comment inside
+// task_restore_player_score.)
 
 public task_restore_player_score(id) {
     if (!is_user_connected(id)) return;
@@ -5122,6 +5185,12 @@ public task_restore_player_score(id) {
     dodx_broadcast_scoreboard(id);
     log_ktp("event=SCORE_PERSIST_RESTORE sid=%s team=%d frags=%d deaths=%d score=%d",
             sid, tid, g_savedScoreFrags[idx], g_savedScoreDeaths[idx], g_savedScoreScore[idx]);
+
+    // One-shot row: a later team re-pick must not restore this same stale
+    // snapshot over the player's newer scoreboard. Freed slot is reusable
+    // by the next save.
+    g_savedScoreSid[idx][0] = EOS;
+    g_savedScoreValidated[idx] = false;
 }
 
 // Shared handler
@@ -5229,6 +5298,28 @@ public dod_client_changeteam(id, team, oldteam) {
     if (team != 1 && team != 2) return;        // skip spectator/unassigned picks
     if (is_user_bot(id) || is_user_hltv(id)) return;
     task_restore_player_score(id);
+
+    #if defined HAS_DODX
+    // Re-align the observed counter with pdata after the restore attempt.
+    // A successful restore re-baselines via dodx_set_user_deaths; a rejected
+    // or absent save leaves accumulated skew in place (the dodx Disconnect
+    // reset isn't reachable in extension mode), and it compounds across
+    // rejoins until every later save fails the gate. pdata is the
+    // scoreboard truth, so it wins.
+    if (g_hasDodxStatsNatives) {
+        new offsetDeaths = dodx_get_user_deaths(id);
+        new observedDeaths = dodx_get_observed_deaths(id);
+        // Plausibility clamp: a struct-shifted pdata read is garbage-valued;
+        // refusing to sync it keeps the offset-validation gate able to
+        // detect a wrong offset after an OS/dod-binary bump.
+        if (observedDeaths != offsetDeaths && offsetDeaths >= 0 && offsetDeaths < 200) {
+            dodx_set_user_deaths(id, offsetDeaths);
+            new sid[44]; get_user_authid(id, sid, charsmax(sid));
+            log_ktp("event=SCORE_PERSIST_OBSERVED_RESYNC sid=%s offset=%d observed=%d",
+                    safe_sid(sid), offsetDeaths, observedDeaths);
+        }
+    }
+    #endif
 }
 
 public fn_version_display(id) {
@@ -5241,6 +5332,18 @@ public fn_version_display(id) {
 }
 
 // ================= Counts & commands =================
+
+// Which SIDE (1=Allies, 2=Axis) roster team 1 occupies right now — the single
+// source of truth for roster<->side mapping. 1st half: Allies. 2nd half
+// (incl. pending): Axis. OT: g_otTeam1StartsAs (swaps each round). Every
+// attribution site (ready counts, half captains, roster writes) must key on
+// this, not a hardcoded swap.
+stock team1_current_side() {
+    if (g_inOvertime) return g_otTeam1StartsAs;
+    if (g_secondHalfPending || g_currentHalf == 2) return 2;
+    return 1;
+}
+
 stock get_ready_counts(&alliesPlayers, &axisPlayers, &alliesReady, &axisReady) {
     alliesPlayers = 0; axisPlayers = 0; alliesReady = 0; axisReady = 0;
     new ids[32], num; get_players(ids, num, "ch");
@@ -5255,11 +5358,10 @@ stock get_ready_counts(&alliesPlayers, &axisPlayers, &alliesReady, &axisReady) {
         new tid;
 
         if (use2ndHalfRoster) {
-            // Map roster team identity to the current side. In 2nd half team 1 is Axis;
-            // in OT team 1 is on side g_otTeam1StartsAs (swaps each round), so the mapping
-            // must follow that rather than the hardcoded 2nd-half swap.
+            // Map roster team identity to the current side via the shared helper
+            // (g_secondHalfPending is true here, so it returns the swapped side).
             new rosterTeam = get_player_roster_team(id);
-            new team1Side = g_inOvertime ? g_otTeam1StartsAs : 2;
+            new team1Side = team1_current_side();
             if (rosterTeam == 1) {
                 tid = team1Side;
             } else if (rosterTeam == 2) {
@@ -5289,6 +5391,9 @@ stock get_ready_counts(&alliesPlayers, &axisPlayers, &alliesReady, &axisReady) {
 // - Override mode: 1 player (debug)
 // - KTP/KTP OT: 6 players
 // - All others (scrim, 12man, draft, draft OT): 5 players
+//   12man at 5/team is DELIBERATE (operator-confirmed 2026-07): it shares the
+//   scrim bucket by design so a 12man can go live one short per side. Do not
+//   "fix" to 6 without an operator decision.
 stock get_required_ready_count() {
     if (g_readyOverride)
         return 1;
@@ -5323,7 +5428,7 @@ stock handle_countdown_cancel(id) {
 
     new name[32], sid[44], ip[32], team[16], map[32];
     get_full_identity(id, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team), map, charsmax(map));
-    log_ktp("event=UNPAUSE_CANCEL player=\'%s\' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
+    log_ktp("event=UNPAUSE_CANCEL player='%s' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
     announce_all("Unpause countdown cancelled by %s. Staying paused.", name);
 
     // Re-arm auto-request and reset flags; HUD keeps running
@@ -5408,7 +5513,7 @@ stock handle_resume_request(id, const name[], const sid[], const team[], teamId)
         }
     }
 
-    log_ktp("event=UNPAUSE_REQUEST_OWNER team=%d by=\'%s\' steamid=%s", g_pauseOwnerTeam, name, safe_sid(sid));
+    log_ktp("event=UNPAUSE_REQUEST_OWNER team=%d by='%s' steamid=%s", g_pauseOwnerTeam, name, safe_sid(sid));
 
     // Get other team name for announcement
     new otherTeam = (g_pauseOwnerTeam == 1) ? 2 : 1;
@@ -5529,7 +5634,7 @@ public cmd_confirm_unpause(id) {
     get_identity(id, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team));
 
     g_unpauseConfirmedOther = true;
-    log_ktp("event=UNPAUSE_CONFIRM_OTHER team=%d by=\'%s\' steamid=%s", tid, name, safe_sid(sid));
+    log_ktp("event=UNPAUSE_CONFIRM_OTHER team=%d by='%s' steamid=%s", tid, name, safe_sid(sid));
     announce_all("%s confirmed unpause.", team);
 
     // Cancel auto-confirmunpause timer (they confirmed manually)
@@ -5617,19 +5722,11 @@ public cmd_otbreak(id) {
         return PLUGIN_HANDLED;
     }
 
-    // Record vote for break
-    if (g_otBreakVotes[id]) {
-        client_print(id, print_chat, "[KTP] You already requested a break.");
-        return PLUGIN_HANDLED;
-    }
-
-    g_otBreakVotes[id] = 1;
-
-    new name[32];
-    get_user_name(id, name, charsmax(name));
-
-    announce_all("%s requests a 10-minute break before overtime.", name);
-    log_ktp("event=OT_BREAK_REQUESTED player='%s'", name);
+    // The break subsystem's start path was never built (votes were collected
+    // and announced but nothing ever consumed them — g_otBreakActive has no
+    // setter). Be honest instead of promising a break that never comes.
+    client_print(id, print_chat, "[KTP] OT breaks are not currently supported. Ready up when both teams are set.");
+    log_ktp("event=OT_BREAK_REQUEST_UNSUPPORTED id=%d", id);
 
     return PLUGIN_HANDLED;
 }
@@ -5772,6 +5869,15 @@ public cmd_tech_pause(id) {
         return PLUGIN_HANDLED;
     }
 
+    // A second .tech during the pre-pause countdown would overwrite
+    // g_pauseOwnerTeam/duration/start-time before trigger_pause_countdown's
+    // own re-entry check runs — flipping the pause's ownership and budget
+    // charge to the second caller's team.
+    if (g_prePauseCountdown) {
+        client_print(id, print_chat, "[KTP] A pause countdown is already in progress.");
+        return PLUGIN_HANDLED;
+    }
+
     new tid = get_user_team_id(id);
     if (tid != 1 && tid != 2) {
         client_print(id, print_chat, "[KTP] Spectators cannot call technical pauses.");
@@ -5819,14 +5925,14 @@ public cmd_tech_pause(id) {
     // those 5 seconds are charged to the team's tech budget — the pre-pause is
     // part of the "cost" of choosing to pause.
     //
-    // Compare with disconnect_countdown_tick (~line 2755): auto-DC pauses set
+    // Compare with disconnect_countdown_tick: auto-DC pauses set
     // g_techPauseStartTime AFTER the 30s grace window, so the disconnected
     // team's budget is NOT charged for the grace period. That asymmetry is by
     // design — `.tech` is a deliberate team-initiated action, auto-DC is
     // punishment-free since the team didn't choose to pause.
     g_techPauseStartTime = get_systime();
 
-    log_ktp("event=TECH_PAUSE player=\'%s\' steamid=%s ip=%s team=%s map=%s budget_remaining=%d",
+    log_ktp("event=TECH_PAUSE player='%s' steamid=%s ip=%s team=%s map=%s budget_remaining=%d",
             name, safe_sid(sid), ip[0]?ip:"NA", team, map, g_techBudget[tid]);
 
     // Trigger pre-pause countdown with new system
@@ -6019,12 +6125,6 @@ public cmd_commands(id) {
     client_print(id, print_console, "  .go              - Confirm unpause (other team)");
     client_print(id, print_console, "  .extend / .ext   - Extend current pause");
     client_print(id, print_console, "  .nodc / .stopdc  - Cancel disconnect auto-pause");
-
-    // Overtime
-    client_print(id, print_console, "");
-    client_print(id, print_console, "--- Overtime ---");
-    client_print(id, print_console, "  .otbreak         - Request overtime break");
-    client_print(id, print_console, "  .skip            - Skip overtime break");
 
     // Team Names
     client_print(id, print_console, "");
@@ -6375,7 +6475,7 @@ public cmd_match_start(id) {
 
 
     // Log event
-    log_ktp("event=PRESTART_BEGIN by=\'%s\' steamid=%s ip=%s team=%s map=%s second_half=%d", name, safe_sid(sid), ip[0]?ip:"NA", team, map, g_secondHalfPending ? 1 : 0);
+    log_ktp("event=PRESTART_BEGIN by='%s' steamid=%s ip=%s team=%s map=%s second_half=%d", name, safe_sid(sid), ip[0]?ip:"NA", team, map, g_secondHalfPending ? 1 : 0);
 
     // Announce pre-start with match type
     new matchTypeStr[16];
@@ -6429,6 +6529,15 @@ public menu_scrim_duration_handler(id, menu, item) {
 
     if (item < 0) {
         menu_destroy(menu);
+        return PLUGIN_HANDLED;
+    }
+
+    // Re-check at selection time: another match can start while this menu
+    // sits open, and mutating g_matchType here would clobber it (the say-path
+    // guard only ran at menu-open time).
+    if (g_matchLive || g_preStartPending || g_matchPending) {
+        menu_destroy(menu);
+        client_print(id, print_chat, "[KTP] Cannot start - match already in progress or pending.");
         return PLUGIN_HANDLED;
     }
 
@@ -6486,6 +6595,13 @@ public menu_12man_type_handler(id, menu, item) {
     new data[16], name[32], access, callback;
     menu_item_getinfo(menu, item, access, data, charsmax(data), name, charsmax(name), callback);
     menu_destroy(menu);
+
+    // Selection-time re-check (see the duration handlers) — also stops a
+    // queue-ID input flow from being opened over a match that just started.
+    if (g_matchLive || g_preStartPending || g_matchPending) {
+        client_print(id, print_chat, "[KTP] Cannot start - match already in progress or pending.");
+        return PLUGIN_HANDLED;
+    }
 
     if (equal(data, "13community")) {
         // Start the queue ID input flow
@@ -6656,6 +6772,13 @@ public menu_12man_duration_handler(id, menu, item) {
 
     if (item < 0) {
         menu_destroy(menu);
+        return PLUGIN_HANDLED;
+    }
+
+    // Same selection-time re-check as the scrim duration handler.
+    if (g_matchLive || g_preStartPending || g_matchPending) {
+        menu_destroy(menu);
+        client_print(id, print_chat, "[KTP] Cannot start - match already in progress or pending.");
         return PLUGIN_HANDLED;
     }
 
@@ -6847,12 +6970,12 @@ public cmd_pre_notconfirm(id) {
     if (tid == 1) {
         if (!g_preConfirmAllies) { client_print(id, print_chat, "[KTP] Allies had not confirmed yet."); return PLUGIN_HANDLED; }
         g_preConfirmAllies = false; g_confirmAlliesBy[0] = EOS;
-        log_ktp("event=PRENOTCONFIRM team=Allies player=\'%s\' steamid=%s ip=%s", name, safe_sid(sid), ip[0]?ip:"NA");
+        log_ktp("event=PRENOTCONFIRM team=Allies player='%s' steamid=%s ip=%s", name, safe_sid(sid), ip[0]?ip:"NA");
         announce_all("Pre-Start: Allies not confirmed (reset by %s).", who);
     } else if (tid == 2) {
         if (!g_preConfirmAxis) { client_print(id, print_chat, "[KTP] Axis had not confirmed yet."); return PLUGIN_HANDLED; }
         g_preConfirmAxis = false; g_confirmAxisBy[0] = EOS;
-        log_ktp("event=PRENOTCONFIRM team=Axis player=\'%s\' steamid=%s ip=%s", name, safe_sid(sid), ip[0]?ip:"NA");
+        log_ktp("event=PRENOTCONFIRM team=Axis player='%s' steamid=%s ip=%s", name, safe_sid(sid), ip[0]?ip:"NA");
         announce_all("Pre-Start: Axis not confirmed (reset by %s).", who);
     } else {
         client_print(id, print_chat, "[KTP] You must be on Allies or Axis to un-confirm.");
@@ -6871,7 +6994,7 @@ public cmd_cancel(id) {
         new name[32], sid[44], ip[32], team[16], map[32];
         get_full_identity(id, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team), map, charsmax(map));
         prestart_reset();
-        log_ktp("event=PRESTART_CANCEL by=\'%s\' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
+        log_ktp("event=PRESTART_CANCEL by='%s' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
         announce_all("Pre-Start cancelled by %s.", name);
         g_matchType = MATCH_TYPE_COMPETITIVE; // Reset to competitive for next match
         g_disableDiscord = false; // Re-enable Discord for next match (legacy)
@@ -7029,7 +7152,7 @@ public cmd_cancel(id) {
     g_prePauseLeft = 0;
 
     // OPTIMIZED: Use cached map name instead of get_mapname()
-    log_ktp("event=PENDING_CANCEL by=\'%s\' steamid=%s ip=%s team=%s map=%s", name2, safe_sid(sid2), ip2[0]?ip2:"NA", team2, g_currentMap);
+    log_ktp("event=PENDING_CANCEL by='%s' steamid=%s ip=%s team=%s map=%s", name2, safe_sid(sid2), ip2[0]?ip2:"NA", team2, g_currentMap);
     announce_all("Match pending cancelled by %s.", name2);
 
     // Unpause if server happens to be paused (e.g., manual pause during pending)
@@ -7514,10 +7637,11 @@ public cmd_ready(id) {
         if (rosterTeam > 0) {
             captainTeamId = rosterTeam;
         } else {
-            // Not yet in the roster: map current side back to roster identity the same
-            // way the roster write does — team 1 is on side g_otTeam1StartsAs in OT,
-            // on Axis in the 2nd half.
-            captainTeamId = g_inOvertime ? ((tid == g_otTeam1StartsAs) ? 1 : 2) : ((tid == 1) ? 2 : 1);
+            // Not yet in the roster: map current side back to roster identity
+            // the same way the roster write does (see team1_current_side —
+            // this branch only runs while g_secondHalfPending, where the
+            // helper returns the swapped/OT side).
+            captainTeamId = g_inOvertime ? ((tid == team1_current_side()) ? 1 : 2) : ((tid == 1) ? 2 : 1);
         }
     } else {
         captainTeamId = tid;
@@ -7535,10 +7659,9 @@ public cmd_ready(id) {
     // --- Persistent match roster update (sides swapped in 2nd half / per OT round) ---
     new rosterTeamId;
     if (g_inOvertime) {
-        // OT: team 1 is on side g_otTeam1StartsAs this round (sides swap each round).
-        // For g_otTeam1StartsAs==2 this equals the 2nd-half mapping below; for ==1 it
-        // is the inverse — the previously-hardcoded swap was only right on even rounds.
-        rosterTeamId = (tid == g_otTeam1StartsAs) ? 1 : 2;
+        // OT: team 1 is on side g_otTeam1StartsAs this round (sides swap each
+        // round) — keyed on the shared team1_current_side() helper.
+        rosterTeamId = (tid == team1_current_side()) ? 1 : 2;
     } else if (g_secondHalfPending || g_currentHalf == 2) {
         rosterTeamId = (tid == 1) ? 2 : 1;
     } else {
@@ -7894,7 +8017,7 @@ public cmd_notready(id) {
 
     new name[32], sid[44], ip[32], team[16], map[32];
     get_full_identity(id, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team), map, charsmax(map));
-    log_ktp("event=NOTREADY player=\'%s\' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
+    log_ktp("event=NOTREADY player='%s' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
 
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
@@ -8409,9 +8532,9 @@ public cmd_test_setup_match(id) {
     g_matchLive = false;
 
     // Mirror production per-type Discord-flag setting. Production:
-    //   - SCRIM (cmd_start_scrim, line 5850) sets g_disableDiscord=true
+    //   - SCRIM (cmd_start_scrim) sets g_disableDiscord=true
     //     (Discord notifications skipped entirely for scrim)
-    //   - 12MAN (line 6078), DRAFT (line 6097), COMPETITIVE (line 5684),
+    //   - 12MAN (menu_12man_duration_handler), DRAFT (cmd_start_draft), COMPETITIVE,
     //     KTP_OT, DRAFT_OT all set g_disableDiscord=false; they emit to
     //     their type-specific channel via get_discord_channel_id().
     // Without this mirror, test_scrim_* would see Discord POSTs that
@@ -8454,7 +8577,7 @@ public cmd_test_setup_match(id) {
 // task_enter_pending_phase delay.
 //
 // Emits `PENDING_BEGIN` log_ktp line for production-shape parity — the real
-// production event lives inside `task_enter_pending_phase` (line 7287) which
+// production event lives inside `task_enter_pending_phase` which
 // this rcon bypasses. Downstream log scrapers + integration test 4 gate on
 // this event name.
 public cmd_test_advance_pending(id) {
@@ -8519,11 +8642,11 @@ public cmd_test_advance_live(id) {
 //   - sets g_firstHalfScore[1/2] to the test scores so the embed update
 //     has meaningful values
 //   - calls handle_first_half_end() which emits the "1st Half Complete -
-//     Score: %d-%d" Discord embed update (KTPMatchHandler.sma:1010), logs
+//     Score: %d-%d" Discord embed update (handle_first_half_end), logs
 //     KTP_HALF_END for HLStatsX, persists match context to localinfo,
 //     and fires `dod_stats_flush(id)` per connected client via
 //     dodx_flush_all_stats()
-//   - immediately remove_task()s the halftime watchdog (line 1022) so the
+//   - immediately remove_task()s the halftime watchdog so the
 //     test environment doesn't get a forced map reload after 10s
 //
 // Args: <team1Score> <team2Score>
@@ -8560,8 +8683,8 @@ public cmd_test_end_first_half(id) {
 
     handle_first_half_end();
 
-    // Production path schedules a 10s watchdog (task_halftime_watchdog,
-    // KTPMatchHandler.sma:1022) that force-reloads the map if changelevel
+    // Production path schedules a 10s watchdog (task_halftime_watchdog)
+    // that force-reloads the map if changelevel
     // doesn't complete in time. In the test environment we don't want a
     // map reload mid-suite — kill the timer immediately. The state set by
     // handle_first_half_end() (g_secondHalfPending=true, scores saved,
@@ -8578,7 +8701,7 @@ public cmd_test_end_first_half(id) {
 // the admin to type the command twice within 10s; for tests we want to
 // exercise the cleanup path itself without the confirmation dance.
 //
-// The state guard (line 6474 — must have *something* to reset) is also
+// The state guard (must have *something* to reset) is also
 // bypassed: tests may want to call this on a clean state to verify it's
 // idempotent / doesn't crash (defensive).
 public cmd_test_forcereset(id) {
@@ -8771,7 +8894,7 @@ public cmd_test_abandon_match(id) {
 // (KTPMatchHandler.sma:5654 — team lookup, budget check, spectator guard) so
 // the test can fire pause without a real player. Calls execute_pause() exactly
 // as the prepause_countdown_tick final tick does on the production path
-// (KTPMatchHandler.sma:2881).
+// (prepause_countdown_tick).
 //
 // Negative-path test contract (Tier 2 tests 10/11): pause should NOT cause any
 // Discord embed update — pause status is a HUD-only feature
@@ -8779,7 +8902,7 @@ public cmd_test_abandon_match(id) {
 // exercises the real execute_pause helper so a regression that adds Discord
 // emission to the pause path is caught by the negative-path assertion.
 //
-// Use AFTER advance_live so g_matchLive=true (production guard at line 5655).
+// Use AFTER advance_live so g_matchLive=true (production guard in cmd_tech_pause).
 public cmd_test_tech_pause(id) {
     if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
 

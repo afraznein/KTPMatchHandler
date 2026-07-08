@@ -6,6 +6,92 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.143] - 2026-07-08
+
+Wave B: the score-persistence baseline fixes from the 2026-07-08 production log analysis (the `observed=offset+1` / `observed<offset` residual classes), plus the W2-W8 warning tier from the 2026-07-07 plugin assessment, the 12-finding SUGG re-sweep, and the D1-D11 doc sweep. Companion to KTPAMXX 2.7.20 (uses its `dodx_set_user_deaths` re-baseline semantics); no new native dependencies.
+
+### Fixed
+
+#### Score persistence: deaths baseline pinned at go-live (the `observed=offset+1` class)
+
+`dodx_reset_all_stats()` zeroes the DODX observed-death counters ~1s before `mp_clan_restartround` actually executes, so death events landing in that window — and warmup deaths the restart leaves in pdata — skewed the SAVE validation gate for the whole match. The 2026-07-07 production sweep showed a uniform +1 across 6/7 of a match's roster (constant baseline skew, not per-death races). `task_roundlive_match_context` now pins pdata deaths AND the observed counter to 0 for every connected player at the go-live instant via `dodx_set_user_deaths(id, 0)` (fires on both the RoundState=1 and timeout paths, one-shot per half/OT round; logs `SCORE_PERSIST_BASELINE`). Also closes the `observed<offset` class (warmup pdata deaths surviving into the match) and the warmup-death checklist case.
+
+#### Score persistence: observed-counter resync at team-pick (rejoin accumulation)
+
+The DODX `Disconnect()` observed-counter reset is not reachable in extension mode, and only a *successful* restore re-baselines the counter — a player whose save was rejected accumulated skew across rejoins until every later save failed the gate (STEAM_0:1:16016464 on 2026-07-07: 13 → 25 across two disconnects). `dod_client_changeteam` now re-aligns the observed counter to pdata after the restore attempt (pdata is the scoreboard truth), with a plausibility clamp (0..199) so a struct-shifted garbage read can never be blessed — the offset-validation gate keeps its OS-bump canary role. Logs `SCORE_PERSIST_OBSERVED_RESYNC`.
+
+#### W5: score row not invalidated after restore
+
+A successful restore left the row validated and findable — a later team re-pick restored the same stale snapshot over the player's newer scoreboard. Rows are now one-shot: cleared immediately after a successful restore (freed slot reusable by the next save).
+
+#### W2: `ktp_match_competitive` never reset on normal match end
+
+`end_match_cleanup()` reset the match type but not the cvar, so KTPCvarChecker kept enforcing competitive rules on pub play after every match until the next `.forcereset` or restart. Now reset alongside the match type.
+
+#### W3: double-`.tech` in the pre-pause countdown flipped pause ownership
+
+A second `.tech` during the 5s pre-pause countdown overwrote `g_pauseOwnerTeam`/duration/start-time before `trigger_pause_countdown`'s re-entry check ran — the pause executed under the second caller's team and budget. `cmd_tech_pause` now rejects while a countdown is in progress.
+
+#### W4: match-type menus mutated state without an in-progress re-check
+
+The scrim-duration, 12man-duration, and 12man-type menu handlers mutated `g_matchType`/`g_scrimDuration`/queue-ID state at selection time with no guard — a match starting while the menu sat open got its type clobbered (the say-path guard only ran at menu-open). All three handlers now re-check `g_matchLive || g_preStartPending || g_matchPending` at selection.
+
+#### W6: Discord JSON escaping routed through the strict shared escaper
+
+The include-local `escape_for_json` and the inline `send_discord_message` escaper passed invalid UTF-8 through and could truncate mid-sequence — a crafted player name 400'd the match embed for the rest of the match. Both now delegate to `ktp_discord_escape_json` (RFC 3629-strict, drop-don't-pass, sequence-safe truncation).
+
+#### W8: `update_match_scores_from_dodx` gated on `dodx_has_gamerules()`
+
+A failed gamerules read returned 0-0 and clobbered `g_matchScore` — which feeds MATCH_END, the Discord finals, and the `ktp_match_end` forward. Reads are now skipped (cached values kept) when the gamerules pointer is invalid; logs `SCORE_FROM_DODX_SKIPPED`.
+
+#### Re-sweep #5: `extract_base_hostname` missing PENDING/OT/MATCH patterns
+
+The strip table had no `" - KTP OT - PENDING"` / `" - DRAFT OT - PENDING"` / OT-PAUSED / `" - MATCH - *"` / bare `" - PENDING"` entries, so a fresh explicit-OT hostname was never stripped and pollution compounded on every update. Table completed (full OT-PAUSED patterns added ahead of the generic tail so `" - KTP OT"` can't be left behind).
+
+#### Re-sweep #12: OT round 2+ lost the Discord message/channel IDs
+
+`save_ot_state_for_next_round` omitted the two localinfo keys the first-round save persists — after the OT round 2 map change the match embed could no longer be edited. Both keys now re-saved every round.
+
+#### Re-sweep #3: `_ktp_ots` silently truncated by the engine's 127-byte localinfo cap
+
+Deep OT (~10+ rounds) overflowed `MAX_KV_LEN` mid-pair, making the restore parse garbage. The writer now cuts at the last complete round boundary and logs `OT_SCORES_LOCALINFO_TRUNCATED`; `append_ot_score` is all-or-nothing per round (`OT_SCORES_APPEND_SKIPPED`).
+
+#### Re-sweep #4: `\'` literals in 15 log format strings
+
+Pawn's escape character is `^`, so `\'` rendered as literal backslash-quote in every affected log line. Replaced with plain quotes.
+
+### Changed
+
+#### W1: `.otbreak` no longer advertises a break that never comes
+
+The OT-break subsystem's start path was never built (`g_otBreakActive` has no setter; the vote-check task is never scheduled) — `.otbreak` collected votes and announced a 10-minute break that never happened. The command now replies honestly that breaks aren't supported, and `.otbreak`/`.skip` are removed from the command list. Vote/extension state scaffolding retained for a future implementation.
+
+#### `.ext` only advertised when pause extensions are enabled
+
+`ktp_pause_max_extensions` defaults to 0 (disabled), but the pause HUD, pause announcement, and 30s warning all advertised `.ext` unconditionally. All three sites are now conditional on the cvar.
+
+#### Re-sweep #7: dead "Pauses Left" HUD stat removed
+
+Pause-count budgets were retired when `.tech` (time budget) became the only pause type; the stat rendered meaningless numbers on every pause HUD.
+
+### Added
+
+#### W7/#1/#8: weapon-timeline loss observability
+
+`AC_WEAPON_TIMELINE_SEND` now reports buffered vs emitted vs truncated (`sw_buf`/`hit_buf`/`trunc_sw`/`trunc_hit`) alongside the existing ring-overflow drop counters — the JSON-headroom truncation was previously invisible (the send log counted only emitted entries) and hid up to ~35% of peak-engagement hits from the AC recoil detector. Header comment corrected (the code drops newest, not oldest). Buffer resizing deferred until this instrumentation sizes the real loss (W7 gate).
+
+#### msg_TeamScore h2 observation log
+
+`TEAMSCORE_H2_OBSERVE` records raw score + `skip_adjust` + h1 scores on every 2nd-half TeamScore — one live h2 flag cap settles the double-count-vs-transient question the assessment could not decide statically. No behavior change.
+
+### Internal
+
+- Shared `team1_current_side()` helper — single source of truth for roster↔side mapping (ready counts, half captains, roster writes); exact-equivalence substitutions only.
+- Dead `score_refresh_broadcast` stock deleted (carried the AMX `message_begin` pattern that segfaulted ATL:27019).
+- `parse_ot_scores` magic `31` → `MAX_OT_ROUNDS` (#9).
+- 14 hardcoded line-number comment citations replaced with function-name references (#10); 12man 5-ready/team documented as deliberate.
+- Double-fire re-attribution: the 2026-07-08 `DEFERRED_FWD_SUPPRESSED count=2` captures show 8 SCHEDULED / 8 FIRED / 1 SUPPRESSED — one `set_task` produced two executions. That is a platform-level (CTask) one-shot double-fire, not a caller double-schedule; no plugin change (the 0.10.137 guard is the correct defense and held both times). Routed to the KTPAMXX 2.7.21 investigation.
+
 ## [0.10.142] - 2026-07-07
 
 Two CRITICAL overtime/changelevel bugs from the 2026-07-07 full-surface plugin assessment, plus the coupled OT roster-mapping fix (fixing the first critical un-masks it). Independent of the score-persistence wave; no DODX dependency.
