@@ -6863,6 +6863,12 @@ public cmd_start_draft_ot(id) {
 new const OVERRIDE_ADMIN_SIDS[][] = {
     "STEAM_0:1:25292511",   // nein_
     "STEAM_0:0:65616"       // Jimmy (HUD Observer broadcast-clock validation)
+#if defined KTP_TEST_MODE
+    // Local docker runs sv_lan 1 where every client authid is STEAM_ID_LAN —
+    // accept it in TEST-MODE builds only so the solo go-live path is drivable
+    // on the local stack. Never present in production builds.
+    ,"STEAM_ID_LAN"
+#endif
 };
 
 stock bool:is_override_admin(const sid[]) {
