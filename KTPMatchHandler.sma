@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.144"
+#define PLUGIN_VERSION "0.10.145"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -6857,13 +6857,33 @@ public cmd_start_draft_ot(id) {
     return PLUGIN_HANDLED;
 }
 
-// Debug override for ready limits - restricted to specific SteamID for testing
+// SteamIDs allowed to toggle .override_ready_limits (testing/canary tooling only).
+// The override is off by default and reset on every match reset — production-inert
+// unless one of these IDs deliberately arms it.
+new const OVERRIDE_ADMIN_SIDS[][] = {
+    "STEAM_0:1:25292511",   // nein_
+    "STEAM_0:0:65616"       // Jimmy (HUD Observer broadcast-clock validation)
+};
+
+stock bool:is_override_admin(const sid[]) {
+    for (new i = 0; i < sizeof OVERRIDE_ADMIN_SIDS; i++) {
+        if (equal(sid, OVERRIDE_ADMIN_SIDS[i]))
+            return true;
+    }
+    return false;
+}
+
+// Debug override for ready limits - restricted to specific SteamIDs for testing.
+// While armed it also permits a SOLO go-live (single-team confirm + one total
+// ready) so one tester can drive the REAL production go-live path
+// (exec_map_config + mp_clan_restartround + countdown + timer rebase) — used for
+// HUD/broadcast-clock validation. See the confirm gate in cmd_pre_confirm and
+// the all-ready gate in cmd_ready.
 public cmd_override_ready_limits(id) {
     new sid[44];
     get_user_authid(id, sid, charsmax(sid));
 
-    // Only allow specific SteamID (nein_)
-    if (!equal(sid, "STEAM_0:1:25292511")) {
+    if (!is_override_admin(sid)) {
         client_print(id, print_chat, "[KTP] You are not authorized to use this command.");
         return PLUGIN_HANDLED;
     }
@@ -6875,7 +6895,7 @@ public cmd_override_ready_limits(id) {
     get_user_name(id, name, charsmax(name));
 
     if (g_readyOverride) {
-        announce_all("DEBUG: Ready limit override ENABLED by %s - only 1 player per team required", name);
+        announce_all("DEBUG: Ready limit override ENABLED by %s - 1 ready total required (solo go-live allowed)", name);
         log_ktp("event=READY_OVERRIDE_ENABLED admin=%s steamid=%s", name, sid);
     } else {
         announce_all("DEBUG: Ready limit override DISABLED by %s - normal limits restored", name);
@@ -6957,9 +6977,19 @@ public cmd_pre_confirm(id) {
     }
 
     // both sides confirmed → proceed to Pending (no pause)
-    if (g_preConfirmAllies && g_preConfirmAxis) {
-        announce_all("Pre-Start complete. Both teams confirmed.");
-        log_ktp("event=PRESTART_COMPLETE");
+    // Solo exception: with the ready-limit override armed (steamid-gated,
+    // cmd_override_ready_limits), a single team's confirm is enough — lets one
+    // tester reach Pending alone and drive the REAL go-live path for validation.
+    new bool:bothConfirmed = (g_preConfirmAllies && g_preConfirmAxis);
+    if (bothConfirmed || (g_readyOverride && (g_preConfirmAllies || g_preConfirmAxis))) {
+        if (bothConfirmed) {
+            announce_all("Pre-Start complete. Both teams confirmed.");
+            log_ktp("event=PRESTART_COMPLETE");
+        } else {
+            announce_all("Pre-Start complete. SOLO OVERRIDE - single-team confirm accepted.");
+            log_ktp("event=PRESTART_COMPLETE_SOLO_OVERRIDE allies=%d axis=%d",
+                    g_preConfirmAllies ? 1 : 0, g_preConfirmAxis ? 1 : 0);
+        }
 
         // reset pre-start state
         prestart_reset();
@@ -7695,12 +7725,23 @@ public cmd_ready(id) {
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
     new need = get_required_ready_count();
     announce_all("%s [%s] is READY. Allies %d/%d | Axis %d/%d (need %d each).", name, sid, alliesReady, alliesPlayers, axisReady, axisPlayers, need);
+    // Solo exception (override armed, steamid-gated): total readies across both
+    // teams >= need (need==1 under override) — lets ONE tester drive the full
+    // production go-live (exec_map_config + mp_clan_restartround + countdown +
+    // engine timer rebase) for HUD/broadcast validation. Production-inert:
+    // g_readyOverride is off by default and reset on match reset.
+    new bool:bothTeamsReady = (alliesReady >= need && axisReady >= need);
+    new bool:willStart = bothTeamsReady
+        || (g_readyOverride && alliesReady + axisReady >= need);
     log_ktp("event=READY_CHECK allies_ready=%d axis_ready=%d need=%d will_start=%d",
-            alliesReady, axisReady, need,
-            (alliesReady >= need && axisReady >= need) ? 1 : 0);
+            alliesReady, axisReady, need, willStart ? 1 : 0);
 
-    // Start match when both teams have enough ready players
-    if (alliesReady >= need && axisReady >= need) {
+    // Start match when both teams have enough ready players (or solo override)
+    if (willStart) {
+        if (!bothTeamsReady) {
+            log_ktp("event=SOLO_OVERRIDE_GOLIVE allies_ready=%d axis_ready=%d need=%d",
+                    alliesReady, axisReady, need);
+        }
         // Initialize OT state for explicit OT match types (.ktpOT, .draftOT).
         // Done SYNC because subsequent logic (halfText branch, OT scoreboard restore)
         // reads g_inOvertime / g_otRound in this same frame.
