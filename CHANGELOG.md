@@ -24,9 +24,11 @@ The steamid-gated ready-limit override (previously nein_ only, 1-per-team) now:
   deliberately shortcuts, needed to validate engine-timing behavior (e.g. the
   overlay half-clock rebase) on a live server without assembling 12 players.
 
-Production-inert: the override is off by default, resets on every match reset,
-and only allowlisted SteamIDs can arm it. Normal matches (override off) evaluate
-the exact same gates as before.
+Production-inert: the override is off by default, auto-disarms at match end
+(`end_match_cleanup`, logged `READY_OVERRIDE_AUTO_DISARM`) and on `.forcereset`,
+and only allowlisted SteamIDs can arm it — an armed override can never leak into
+the next match. Normal matches (override off) evaluate the exact same gates as
+before.
 
 ---
 

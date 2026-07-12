@@ -4663,6 +4663,15 @@ stock end_match_cleanup() {
     // .forcereset path cleared it).
     set_cvar_num("ktp_match_competitive", 0);
 
+    // Disarm the ready-limit/solo override — same only-.forcereset-cleared
+    // class of leak as ktp_match_competitive above: an override armed for a
+    // validation match must never survive into the next real match (one
+    // .confirm + one .ready could take it live unnoticed).
+    if (g_readyOverride) {
+        g_readyOverride = false;
+        log_ktp("event=READY_OVERRIDE_AUTO_DISARM reason=match_end");
+    }
+
     // Reset OT state
     g_inOvertime = false;
     g_otRound = 0;
@@ -6858,8 +6867,9 @@ public cmd_start_draft_ot(id) {
 }
 
 // SteamIDs allowed to toggle .override_ready_limits (testing/canary tooling only).
-// The override is off by default and reset on every match reset — production-inert
-// unless one of these IDs deliberately arms it.
+// The override is off by default and auto-disarms at match end (end_match_cleanup)
+// and on .forcereset — production-inert unless one of these IDs deliberately arms
+// it, and an armed override can never leak into the next match.
 new const OVERRIDE_ADMIN_SIDS[][] = {
     "STEAM_0:1:25292511",   // nein_
     "STEAM_0:0:65616"       // Jimmy (HUD Observer broadcast-clock validation)
