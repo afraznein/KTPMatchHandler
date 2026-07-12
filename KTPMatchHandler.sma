@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.143"
+#define PLUGIN_VERSION "0.10.144"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -216,13 +216,16 @@ new Float:g_forceResetTime = 0.0;               // Time when force reset was ini
 // AMXX get_user_frags / set_entvar. In-memory only; cleared at end_match_cleanup
 // + .forcereset. Steam-ID keyed.
 //
-// VALIDATION GATE 2026-05-21: at SAVE time, compare dodx_get_user_deaths (pdata
-// offset) vs dodx_get_observed_deaths (DODX-internal counter, incremented from
-// engine DeathMsg broadcasts). Mismatch -> log + skip persist + clear slot.
-// Validated flag persists into the saved row so RESTORE refuses to write back
-// from un-validated rows. Guards against silent wrong-value SAVE that happened
-// when the spike v1.2 mis-read offsets (5/21 incident: SAVE captured score=2
-// deaths=0 vs scoreboard score=3 deaths=2).
+// VALIDATION GATE 2026-05-21: at SAVE time, cross-check dodx_get_user_deaths
+// (pdata offset) vs dodx_get_observed_deaths (DODX DeathMsg-broadcast counter).
+// These are two independent counters; they drift by a benign +1 (one death the
+// DLL counts one way but not the other). Gate tolerates observed==offset+1 and
+// persists pdata (scoreboard truth); a +2 / negative drift / out-of-range read
+// -> log + skip persist + clear slot. Validated flag persists into the saved row
+// so RESTORE refuses to write back from un-validated rows. Guards against silent
+// wrong-value SAVE that happened when the spike v1.2 mis-read offsets (5/21
+// incident: SAVE captured score=2 deaths=0 vs scoreboard score=3 deaths=2 =
+// offset/observed 2 apart, which the +1-only band still refuses).
 //
 // Capacity 16 = max 12 players + spare slots for churn during a match.
 #define SAVED_SCORE_MAX 16
@@ -5082,16 +5085,23 @@ stock bool:save_player_score(id) {
         return false;
     }
 
-    // VALIDATION GATE: compare pdata-offset read vs engine-observed counter.
-    // If they disagree, score_deaths_offset is wrong for the current dod_i386.so
-    // (likely a new OS bump shifted the struct). Refuse to persist; clear any
-    // stale validated data in this slot to prevent a previous-row's RESTORE.
-    // Both natives return 0 for not-yet-had-an-event players — that case
-    // passes validation trivially and is also the case with nothing meaningful
-    // to persist (player had no deaths).
+    // VALIDATION GATE: cross-check pdata deaths (offset) vs the DODX DeathMsg
+    // counter (observed). These are two independent mechanisms, not one value,
+    // so a persistent +1 is a benign single-event divergence — one real death
+    // the DLL counts one way but not the other (a DLL death class that emits
+    // DeathMsg without bumping m_iDeaths, or the module's Damage-path death
+    // inference). It is NOT a baseline race (the DLL bumps pdata + emits
+    // DeathMsg in one synchronous call; the between-frames baseline task can't
+    // interleave). The gate's real job is catching a WRONG score_deaths_offset
+    // after an OS/dod-binary struct shift — gross garbage, e.g. the 5/21
+    // incident's offset=0/observed=2. So tolerate only observed==offset+1 and
+    // trust pdata (scoreboard truth); refuse a +2, any negative drift (protects
+    // the baseline-failure path that leaves warmup deaths in pdata), and out-of-
+    // range reads. Both natives return 0 for no-event players — passes trivially.
     new offsetDeaths   = dodx_get_user_deaths(id);
     new observedDeaths = dodx_get_observed_deaths(id);
-    if (offsetDeaths != observedDeaths) {
+    new drift = observedDeaths - offsetDeaths;
+    if (offsetDeaths < 0 || offsetDeaths >= 200 || drift < 0 || drift > 1) {
         log_ktp("event=SCORE_DEATHS_OFFSET_MISMATCH sid=%s offset=%d observed=%d - NOT persisting",
                 sid, offsetDeaths, observedDeaths);
         // Mark the row unvalidated so RESTORE refuses to write back, and
@@ -5101,19 +5111,26 @@ stock bool:save_player_score(id) {
         g_savedScoreSid[idx][0] = EOS;
         return false;
     }
+    if (drift == 1) {
+        // Tolerated benign divergence — still logged so the fleet keeps
+        // measuring the rate; a shift or a +2 appearing is the signal to chase.
+        log_ktp("event=SCORE_DEATHS_DRIFT_TOLERATED sid=%s offset=%d observed=%d",
+                sid, offsetDeaths, observedDeaths);
+    }
 
     // AMXX core for frags (pev->frags float, extension-mode safe). DoD per-player
     // Score column read via DODX dodx_get_user_score (pdata access; m_iScore at
     // STEAM_PDOFFSET_SCORE — validated for this player above through the deaths
     // adjacency invariant). Note: get_user_deaths AMXX builtin is unreliable on
     // DoD (its ScoreInfo hook doesn't track DoD's death broadcasts), so we use
-    // the offset-based dodx_get_user_deaths value (== observedDeaths post-gate).
+    // the offset-based dodx_get_user_deaths value (pdata = scoreboard truth,
+    // observed or observed-1 post-gate).
     new frags  = get_user_frags(id);
     new score  = dodx_get_user_score(id);
 
     g_savedScoreTeam[idx]      = tid;
     g_savedScoreFrags[idx]     = frags;
-    g_savedScoreDeaths[idx]    = offsetDeaths;  // == observedDeaths after validation
+    g_savedScoreDeaths[idx]    = offsetDeaths;  // pdata = scoreboard truth (observed or observed-1)
     g_savedScoreScore[idx]     = score;
     g_savedScoreValidated[idx] = true;
     log_ktp("event=SCORE_PERSIST_SAVE sid=%s team=%d frags=%d deaths=%d score=%d validated=1",
@@ -5302,10 +5319,10 @@ public dod_client_changeteam(id, team, oldteam) {
     #if defined HAS_DODX
     // Re-align the observed counter with pdata after the restore attempt.
     // A successful restore re-baselines via dodx_set_user_deaths; a rejected
-    // or absent save leaves accumulated skew in place (the dodx Disconnect
-    // reset isn't reachable in extension mode), and it compounds across
-    // rejoins until every later save fails the gate. pdata is the
-    // scoreboard truth, so it wins.
+    // or absent save leaves mid-session skew in place (e.g. a connected player
+    // re-picking teams), so realign here — pdata is the scoreboard truth, it
+    // wins. (The dodx Disconnect reset IS reachable in extension mode post-2.7.20
+    // via DODX_OnSV_DropClient, so cross-rejoin skew no longer compounds.)
     if (g_hasDodxStatsNatives) {
         new offsetDeaths = dodx_get_user_deaths(id);
         new observedDeaths = dodx_get_observed_deaths(id);

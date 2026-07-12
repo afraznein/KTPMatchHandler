@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.144] - 2026-07-12
+
+Score-persistence SAVE gate: tolerate the benign +1 death-counter divergence instead of refusing to persist. Follows the 2026-07-12 fleet sweep (first multi-instance data after KTPAMXX 2.7.21's exactly-once dodx activated) — the `observed=offset+1` class held at ~14% of saves on all three instances that played, proving it is NOT a dodx double-count (2.7.21 structurally cannot emit one) but a benign divergence between two independent death counters. ktp-code-review (fable) APPROVE-with-fixes; findings applied.
+
+### Fixed
+
+#### Score persistence: SAVE gate relaxed from exact-equality to a +1 plausibility band
+
+The gate compared `dodx_get_user_deaths` (engine pdata `m_iDeaths`, the scoreboard truth) against `dodx_get_observed_deaths` (DODX's DeathMsg-broadcast counter) with exact equality, refusing to persist on any disagreement. But these are two independent mechanisms: a persistent +1 is one real death the DLL counts one way but not the other (a DLL death class that emits DeathMsg without bumping `m_iDeaths`, or the module's Damage-path death inference) — categorically not the gross-garbage signature of a wrong `score_deaths_offset` after an OS/binary struct shift, which is what the gate exists to catch.
+
+The gate now tolerates `observed == offset + 1` and persists the pdata value (scoreboard truth), while still refusing a +2 (the 5/21 struct-shift incident was `offset=0/observed=2` — exactly 2 apart), any negative drift (protects the go-live baseline-failure path that intentionally leaves warmup deaths in pdata), and out-of-range reads (`< 0 || >= 200`). Tolerated divergences log a distinct `SCORE_DEATHS_DRIFT_TOLERATED` event so the fleet keeps measuring the rate; a rate change or a +2 appearing is the signal to chase the two candidate mechanisms. 2.7.21's structural exactly-once dodx stays as defense-in-depth (it did kill the `>+1` / `SAVE_OVERFLOW` / `observed<offset` classes).
+
+Also corrected three stale comments in the touched area (the gate header block, the inline `== observedDeaths` identity notes, and the OBSERVED_RESYNC justification that claimed the dodx Disconnect reset was unreachable in extension mode — it is reachable post-2.7.20 via `DODX_OnSV_DropClient`).
+
+---
+
 ## [0.10.143] - 2026-07-08
 
 Wave B: the score-persistence baseline fixes from the 2026-07-08 production log analysis (the `observed=offset+1` / `observed<offset` residual classes), plus the W2-W8 warning tier from the 2026-07-07 plugin assessment, the 12-finding SUGG re-sweep, and the D1-D11 doc sweep. Companion to KTPAMXX 2.7.20 (uses its `dodx_set_user_deaths` re-baseline semantics); no new native dependencies.
