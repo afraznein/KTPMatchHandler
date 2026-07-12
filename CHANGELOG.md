@@ -24,11 +24,16 @@ The steamid-gated ready-limit override (previously nein_ only, 1-per-team) now:
   deliberately shortcuts, needed to validate engine-timing behavior (e.g. the
   overlay half-clock rebase) on a live server without assembling 12 players.
 
-Production-inert: the override is off by default, auto-disarms at match end
-(`end_match_cleanup`, logged `READY_OVERRIDE_AUTO_DISARM`) and on `.forcereset`,
-and only allowlisted SteamIDs can arm it — an armed override can never leak into
-the next match. Normal matches (override off) evaluate the exact same gates as
-before.
+Production-inert: the override is off by default and only allowlisted SteamIDs
+can arm it. A central `disarm_ready_override()` (logged `READY_OVERRIDE_AUTO_DISARM
+reason=…`) fires from every match-teardown path — match end, `.forcereset`,
+abandoned-match finalize, both `.cancel` branches, and the timelimit
+pending-cancel — plus when the arming player disconnects, so an armed override
+can never survive into a later match (the disarm was previously wired only into
+the happy-path match end, missing the abandon/cancel/timelimit paths a solo
+validation session most often takes). While armed the loosened confirm/ready
+gates apply to everyone on a team, not just the armer (arming is loudly
+announced). Normal matches (override off) evaluate the exact same gates as before.
 
 ---
 
