@@ -26,12 +26,15 @@ The steamid-gated ready-limit override (previously nein_ only, 1-per-team) now:
 
 Production-inert: the override is off by default and only allowlisted SteamIDs
 can arm it. A central `disarm_ready_override()` (logged `READY_OVERRIDE_AUTO_DISARM
-reason=…`) fires from every match-teardown path — match end, `.forcereset`,
-abandoned-match finalize, both `.cancel` branches, and the timelimit
-pending-cancel — plus when the arming player disconnects, so an armed override
-can never survive into a later match (the disarm was previously wired only into
-the happy-path match end, missing the abandon/cancel/timelimit paths a solo
-validation session most often takes). While armed the loosened confirm/ready
+reason=…`) fires from every match-teardown exit — match end, `.forcereset`,
+abandoned-match finalize, completed-2nd-half finalize, all three `.cancel`
+branches (prestart / pending / second-half), the timelimit pending-cancel, and
+the map-load context-abandon — plus when the arming player disconnects, so an
+armed override can never survive into a later match (the disarm was previously
+wired only into the happy-path match end, missing the abandon/cancel/timelimit
+and map-load-restore exits a solo validation session most often takes). Half→half
+and OT-continuation transitions correctly do NOT disarm (the override persists
+within a live match). While armed the loosened confirm/ready
 gates apply to everyone on a team, not just the armer (arming is loudly
 announced). Normal matches (override off) evaluate the exact same gates as before.
 

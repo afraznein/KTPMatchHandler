@@ -4295,6 +4295,7 @@ stock restore_match_context_from_localinfo() {
             // Match wasn't live yet (players never readied) - just clear
             log_ktp("event=MATCH_CONTEXT_ABANDONED saved_map=%s current_map=%s match_id=%s reason=not_live",
                     savedMatchMap, g_currentMap, g_matchId);
+            disarm_ready_override("context_abandoned");
         }
         clear_localinfo_match_context();
         reset_team_names();
@@ -4328,7 +4329,9 @@ stock restore_match_context_from_localinfo() {
                 return;  // OT is now pending, don't clear
             }
 
-            // Match ended normally, clear state
+            // Match ended normally, clear state (OT continuation already
+            // returned above, so the override correctly persists into OT)
+            disarm_ready_override("completed_h2_finalize");
             clear_localinfo_match_context();
             reset_team_names();
             g_matchId[0] = EOS;
@@ -7083,6 +7086,7 @@ public cmd_cancel(id) {
         new name[32], sid[44], ip[32], team[16], map[32];
         get_full_identity(id, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team), map, charsmax(map));
         prestart_reset();
+        disarm_ready_override("prestart_cancel");
         log_ktp("event=PRESTART_CANCEL by='%s' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
         announce_all("Pre-Start cancelled by %s.", name);
         g_matchType = MATCH_TYPE_COMPETITIVE; // Reset to competitive for next match
@@ -7223,7 +7227,7 @@ public cmd_cancel(id) {
     g_matchType = MATCH_TYPE_COMPETITIVE; // Reset to competitive for next match
     g_disableDiscord = false; // Re-enable Discord for next match (legacy)
     arrayset(g_ready, 0, sizeof g_ready);
-    disarm_ready_override("prestart_cancel");
+    disarm_ready_override("pending_cancel");
     reset_team_names();
     clear_match_id();  // Clear 1.3 Community state (g_is13CommunityMatch, g_13QueueId, etc.)
     g_matchMap[0] = EOS;
