@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.144"
+#define PLUGIN_VERSION "0.10.145"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -341,6 +341,7 @@ new g_prePauseSeconds = 5;     // pre-pause countdown for live pauses
 new g_preMatchPauseSeconds = 5;  // OPTIMIZED: Cached from g_cvarPreMatchPauseSec (Phase 5 optimization)
 new g_techBudgetSecs = 300;    // 5 minutes tech budget per team per half
 new bool:g_readyOverride = false;  // Debug override: when true, only 1 player needed per team
+new g_readyOverrideArmerSid[44];   // SteamID that armed the override (for armer-disconnect disarm)
 new g_countdownLeft = 0;
 
 // ---------- OPTIMIZED: Cached CVAR values (Phase 2 optimization) ----------
@@ -679,6 +680,7 @@ public OnPfnChangeLevel(const map[], const landmark[]) {
         g_preConfirmAxis = false;
         g_matchPending = false;
         arrayset(g_ready, 0, sizeof g_ready);
+        disarm_ready_override("timelimit_pending_cancel");
         remove_task(g_taskPrestartHudId);
         remove_task(g_taskPendingHudId);
         remove_task(g_taskUnreadyReminderId);
@@ -4293,6 +4295,7 @@ stock restore_match_context_from_localinfo() {
             // Match wasn't live yet (players never readied) - just clear
             log_ktp("event=MATCH_CONTEXT_ABANDONED saved_map=%s current_map=%s match_id=%s reason=not_live",
                     savedMatchMap, g_currentMap, g_matchId);
+            disarm_ready_override("context_abandoned");
         }
         clear_localinfo_match_context();
         reset_team_names();
@@ -4326,7 +4329,9 @@ stock restore_match_context_from_localinfo() {
                 return;  // OT is now pending, don't clear
             }
 
-            // Match ended normally, clear state
+            // Match ended normally, clear state (OT continuation already
+            // returned above, so the override correctly persists into OT)
+            disarm_ready_override("completed_h2_finalize");
             clear_localinfo_match_context();
             reset_team_names();
             g_matchId[0] = EOS;
@@ -4663,6 +4668,12 @@ stock end_match_cleanup() {
     // .forcereset path cleared it).
     set_cvar_num("ktp_match_competitive", 0);
 
+    // Disarm the ready-limit/solo override — same only-.forcereset-cleared
+    // class of leak as ktp_match_competitive above: an override armed for a
+    // validation match must never survive into the next real match (one
+    // .confirm + one .ready could take it live unnoticed).
+    disarm_ready_override("match_end");
+
     // Reset OT state
     g_inOvertime = false;
     g_otRound = 0;
@@ -4804,6 +4815,7 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
     g_inOvertime = false;
     g_otRound = 0;
     g_currentHalf = 0;
+    disarm_ready_override("abandon");
 }
 
 // Finalize a completed 2nd half (detected when map cycled back to same map with _ktp_live="1")
@@ -5218,6 +5230,14 @@ stock on_client_left(id) {
         // Clear pending admin confirmations if the requesting admin disconnects
         if (id == g_forceResetPending) g_forceResetPending = 0;
         if (id == g_restartHalfPending) g_restartHalfPending = 0;
+
+        // Disarm the ready-limit override if the arming player leaves — closes
+        // the arm-then-idle window (no match teardown would otherwise fire).
+        if (g_readyOverride && g_readyOverrideArmerSid[0]) {
+            new osid[44];
+            get_user_authid(id, osid, charsmax(osid));
+            if (equal(osid, g_readyOverrideArmerSid)) disarm_ready_override("armer_disconnect");
+        }
 
         // Clear 1.3 Community Queue ID input if the captain disconnects mid-input
         if (id == g_13CaptainId && g_13InputState > 0) {
@@ -6857,13 +6877,56 @@ public cmd_start_draft_ot(id) {
     return PLUGIN_HANDLED;
 }
 
-// Debug override for ready limits - restricted to specific SteamID for testing
+// SteamIDs allowed to toggle .override_ready_limits (testing/canary tooling only).
+// Off by default; disarm_ready_override() fires from every match-teardown path
+// (match end, .forcereset, abandon, both .cancel branches, timelimit
+// pending-cancel) and when the arming player disconnects — so an armed override
+// can never leak into the next match. Production-inert unless one of these IDs
+// deliberately arms it. NOTE: while armed the loosened confirm/ready gates apply
+// to everyone on a team (arming is loudly announced); safety rests on that
+// disarm coverage.
+new const OVERRIDE_ADMIN_SIDS[][] = {
+    "STEAM_0:1:25292511",   // nein_
+    "STEAM_0:0:65616"       // Jimmy (HUD Observer broadcast-clock validation)
+#if defined KTP_TEST_MODE
+    // Local docker runs sv_lan 1 where every client authid is STEAM_ID_LAN —
+    // accept it in TEST-MODE builds only so the solo go-live path is drivable
+    // on the local stack. Never present in production builds.
+    ,"STEAM_ID_LAN"
+#endif
+};
+
+stock bool:is_override_admin(const sid[]) {
+    for (new i = 0; i < sizeof OVERRIDE_ADMIN_SIDS; i++) {
+        if (equal(sid, OVERRIDE_ADMIN_SIDS[i]))
+            return true;
+    }
+    return false;
+}
+
+// Central disarm for the ready-limit/solo override. Called from EVERY match
+// teardown path (match end, force-reset, abandon, both cancels, timelimit
+// pending-cancel) and when the arming player disconnects — an armed override
+// must never survive into a later match (extension-mode globals persist across
+// map changes). No-op when not armed, so teardown paths call it unconditionally.
+stock disarm_ready_override(const reason[]) {
+    if (!g_readyOverride) return;
+    g_readyOverride = false;
+    g_readyOverrideArmerSid[0] = EOS;
+    log_ktp("event=READY_OVERRIDE_AUTO_DISARM reason=%s", reason);
+}
+
+// Debug override for ready limits - restricted to specific SteamIDs for testing.
+// While armed it also permits a SOLO go-live (single-team confirm + one total
+// ready) so one tester can drive the REAL production go-live path
+// (exec_map_config + mp_clan_restartround + countdown + timer rebase) — used for
+// HUD/broadcast-clock validation. See the confirm gate in cmd_pre_confirm and
+// the all-ready gate in cmd_ready.
 public cmd_override_ready_limits(id) {
     new sid[44];
     get_user_authid(id, sid, charsmax(sid));
 
-    // Only allow specific SteamID (nein_)
-    if (!equal(sid, "STEAM_0:1:25292511")) {
+    if (!is_override_admin(sid)) {
         client_print(id, print_chat, "[KTP] You are not authorized to use this command.");
         return PLUGIN_HANDLED;
     }
@@ -6875,9 +6938,11 @@ public cmd_override_ready_limits(id) {
     get_user_name(id, name, charsmax(name));
 
     if (g_readyOverride) {
-        announce_all("DEBUG: Ready limit override ENABLED by %s - only 1 player per team required", name);
+        copy(g_readyOverrideArmerSid, charsmax(g_readyOverrideArmerSid), sid);
+        announce_all("DEBUG: Ready limit override ENABLED by %s - 1 ready total required (solo go-live allowed)", name);
         log_ktp("event=READY_OVERRIDE_ENABLED admin=%s steamid=%s", name, sid);
     } else {
+        g_readyOverrideArmerSid[0] = EOS;
         announce_all("DEBUG: Ready limit override DISABLED by %s - normal limits restored", name);
         log_ktp("event=READY_OVERRIDE_DISABLED admin=%s steamid=%s", name, sid);
     }
@@ -6957,9 +7022,19 @@ public cmd_pre_confirm(id) {
     }
 
     // both sides confirmed → proceed to Pending (no pause)
-    if (g_preConfirmAllies && g_preConfirmAxis) {
-        announce_all("Pre-Start complete. Both teams confirmed.");
-        log_ktp("event=PRESTART_COMPLETE");
+    // Solo exception: with the ready-limit override armed (steamid-gated,
+    // cmd_override_ready_limits), a single team's confirm is enough — lets one
+    // tester reach Pending alone and drive the REAL go-live path for validation.
+    new bool:bothConfirmed = (g_preConfirmAllies && g_preConfirmAxis);
+    if (bothConfirmed || (g_readyOverride && (g_preConfirmAllies || g_preConfirmAxis))) {
+        if (bothConfirmed) {
+            announce_all("Pre-Start complete. Both teams confirmed.");
+            log_ktp("event=PRESTART_COMPLETE");
+        } else {
+            announce_all("Pre-Start complete. SOLO OVERRIDE - single-team confirm accepted.");
+            log_ktp("event=PRESTART_COMPLETE_SOLO_OVERRIDE allies=%d axis=%d",
+                    g_preConfirmAllies ? 1 : 0, g_preConfirmAxis ? 1 : 0);
+        }
 
         // reset pre-start state
         prestart_reset();
@@ -7011,6 +7086,7 @@ public cmd_cancel(id) {
         new name[32], sid[44], ip[32], team[16], map[32];
         get_full_identity(id, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team), map, charsmax(map));
         prestart_reset();
+        disarm_ready_override("prestart_cancel");
         log_ktp("event=PRESTART_CANCEL by='%s' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
         announce_all("Pre-Start cancelled by %s.", name);
         g_matchType = MATCH_TYPE_COMPETITIVE; // Reset to competitive for next match
@@ -7071,6 +7147,7 @@ public cmd_cancel(id) {
         g_inOvertime = false;
         g_otRound = 0;
         arrayset(g_ready, 0, sizeof g_ready);
+        disarm_ready_override("secondhalf_cancel");
         remove_task(g_taskPendingHudId);
         remove_task(g_taskUnreadyReminderId);
 
@@ -7150,6 +7227,7 @@ public cmd_cancel(id) {
     g_matchType = MATCH_TYPE_COMPETITIVE; // Reset to competitive for next match
     g_disableDiscord = false; // Re-enable Discord for next match (legacy)
     arrayset(g_ready, 0, sizeof g_ready);
+    disarm_ready_override("pending_cancel");
     reset_team_names();
     clear_match_id();  // Clear 1.3 Community state (g_is13CommunityMatch, g_13QueueId, etc.)
     g_matchMap[0] = EOS;
@@ -7371,7 +7449,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     g_regulationScore[2] = 0;
 
     // Clear debug overrides
-    g_readyOverride = false;
+    disarm_ready_override("force_reset");
 
     // Clear roster
     clear_match_roster();
@@ -7695,12 +7773,23 @@ public cmd_ready(id) {
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
     new need = get_required_ready_count();
     announce_all("%s [%s] is READY. Allies %d/%d | Axis %d/%d (need %d each).", name, sid, alliesReady, alliesPlayers, axisReady, axisPlayers, need);
+    // Solo exception (override armed, steamid-gated): total readies across both
+    // teams >= need (need==1 under override) — lets ONE tester drive the full
+    // production go-live (exec_map_config + mp_clan_restartround + countdown +
+    // engine timer rebase) for HUD/broadcast validation. Production-inert:
+    // g_readyOverride is off by default and reset on match reset.
+    new bool:bothTeamsReady = (alliesReady >= need && axisReady >= need);
+    new bool:willStart = bothTeamsReady
+        || (g_readyOverride && alliesReady + axisReady >= need);
     log_ktp("event=READY_CHECK allies_ready=%d axis_ready=%d need=%d will_start=%d",
-            alliesReady, axisReady, need,
-            (alliesReady >= need && axisReady >= need) ? 1 : 0);
+            alliesReady, axisReady, need, willStart ? 1 : 0);
 
-    // Start match when both teams have enough ready players
-    if (alliesReady >= need && axisReady >= need) {
+    // Start match when both teams have enough ready players (or solo override)
+    if (willStart) {
+        if (!bothTeamsReady) {
+            log_ktp("event=SOLO_OVERRIDE_GOLIVE allies_ready=%d axis_ready=%d need=%d",
+                    alliesReady, axisReady, need);
+        }
         // Initialize OT state for explicit OT match types (.ktpOT, .draftOT).
         // Done SYNC because subsequent logic (halfText branch, OT scoreboard restore)
         // reads g_inOvertime / g_otRound in this same frame.

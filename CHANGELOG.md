@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.145] - 2026-07-12
+
+### Added
+
+#### `.override_ready_limits`: SteamID allowlist + solo go-live capability
+
+The steamid-gated ready-limit override (previously nein_ only, 1-per-team) now:
+
+- accepts an allowlist of authorized SteamIDs (`OVERRIDE_ADMIN_SIDS[]`) — added
+  Jimmy's ID for HUD Observer broadcast-clock validation;
+- while armed, permits a **solo go-live**: a single team's `.confirm` completes
+  Pre-Start (`PRESTART_COMPLETE_SOLO_OVERRIDE`), and one total ready satisfies
+  the all-ready gate (`SOLO_OVERRIDE_GOLIVE`), driving the REAL production
+  go-live path (exec_map_config + `mp_clan_restartround 1` + engine countdown +
+  timer rebase) with one tester — the piece `amx_ktp_test_advance_live`
+  deliberately shortcuts, needed to validate engine-timing behavior (e.g. the
+  overlay half-clock rebase) on a live server without assembling 12 players.
+
+Production-inert: the override is off by default and only allowlisted SteamIDs
+can arm it. A central `disarm_ready_override()` (logged `READY_OVERRIDE_AUTO_DISARM
+reason=…`) fires from every match-teardown exit — match end, `.forcereset`,
+abandoned-match finalize, completed-2nd-half finalize, all three `.cancel`
+branches (prestart / pending / second-half), the timelimit pending-cancel, and
+the map-load context-abandon — plus when the arming player disconnects, so an
+armed override can never survive into a later match (the disarm was previously
+wired only into the happy-path match end, missing the abandon/cancel/timelimit
+and map-load-restore exits a solo validation session most often takes). Half→half
+and OT-continuation transitions correctly do NOT disarm (the override persists
+within a live match). While armed the loosened confirm/ready
+gates apply to everyone on a team, not just the armer (arming is loudly
+announced). Normal matches (override off) evaluate the exact same gates as before.
+
+---
+
 ## [0.10.144] - 2026-07-12
 
 Score-persistence SAVE gate: tolerate the benign +1 death-counter divergence instead of refusing to persist. Follows the 2026-07-12 fleet sweep (first multi-instance data after KTPAMXX 2.7.21's exactly-once dodx activated) — the `observed=offset+1` class held at ~14% of saves on all three instances that played, proving it is NOT a dodx double-count (2.7.21 structurally cannot emit one) but a benign divergence between two independent death counters. ktp-code-review (fable) APPROVE-with-fixes; findings applied.
