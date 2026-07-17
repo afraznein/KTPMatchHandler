@@ -6,6 +6,101 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.146] - 2026-07-16
+
+Four fixes from the 2026-07-15 comprehensive stack review, plus the plugin half of
+the KTPAntiCheat NEW-1 investigation. Two of them are the same bug pointing in
+opposite directions, so they are fixed together, structurally.
+
+### Fixed
+
+#### Any player could cancel a live official overtime match (P1)
+
+`.cancel` is blocked during a live match and, once the 1st half is complete, for
+"official" matches — but that check only recognised `.ktp` (`MATCH_TYPE_COMPETITIVE`).
+`g_secondHalfPending` doubles as the OT-pending flag, so the branch is reachable
+mid-overtime, and `.ktpOT` is password-gated and treated as official everywhere else
+(pause gating, the `ktp_match_competitive` cvar) — just not here. Any connected
+player could type `.cancel` during a live `.ktpOT` and wipe the match id, roster,
+scores and localinfo, with no confirmation step and no admin flag.
+
+"Official" is now a single predicate (`is_official_match_type()`) covering
+`.ktp` and `.ktpOT` rather than a comparison re-spelled per call site, which is how
+the two drifted apart. `.draftOT` stays cancellable — it takes no password.
+`.cancel` remains available to players for the pre-start and setup paths by design;
+officialness is what gates it, not rank.
+
+Same branch: it never cleared `ktp_match_competitive`, so KTPCvarChecker kept
+enforcing competitive cvar rules into whatever casual play followed, until some
+later match happened to reset it.
+
+#### Overtime match ends never closed the match for HLStatsX (P1)
+
+`process_ot_round_end_changelevel()`'s decisive-win and OT-round-limit branches
+fired the `ktp_match_end` forward and cleaned up, but never flushed stats, never
+logged `KTP_MATCH_END`, and never cleared the match context. Only the regulation
+path did. The forward does not reach the Perl side — only the log line does — so for
+any match decided in overtime, `ktp_matches.end_time` stayed NULL forever and
+hlstats.pl kept the finished match as live context, attributing every post-match
+warmup kill to it until the next match's `KTP_MATCH_START` overwrote it.
+
+#### Cancelled and force-reset matches orphaned their KTPAntiCheat match row
+
+The mirror image of the above. `.cancel`, `.forcereset`, and the abandoned-match
+path logged `KTP_MATCH_END` but never called `send_ac_match_end()`, so
+`ktp_ac_match_index.ended_at` stayed NULL forever. `/api/match/current` serves the
+newest un-ended match, so the orphan became "current" again the moment a later
+match closed properly — clients then stamped a dead match_id, queried their weapon
+timeline against it, and received an empty result. This is the plugin half of the
+AC's NEW-1 empty-weapon-timeline investigation; intermittent, and it predates the
+0.7.x clients that surfaced it. The API-side backstop ships separately.
+
+A fourth exit had the same hole and closed *neither* consumer: the map-load restore
+path. `handle_first_half_end()` clears the live flag at halftime, so a changelevel
+to a different map while the 2nd half is pending arrives with "not live" set and was
+treated as a match that never started — dropping the match id with no `KTP_MATCH_END`
+and no AC close, even though the 1st half had been played and announced. It now
+closes both sinks when the saved mode is `h2`.
+
+#### Team names from `.setallies`/`.setaxis` could corrupt the scoreboard
+
+`set_team_name()` stored player-supplied names with only `remove_quotes()`+`trim()`,
+unlike captain and roster names which are sanitized. A name containing a quote or
+backslash makes `Info_SetValueForStarKey` reject the localinfo write silently — the
+engine keeps the previous value and nothing checks the read-back — so the team name
+shown on the scoreboard, in Discord and in the logs diverged after the next half's
+map load. Now sanitized on the way in.
+
+### Changed
+
+#### One teardown path for both consumers
+
+Two independent sinks must learn a match ended: HLStatsX (the `KTP_MATCH_END` log
+line) and the KTPAntiCheat API (`send_ac_match_end`). That block was hand-rolled at
+roughly eight teardown exits and they disagreed — each of the two bugs above is one
+exit telling one sink and not the other. Every exit now routes through
+`ktp_match_teardown_notify()`.
+
+Deliberately not idempotent: `/api/match/end` already dedups server-side, and a
+client-side latch would suppress a legitimate re-close. The per-exit `status`/`reason`
+log keys are preserved verbatim rather than unified — hlstats.pl reads only `matchid`
+and `map`, but log readers and greps see the rest. One deliberate gating change: the
+`KTP_MATCH_END` line is now logged unconditionally, where the regulation exit had it
+inside the dodx-natives guard and `finalize_abandoned_match` had it outside. Outside
+is correct — HLStatsX closure must not depend on the stats module being loaded — and
+there is no observable delta on the fleet, where those natives are always present.
+
+The step order inside the stock is load-bearing and documented there: the AC close
+must precede the match-context clear, because closing drains the final weapon-timeline
+batch and that drain reads the context to tag its rows. Clearing first silently
+discards the last flush interval of events — the end of the deciding round. The
+regulation path had that bug already; centralising made it uniform, so it is fixed
+here rather than standardised.
+
+Routing every exit through one place also gave three of them a match-context clear
+they never had, so dodx no longer keeps logging against a dead match id after an
+abandoned or completed 2nd half until the next go-live.
+
 ## [0.10.145] - 2026-07-12
 
 ### Added

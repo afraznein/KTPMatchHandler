@@ -1,5 +1,7 @@
 # KTPMatchHandler - Claude Code Context
 
+**REQUIRED: Before writing or modifying any code in this repo, invoke the `plugin-dev` skill** (`.claude/skills/plugin-dev/SKILL.md`). It carries the state-machine safety rules and deploy workflow; do not edit the .sma without it loaded.
+
 ## Compile Command
 
 **Production build:**

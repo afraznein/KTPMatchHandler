@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.145"
+#define PLUGIN_VERSION "0.10.146"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -820,16 +820,14 @@ stock bool:process_second_half_end_changelevel() {
     // =============== KTP: HLStatsX Stats Integration ===============
     #if defined HAS_DODX
     if (g_hasDodxStatsNatives) {
-        // Unpause stats before flush (may be paused from round-freeze)
+        // Resume stats accumulation (may be paused from round-freeze) so the
+        // state is consistent for whatever runs next — the flush itself does not
+        // consult the pause flag, which only gates accumulation.
         dodx_set_stats_paused(0);
         g_roundLive = true;
-
-        new flushed = dodx_flush_all_stats();
-        log_ktp("event=STATS_FLUSH type=match_end players=%d match_id=%s", flushed, g_matchId);
-        log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^")", g_matchId, g_matchMap);
-        ktp_set_match_context("");
     }
     #endif
+    ktp_match_teardown_notify(g_matchId, g_matchMap, "match_end");
 
     // Get current scores from dodx
     update_match_scores_from_dodx();
@@ -891,13 +889,11 @@ stock bool:process_second_half_end_changelevel() {
     }
     #endif
 
-    // Fire ktp_match_end forward
+    // Fire ktp_match_end forward (the match was already closed for both sinks
+    // by the teardown notify at the top of this function).
     {
         new ret;
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_matchMap, g_matchType, team1Total, team2Total);
-        #if defined HAS_CURL
-        send_ac_match_end(g_matchId);
-        #endif
     }
 
     end_match_cleanup();
@@ -991,13 +987,15 @@ stock bool:process_ot_round_end_changelevel() {
         }
         #endif
 
+        // Close the match for BOTH sinks. This path used to tell the AC API and
+        // nothing else — no flush, no KTP_MATCH_END — so hlstats.pl kept the
+        // finished match as live context and mis-tagged every post-match kill.
+        ktp_match_teardown_notify(g_matchId, g_matchMap, "ot_match_end");
+
         // Fire ktp_match_end forward
         {
             new ret;
             ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_matchMap, g_matchType, team1Total, team2Total);
-            #if defined HAS_CURL
-            send_ac_match_end(g_matchId);
-            #endif
         }
 
         end_match_cleanup();
@@ -1027,12 +1025,14 @@ stock bool:process_ot_round_end_changelevel() {
             log_amx("[KTP] ERROR: OT round limit reached (%d) — ending match to prevent overflow", g_otRound);
             log_ktp("event=OT_ROUND_LIMIT match_id=%s round=%d score=%d-%d", g_matchId, g_otRound, team1Total, team2Total);
 
-            // Fire match end forward so HLStatsX flushes stats and HLTV stops recording
+            // Same gap as the OT-decisive branch: the forward alone never reached
+            // HLStatsX. The old comment claimed firing the forward made HLStatsX
+            // flush — it does not; only the KTP_MATCH_END log line does.
+            ktp_match_teardown_notify(g_matchId, g_matchMap, "ot_round_limit");
+
+            // Fire match end forward so HLTV stops recording
             new ret;
             ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_matchMap, g_matchType, team1Total, team2Total);
-            #if defined HAS_CURL
-            send_ac_match_end(g_matchId);
-            #endif
 
             end_match_cleanup();
             return false;  // End match — cannot safely continue
@@ -1761,14 +1761,24 @@ stock team_name_from_id(teamId, out[], len) {
 
 // Set custom team name (called via /setteam command or config)
 // Also updates team identity vars since names are set before match starts
+// Team names come straight from player input (.setallies/.setaxis) and get
+// written to localinfo (LOCALINFO_TEAMNAME1/2) to survive the half's map change.
+// Sanitize on the way in, like captain and roster names already are: a '"' or
+// backslash makes Info_SetValueForStarKey reject the write SILENTLY — the engine
+// keeps the previous value, nothing checks the read-back, and the team name shown
+// on the scoreboard, in Discord and in the logs diverges after the next map load.
 stock set_team_name(teamId, const name[]) {
     if (teamId >= 1 && teamId <= 2 && name[0]) {
-        copy(g_teamName[teamId], charsmax(g_teamName[]), name);
+        new safe[64];
+        sanitize_name_for_localinfo(name, safe, charsmax(safe));
+        if (!safe[0]) return false;   // input was entirely delimiters/rejects
+
+        copy(g_teamName[teamId], charsmax(g_teamName[]), safe);
         // Also update team identity (team names are set in pre-match, so side = identity)
         if (teamId == 1) {
-            copy(g_team1Name, charsmax(g_team1Name), name);
+            copy(g_team1Name, charsmax(g_team1Name), safe);
         } else {
-            copy(g_team2Name, charsmax(g_team2Name), name);
+            copy(g_team2Name, charsmax(g_team2Name), safe);
         }
         return true;
     }
@@ -2665,6 +2675,81 @@ new bool:g_acTimelineMatchActive = false;
 stock ktp_set_match_context(const matchId[]) {
     dodx_set_match_id(matchId);
     g_acTimelineMatchActive = (matchId[0] != 0);
+}
+
+// "Official" = password-gated, results-bearing. COMPETITIVE (.ktp) and KTP_OT
+// (.ktpOT) both require a password and are treated as official for pause gating
+// and the ktp_match_competitive cvar. Spelling that set out per-site is how
+// .ktpOT ended up cancellable by any player while .ktp was protected — check
+// this predicate instead of comparing to MATCH_TYPE_COMPETITIVE by hand.
+// DRAFT_OT is deliberately NOT official: it takes no password.
+stock bool: is_official_match_type(MatchType: t) {
+    return (t == MATCH_TYPE_COMPETITIVE || t == MATCH_TYPE_KTP_OT);
+}
+
+// INVARIANT: every match-teardown exit must close the match through here.
+// Two consumers have to learn a match ended — HLStatsX (the KTP_MATCH_END log
+// line) and the AC API (send_ac_match_end) — and they are independent sinks.
+// Telling one but not the other is not hypothetical; both directions shipped:
+//   - OT-decisive and OT-round-limit ends told the AC API but never logged
+//     KTP_MATCH_END, so hlstats.pl's match context never cleared and every
+//     post-match kill was attributed to the finished match.
+//   - .cancel / .forcereset / the abandoned-match path logged KTP_MATCH_END but
+//     never told the AC API, leaving ktp_ac_match_index.ended_at NULL forever.
+//     /api/match/current then re-serves that orphan once a later match ends
+//     properly, so clients stamp a dead match_id and their weapon timeline
+//     comes back empty.
+// Route new exits through this stock rather than hand-rolling the block again.
+//
+// Deliberately NOT idempotent: /api/match/end already dedups server-side
+// (UPDATE ... WHERE ended_at IS NULL, enqueue gated on affected>0), and a
+// client-side latch would suppress a legitimate re-close.
+//
+// Each of the three steps keeps the gating it NEEDS, which the old hand-rolled
+// copies disagreed about:
+//   - flush + context-clear call dodx natives, so they stay dodx-gated.
+//   - the KTP_MATCH_END log is unconditional. finalize_abandoned_match already
+//     logged it outside the dodx guard while the regulation exit logged it
+//     inside — an inconsistency, and the unconditional form is the correct one:
+//     HLStatsX's match closure must not depend on the stats module being loaded.
+//     (No observable delta on the fleet, where g_hasDodxStatsNatives is always
+//     true; it only differs on a dodx-less server, in the safer direction.)
+//   - the AC announce needs only curl, never dodx.
+//
+// statusKey is "status" or "reason" (the abandoned path uses "reason"); pass ""
+// for the bare form. hlstats.pl's getProperties() reads only matchid+map, so the
+// key is human-facing — but it's preserved per-site rather than unified, to keep
+// this refactor non-behavioral for log readers and greps.
+stock ktp_match_teardown_notify(const matchId[], const map[], const flushType[],
+                                const statusKey[] = "", const statusValue[] = "") {
+    if (!matchId[0]) return;
+
+    #if defined HAS_DODX
+    if (g_hasDodxStatsNatives) {
+        new flushed = dodx_flush_all_stats();
+        log_ktp("event=STATS_FLUSH type=%s players=%d match_id=%s", flushType, flushed, matchId);
+    }
+    #endif
+
+    if (statusKey[0])
+        log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (%s ^"%s^")",
+                    matchId, map, statusKey, statusValue);
+    else
+        log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^")", matchId, map);
+
+    // ORDER IS LOAD-BEARING: the AC announce must run BEFORE the context clear.
+    // send_ac_match_end() first drains the pending weapon-timeline batch, and
+    // that drain reads dodx_get_match_id() — on an empty id with baseline mode
+    // off it zeroes the ring buffers and returns. Clearing first therefore
+    // silently discards up to WEAPON_FLUSH_INTERVAL (30s) of tail events, i.e.
+    // the end of the deciding round, for every match.
+    #if defined HAS_CURL
+    send_ac_match_end(matchId);
+    #endif
+
+    #if defined HAS_DODX
+    if (g_hasDodxStatsNatives) ktp_set_match_context("");
+    #endif
 }
 
 stock bool: ac_timeline_should_record() {
@@ -4292,7 +4377,20 @@ stock restore_match_context_from_localinfo() {
                     savedMatchMap, g_currentMap, g_matchId, mode);
             finalize_abandoned_match(mode, savedMatchMap);
         } else {
-            // Match wasn't live yet (players never readied) - just clear
+            // Not live at save time. For mode=h2 that does NOT mean "never
+            // played": handle_first_half_end() clears LOCALINFO_LIVE at halftime,
+            // so a fully-played 1st half followed by a map change to some other
+            // map (admin/rcon changelevel while h2 is pending) lands here with
+            // wasLive=false. That match was announced at h1 go-live, so both
+            // sinks are still holding it open — close them before we drop the id,
+            // or the AC row orphans (ended_at NULL forever, later re-served as
+            // "current") and hlstats keeps tagging kills to the dead match.
+            // mode=otN never reaches this branch: OT saves don't clear the live
+            // flag, so an abandoned OT goes through finalize_abandoned_match.
+            if (equal(mode, "h2") && g_matchId[0]) {
+                ktp_match_teardown_notify(g_matchId, savedMatchMap, "h2_pending_abandoned",
+                                          "status", "abandoned_pending");
+            }
             log_ktp("event=MATCH_CONTEXT_ABANDONED saved_map=%s current_map=%s match_id=%s reason=not_live",
                     savedMatchMap, g_currentMap, g_matchId);
             disarm_ready_override("context_abandoned");
@@ -4728,17 +4826,8 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
         log_ktp("event=MATCH_ABANDONED_DETECTED match_id=%s mode=%s map=%s half1=%d-%d team1=%s team2=%s",
                 g_matchId, mode, savedMap, firstHalf1, firstHalf2, team1Name, team2Name);
 
-        // Flush stats before KTP_MATCH_END to ensure all kills are captured
-        #if defined HAS_DODX
-        if (g_hasDodxStatsNatives) {
-            new flushed = dodx_flush_all_stats();
-            log_ktp("event=STATS_FLUSH type=abandoned_2nd_half players=%d match_id=%s", flushed, g_matchId);
-        }
-        #endif
-
-        // Log KTP_MATCH_END for HLStatsX (partial data)
-        log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"abandoned_2nd_half^")",
-                g_matchId, savedMap);
+        // Close both sinks (partial data — 1st half scores are the best available).
+        ktp_match_teardown_notify(g_matchId, savedMap, "abandoned_2nd_half", "status", "abandoned_2nd_half");
 
         // Update Discord embed if we have the message ID
         #if defined HAS_CURL
@@ -4758,9 +4847,6 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
         // Fire ktp_match_end forward (first-half scores are best available for 2nd half abandon)
         new ret;
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, savedMap, _:g_matchType, firstHalf1, firstHalf2);
-        #if defined HAS_CURL
-        send_ac_match_end(g_matchId);
-        #endif
     }
     else if (isOvertime) {
         // OT was abandoned - restore regulation scores
@@ -4774,16 +4860,10 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
         log_ktp("event=MATCH_ABANDONED_DETECTED match_id=%s mode=%s map=%s reg=%d-%d ot_round=%d team1=%s team2=%s",
                 g_matchId, mode, savedMap, regScore1, regScore2, otRound, team1Name, team2Name);
 
-        // Flush stats before KTP_MATCH_END to ensure all kills are captured
-        #if defined HAS_DODX
-        if (g_hasDodxStatsNatives) {
-            new flushed = dodx_flush_all_stats();
-            log_ktp("event=STATS_FLUSH type=abandoned_ot players=%d match_id=%s", flushed, g_matchId);
-        }
-        #endif
-
-        log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"abandoned_ot%d^")",
-                g_matchId, savedMap, otRound);
+        // Close both sinks. Status carries the OT round, so format it first.
+        new otStatus[24];
+        formatex(otStatus, charsmax(otStatus), "abandoned_ot%d", otRound);
+        ktp_match_teardown_notify(g_matchId, savedMap, "abandoned_ot", "status", otStatus);
 
         #if defined HAS_CURL
         if (discordMsgId[0]) {
@@ -4801,9 +4881,6 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
         // Fire ktp_match_end forward (regulation totals for OT abandon)
         new ret;
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, savedMap, _:g_matchType, regScore1, regScore2);
-        #if defined HAS_CURL
-        send_ac_match_end(g_matchId);
-        #endif
     }
 
     // Reset all match state variables to ensure clean state after abandoned match
@@ -4883,20 +4960,12 @@ stock finalize_completed_second_half() {
         copy(winner, charsmax(winner), "Match tied!");
     }
 
-    // Flush stats before KTP_MATCH_END to ensure all kills are captured
-    #if defined HAS_DODX
-    if (g_hasDodxStatsNatives) {
-        new flushed = dodx_flush_all_stats();
-        log_ktp("event=STATS_FLUSH type=finalize_2nd_half players=%d match_id=%s", flushed, g_matchId);
-    }
-    #endif
-
     // Log match end
     log_ktp("event=MATCH_END match_id=%s final_score=%s_%d-%d_%s half1=%d-%d half2=%d-%d",
             g_matchId, g_team1Name, team1Total, team2Total, g_team2Name,
             firstHalf1, firstHalf2, team1SecondHalf, team2SecondHalf);
 
-    log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^")", g_matchId, g_currentMap);
+    ktp_match_teardown_notify(g_matchId, g_currentMap, "finalize_2nd_half");
 
     // HUD announcement
     set_hudmessage(0, 255, 0, -1.0, 0.3, 0, 0.0, 10.0, 0.5, 0.5, -1);
@@ -4916,13 +4985,10 @@ stock finalize_completed_second_half() {
     }
     #endif
 
-    // Fire ktp_match_end forward
+    // Fire ktp_match_end forward (match already closed for both sinks above)
     {
         new ret;
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_currentMap, _:g_matchType, team1Total, team2Total);
-        #if defined HAS_CURL
-        send_ac_match_end(g_matchId);
-        #endif
     }
 
     // Note: Caller will clear localinfo after this returns (unless OT triggered)
@@ -6033,9 +6099,16 @@ stock cmd_setteam(id, teamId, const teamLabel[], const usage[]) {
     new name[32];
     get_user_name(id, name, charsmax(name));
 
-    set_team_name(teamId, teamname);
-    log_ktp("event=TEAM_NAME_SET team=%d name='%s' by='%s'", teamId, teamname, name);
-    announce_all("%s set %s team name to: %s", name, teamLabel, teamname);
+    if (!set_team_name(teamId, teamname)) {
+        client_print(id, print_chat, "[KTP] That team name has no usable characters. Try another.");
+        return PLUGIN_HANDLED;
+    }
+
+    // Report what was STORED, not what was typed. Sanitizing strips characters
+    // the localinfo write rejects, so echoing the raw input would recreate the
+    // same announced-vs-actual divergence the sanitize exists to prevent.
+    log_ktp("event=TEAM_NAME_SET team=%d name='%s' by='%s'", teamId, g_teamName[teamId], name);
+    announce_all("%s set %s team name to: %s", name, teamLabel, g_teamName[teamId]);
 
     return PLUGIN_HANDLED;
 }
@@ -6421,9 +6494,11 @@ public cmd_match_start(id) {
         return PLUGIN_HANDLED;
     }
 
-    // Password check - applies to competitive matches and KTP overtime only
-    // Draft, draftOT, scrim, and 12man modes bypass this check via their own handlers
-    if (g_matchType == MATCH_TYPE_COMPETITIVE || g_matchType == MATCH_TYPE_KTP_OT) {
+    // Password check - applies to official types only (.ktp / .ktpOT).
+    // Draft, draftOT, scrim, and 12man modes bypass this check via their own handlers.
+    // This site IS the password boundary that defines "official" — keep it and the
+    // predicate in lockstep.
+    if (is_official_match_type(g_matchType)) {
         new args[64], password[64];
         read_args(args, charsmax(args));
         remove_quotes(args);
@@ -7100,10 +7175,18 @@ public cmd_cancel(id) {
 
     // Handle second half pending - this is cancelling the entire match after first half
     if (g_secondHalfPending) {
-        // Block cancel for competitive (.ktp) matches during 2nd half pending
-        // These matches are "official" and should only be ended via .forcereset
-        if (g_matchType == MATCH_TYPE_COMPETITIVE) {
-            client_print(id, print_chat, "[KTP] Cannot cancel a competitive match after 1st half has completed.");
+        // Block cancel for OFFICIAL matches during 2nd-half/OT pending. These
+        // should only be ended via .forcereset (which is admin-gated).
+        //
+        // g_secondHalfPending is dual-purposed as the OT-pending flag, so this
+        // branch is reachable mid-OT — and .ktpOT is password-gated and treated
+        // as official everywhere else (pause gating, ktp_match_competitive).
+        // It was missing here, which let ANY connected player wipe a live
+        // official OT match's id, roster, scores and localinfo with no
+        // confirmation step. .cancel stays open to players for the pre-start /
+        // setup paths above by design; officialness is what gates it, not rank.
+        if (is_official_match_type(g_matchType)) {
+            client_print(id, print_chat, "[KTP] Cannot cancel an official match after 1st half has completed.");
             client_print(id, print_chat, "[KTP] To end the match, an admin must use .forcereset");
             return PLUGIN_HANDLED;
         }
@@ -7121,15 +7204,17 @@ public cmd_cancel(id) {
         log_ktp("event=SECONDHALF_CANCEL by='%s' steamid=%s ip=%s team=%s match_id=%s h1_score=%d-%d map=%s",
                 name, safe_sid(sid), ip[0]?ip:"NA", team, savedMatchId, h1Team1Score, h1Team2Score, g_currentMap);
 
-        // Flush stats and close match in DODX/HLStatsX before clearing state
-        #if defined HAS_DODX
-        if (g_hasDodxStatsNatives && savedMatchId[0]) {
-            new flushed = dodx_flush_all_stats();
-            log_ktp("event=STATS_FLUSH type=secondhalf_cancel players=%d match_id=%s", flushed, savedMatchId);
-            log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"cancelled^")", savedMatchId, g_currentMap);
-            ktp_set_match_context("");
-        }
-        #endif
+        // Close the match for both sinks before clearing state. The AC half was
+        // missing here: a cancelled match left ktp_ac_match_index.ended_at NULL
+        // forever, and that orphan gets re-served as "current" to clients.
+        ktp_match_teardown_notify(savedMatchId, g_currentMap, "secondhalf_cancel", "status", "cancelled");
+
+        // Defense in depth: with the official gate above, every type still
+        // reaching this branch already had the indicator at 0 (go-live only sets
+        // it for official types). Kept so a future change to either the gate or
+        // the go-live set can't leave KTPCvarChecker enforcing competitive rules
+        // into casual play.
+        set_cvar_num("ktp_match_competitive", 0);
 
         // Send Discord BEFORE resetting match type (routing depends on g_matchType)
         if (g_discordRelayUrl[0]) {
@@ -7404,15 +7489,9 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     remove_task(g_taskAutoConfirmId);
     remove_task(g_taskCountdownId);
 
-    // Flush stats and close match in DODX/HLStatsX before clearing state
-    #if defined HAS_DODX
-    if (g_hasDodxStatsNatives && g_matchId[0]) {
-        new flushed = dodx_flush_all_stats();
-        log_ktp("event=STATS_FLUSH type=forcereset players=%d match_id=%s", flushed, g_matchId);
-        log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"forcereset^")", g_matchId, g_currentMap);
-        ktp_set_match_context("");
-    }
-    #endif
+    // Close the match for both sinks before clearing state — the AC half was
+    // missing here too (same orphan class as .cancel).
+    ktp_match_teardown_notify(g_matchId, g_currentMap, "forcereset", "status", "forcereset");
 
     // Clear match identity (including 1.3 Community state)
     clear_match_id();
@@ -7964,16 +8043,14 @@ public cmd_ready(id) {
             // =============== KTP: HLStatsX Stats Integration ===============
             // If we were expecting 2nd half but got a different map, the previous
             // match was abandoned. Log KTP_MATCH_END for proper stats closure.
-            #if defined HAS_DODX
-            if (g_hasDodxStatsNatives && g_secondHalfPending && g_matchId[0]) {
-                // Previous match was abandoned after 1st half - flush and close it
-                new flushed = dodx_flush_all_stats();
-                log_ktp("event=STATS_FLUSH type=match_abandoned players=%d match_id=%s", flushed, g_matchId);
-                log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (reason ^"abandoned^")", g_matchId, g_matchMap);
-                ktp_set_match_context("");
+            if (g_secondHalfPending && g_matchId[0]) {
+                // Previous match was abandoned after 1st half - close it for both
+                // sinks. The AC half was missing here (same orphan class as .cancel).
+                // Note this path keeps the "reason" key, not "status" — preserved
+                // verbatim rather than unified.
+                ktp_match_teardown_notify(g_matchId, g_matchMap, "match_abandoned", "reason", "abandoned");
                 log_ktp("event=MATCH_ABANDONED previous_map=%s new_map=%s match_id=%s", g_matchMap, g_currentMap, g_matchId);
             }
-            #endif
             // ===============================================================
 
             g_currentHalf = 1;
@@ -8023,7 +8100,7 @@ public cmd_ready(id) {
 
         // Set competitive mode indicator for other plugins (KTPCvarChecker)
         // Only .ktp and .ktpOT are competitive; 12man/scrim/draft are casual
-        new isCompetitive = (g_matchType == MATCH_TYPE_COMPETITIVE || g_matchType == MATCH_TYPE_KTP_OT) ? 1 : 0;
+        new isCompetitive = is_official_match_type(g_matchType) ? 1 : 0;
         set_cvar_num("ktp_match_competitive", isCompetitive);
 
         // Reset tech budgets only for NEW matches (1st half), not 2nd half continuation
