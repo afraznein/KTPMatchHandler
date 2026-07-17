@@ -1,4 +1,4 @@
-/.claude
+.claude/settings.local.json
 /deployment
 
 # Sensitive configuration files
