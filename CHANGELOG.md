@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.147] - 2026-07-19
+
+The pre-start `.confirm` HUD (and `.prestatus`) now shows a confirmer's current name
+instead of the name they had when they typed `.confirm`. The engine half of this
+class (`get_user_name()` refreshing on a mid-session rename) landed in ReHLDS .929;
+this is the plugin display-site half.
+
+### Fixed
+
+#### Stale confirmer name in the pre-start HUD
+
+`g_confirmAlliesBy`/`g_confirmAxisBy` cache the `get_who_str` "Name[authid]" string
+captured at `.confirm` time, and both the live pre-start HUD and `.prestatus` printed
+it verbatim — so a player who renamed after confirming showed their old name until
+match start. The two display sites now render the cached string through a new
+`resolve_who_live()` helper: it re-reads the current name of that exact player (matched
+on the embedded authid, so slot reuse can't mis-resolve it) and falls back to the
+cached string unchanged once they disconnect. Display-only; no new match-scoped state,
+so no teardown-exit coverage change. The `.kick` menu and CvarChecker logs in this same
+class already read `get_user_name()` live, so ReHLDS .929 fixed those with no plugin edit.
+
+### Added
+
+#### "Waiting on" line on the pending HUD
+
+The ready-up HUD (both the 1st-half pending HUD and the 2nd-half/OT continuation HUD)
+now lists the players who still need to `.ready`, by side, e.g. `Waiting on: Allies bob |
+Axis jim`. Previously the HUD showed only counts ("Allies: 4/6"), and who was missing was
+only surfaced by the 30s chat "Waiting for" reminder. The reminder's list-builder is
+factored into a shared `build_unready_names()` so the HUD and the chat reminder always
+agree, and the HUD line is rebuilt each tick with live names (rename-safe). No behavior
+change to the chat reminder.
+
 ## [0.10.146] - 2026-07-16
 
 Four fixes from the 2026-07-15 comprehensive stack review, plus the plugin half of

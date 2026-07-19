@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.146"
+#define PLUGIN_VERSION "0.10.147"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -1864,6 +1864,40 @@ stock get_dynamic_name(playerId, const cachedName[], out[], maxlen) {
     }
 }
 
+// Render a cached "Name[authid]" who-string (from get_who_str) with the player's
+// CURRENT name, so a rename mid-confirm doesn't show stale in the pre-start HUD.
+// Keyed on the embedded authid, not a slot, so slot reuse can't mis-resolve it;
+// falls back to the cached string unchanged once that player has left.
+stock resolve_who_live(const cachedWho[], out[], maxlen) {
+    new open = -1, close = -1;
+    for (new i = 0; cachedWho[i]; i++) {
+        if (cachedWho[i] == '[') open = i;        // last '[' ...
+        else if (cachedWho[i] == ']') close = i;  // ... and last ']' bound the authid
+    }
+    if (open >= 0 && close > open + 1) {
+        new authid[44], want = close - open - 1;
+        if (want > charsmax(authid)) want = charsmax(authid);
+        copy(authid, want, cachedWho[open + 1]);
+
+        // "NA" = authid was unresolved at confirm time; don't match it against
+        // another player whose authid is also unresolved. Keep the cached string.
+        if (equal(authid, "NA")) { copy(out, maxlen, cachedWho); return; }
+
+        new players[32], num, curAuth[44];
+        get_players(players, num);
+        for (new i = 0; i < num; i++) {
+            get_user_authid(players[i], curAuth, charsmax(curAuth));
+            if (equal(curAuth, authid)) {
+                new liveName[32];
+                get_user_name(players[i], liveName, charsmax(liveName));
+                formatex(out, maxlen, "%s[%s]", liveName, authid);
+                return;
+            }
+        }
+    }
+    copy(out, maxlen, cachedWho);
+}
+
 stock strtolower_inplace(s[]) {
     for (new i = 0; s[i]; i++) if (s[i] >= 'A' && s[i] <= 'Z') s[i] += 32;
 }
@@ -3609,11 +3643,14 @@ public pending_hud_tick() {
     new techA = g_techBudget[1];
     new techX = g_techBudget[2];
 
+    new waitingLine[192];
+    format_waiting_line(waitingLine, charsmax(waitingLine));
+
     set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 1.2, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "KTP %s Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type .rdy when ready.",
-        matchLabel, pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need);
+        "KTP %s Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type .rdy when ready.%s",
+        matchLabel, pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need, waitingLine);
 }
 
 // Show pending HUD during pause (called from OnPausedHUDUpdate hook)
@@ -3647,11 +3684,14 @@ stock show_pending_hud_during_pause() {
     new techA = g_techBudget[1];
     new techX = g_techBudget[2];
 
+    new waitingLine[192];
+    format_waiting_line(waitingLine, charsmax(waitingLine));
+
     set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 0.1, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
-        "KTP %s Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type .rdy when ready.",
-        matchLabel, pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need);
+        "KTP %s Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type .rdy when ready.%s",
+        matchLabel, pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need, waitingLine);
 }
 
 // Show continuation HUD for 2nd half or OT pending (1.2s hold time for task tick)
@@ -3692,10 +3732,17 @@ stock show_continuation_pending_hud_internal(alliesReady, alliesPlayers, axisRea
     formatex(readyLine, charsmax(readyLine), "Allies: %d/%d | Axis: %d/%d (need %d)",
             alliesReady, alliesPlayers, axisReady, axisPlayers, need);
 
+    // Live "who still needs to .ready" line (current each tick; same list as the
+    // 30s chat reminder).
+    new waitingLine[192];
+    format_waiting_line(waitingLine, charsmax(waitingLine));
+
     // Yellow color for continuation pending, centered
     set_hudmessage(255, 255, 0, -1.0, 0.15, 0, 0.0, holdTime, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
-    ShowSyncHudMsg(0, g_hudSync, "%s^n%s^n^n%s%s", header, scoreLine, readyLine, pauseInfo);
+    // pauseInfo before waitingLine: if a long roster overflows the HUD cap, the
+    // waiting list truncates rather than the pause timer.
+    ShowSyncHudMsg(0, g_hudSync, "%s^n%s^n^n%s%s%s", header, scoreLine, readyLine, pauseInfo, waitingLine);
 }
 
 public prestart_hud_tick() {
@@ -3706,11 +3753,15 @@ public prestart_hud_tick() {
 
     set_hudmessage(255, 210, 0, 0.01, 0.12, 0, 0.0, 1.2, 0.0, 0.0, -1);
     ClearSyncHud(0, g_hudSync);
+    // Render confirmer names live so a mid-confirm rename isn't shown stale.
+    new alliesWho[80], axisWho[80];
+    resolve_who_live(g_confirmAlliesBy, alliesWho, charsmax(alliesWho));
+    resolve_who_live(g_confirmAxisBy, axisWho, charsmax(axisWho));
     ShowSyncHudMsg(0, g_hudSync,
         "KTP Pre-Start (%s): Waiting for .confirm^n%s: %s^n%s: %s^nCommands: .confirm, .prestatus, .cancel",
         matchLabel,
-        g_teamName[1], g_preConfirmAllies ? g_confirmAlliesBy : "—",
-        g_teamName[2], g_preConfirmAxis   ? g_confirmAxisBy   : "—"
+        g_teamName[1], g_preConfirmAllies ? alliesWho : "—",
+        g_teamName[2], g_preConfirmAxis   ? axisWho   : "—"
     );
 }
 
@@ -5490,6 +5541,52 @@ stock get_ready_counts(&alliesPlayers, &axisPlayers, &alliesReady, &axisReady) {
     }
 }
 
+// Build the current unready-name lists into g_unreadyAllies/g_unreadyAxis with
+// LIVE names (so a mid-pending rename shows correctly), returning per-side counts.
+// Shared by the 30s unready chat reminder and the pending HUD's "Waiting on" line
+// so the two always agree. Raw game team (get_user_team_id), matching the reminder.
+stock build_unready_names(&alliesCount, &axisCount) {
+    g_unreadyAllies[0] = EOS;
+    g_unreadyAxis[0] = EOS;
+    new alliesIdx = 0, axisIdx = 0;
+    alliesCount = 0; axisCount = 0;
+
+    new ids[32], num;
+    get_players(ids, num, "ch");
+    for (new i = 0; i < num; i++) {
+        new player = ids[i];
+        new tid = get_user_team_id(player);
+        if ((tid == 1 || tid == 2) && !g_ready[player]) {
+            new name[32];
+            get_user_name(player, name, charsmax(name));
+            if (tid == 1) {
+                if (alliesIdx > 0) alliesIdx += formatex(g_unreadyAllies[alliesIdx], charsmax(g_unreadyAllies) - alliesIdx, ", ");
+                alliesIdx += formatex(g_unreadyAllies[alliesIdx], charsmax(g_unreadyAllies) - alliesIdx, "%s", name);
+                alliesCount++;
+            } else {
+                if (axisIdx > 0) axisIdx += formatex(g_unreadyAxis[axisIdx], charsmax(g_unreadyAxis) - axisIdx, ", ");
+                axisIdx += formatex(g_unreadyAxis[axisIdx], charsmax(g_unreadyAxis) - axisIdx, "%s", name);
+                axisCount++;
+            }
+        }
+    }
+}
+
+// Compose the pending-HUD "Waiting on" line (with a leading ^n) from the current
+// unready lists, or empty when everyone is ready. Shares build_unready_names so it
+// always matches the 30s chat reminder.
+stock format_waiting_line(out[], maxlen) {
+    out[0] = EOS;
+    new uAllies, uAxis;
+    build_unready_names(uAllies, uAxis);
+    if (uAllies && uAxis)
+        formatex(out, maxlen, "^nWaiting on: Allies %s | Axis %s", g_unreadyAllies, g_unreadyAxis);
+    else if (uAllies)
+        formatex(out, maxlen, "^nWaiting on Allies: %s", g_unreadyAllies);
+    else if (uAxis)
+        formatex(out, maxlen, "^nWaiting on Axis: %s", g_unreadyAxis);
+}
+
 // Returns the number of players required per team to start match
 // - Override mode: 1 player (debug)
 // - KTP/KTP OT: 6 players
@@ -7027,9 +7124,12 @@ public cmd_override_ready_limits(id) {
 
 public cmd_pre_status(id) {
     if (!g_preStartPending) { client_print(id, print_chat, "[KTP] Not in pre-start."); return PLUGIN_HANDLED; }
+    new alliesWho[80], axisWho[80];
+    resolve_who_live(g_confirmAlliesBy, alliesWho, charsmax(alliesWho));
+    resolve_who_live(g_confirmAxisBy, axisWho, charsmax(axisWho));
     client_print(id, print_chat, "[KTP] Pre-Start — %s: %s | %s: %s",
-        g_teamName[1], g_preConfirmAllies ? g_confirmAlliesBy : "—",
-        g_teamName[2], g_preConfirmAxis   ? g_confirmAxisBy   : "—");
+        g_teamName[1], g_preConfirmAllies ? alliesWho : "—",
+        g_teamName[2], g_preConfirmAxis   ? axisWho   : "—");
     return PLUGIN_HANDLED;
 }
 
@@ -8522,35 +8622,12 @@ public unready_reminder_tick() {
     if (lastSendTime > 0 && (now - lastSendTime) < minGap) return;
     lastSendTime = now;
 
-    // Build unready lists for each team
-    // NOTE: Using global buffers (g_unready*) to avoid AMX stack overflow (16KB limit)
-    g_unreadyAllies[0] = EOS;  // Clear global buffers before use
-    g_unreadyAxis[0] = EOS;
-    new alliesIdx = 0, axisIdx = 0;
-    new alliesCount = 0, axisCount = 0;
+    // Build unready lists (shared with the pending HUD "Waiting on" line).
+    new alliesCount, axisCount;
+    build_unready_names(alliesCount, axisCount);
 
     new ids[32], num;
     get_players(ids, num, "ch");
-
-    for (new i = 0; i < num; i++) {
-        new player = ids[i];
-        new tid = get_user_team_id(player);
-
-        if ((tid == 1 || tid == 2) && !g_ready[player]) {
-            new name[32];
-            get_user_name(player, name, charsmax(name));
-
-            if (tid == 1) { // Allies
-                if (alliesIdx > 0) alliesIdx += formatex(g_unreadyAllies[alliesIdx], charsmax(g_unreadyAllies) - alliesIdx, ", ");
-                alliesIdx += formatex(g_unreadyAllies[alliesIdx], charsmax(g_unreadyAllies) - alliesIdx, "%s", name);
-                alliesCount++;
-            } else { // Axis
-                if (axisIdx > 0) axisIdx += formatex(g_unreadyAxis[axisIdx], charsmax(g_unreadyAxis) - axisIdx, ", ");
-                axisIdx += formatex(g_unreadyAxis[axisIdx], charsmax(g_unreadyAxis) - axisIdx, "%s", name);
-                axisCount++;
-            }
-        }
-    }
 
     // Send team-specific reminders
     for (new i = 0; i < num; i++) {
