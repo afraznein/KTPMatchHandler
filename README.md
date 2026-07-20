@@ -4,7 +4,7 @@
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
-> **Compatible with both AMX Mod X and KTP AMX** - The plugin automatically detects the correct configs directory.
+> **Requires KTPAMXX** — not stock AMX Mod X. See Requirements below.
 
 ---
 
@@ -60,9 +60,10 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **Player Tracking**: SteamID, IP, team recorded for all events
 
 ### Platform Compatibility
-- **Optimal**: KTP-ReHLDS + KTP-ReAPI (full feature set)
-- **Good**: Standard ReHLDS + Standard ReAPI (ReAPI pause works, limited HUD)
-- **Basic**: Base AMX ModX (fallback mode, basic features)
+- **Full**: KTP-ReHLDS + KTP-ReAPI + KTPAMXX — the only supported configuration
+- **Degraded**: standard ReHLDS + standard ReAPI — pause works, HUD updates do not
+  (`RH_SV_UpdatePausedHUD` is a KTP-ReHLDS addition)
+- **Unsupported**: stock AMX Mod X — the plugin will not load
 
 ---
 
@@ -71,25 +72,41 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 ### Requirements
 
 **Required:**
-- AMX Mod X 1.9+ / KTP AMX 2.0+ (1.10 / 2.0 recommended)
-- [KTP-ReAPI](https://github.com/afraznein/KTP-ReAPI) (custom ReAPI fork with `RH_SV_UpdatePausedHUD` hook) - *optional but recommended*
-- [KTP-ReHLDS](https://github.com/afraznein/KTP-ReHLDS) (custom ReHLDS fork - HUD updates during pause)
+- **KTPAMXX 2.6.2+** — not stock AMX Mod X. This plugin includes `ktp_discord`
+  and `ktp_version_reporter` and calls DODX natives that stock AMXX lacks.
+  (Individual features need newer builds; see CHANGELOG.)
+- **[KTP-ReAPI](https://github.com/afraznein/KTP-ReAPI)** — supplies
+  `rh_set_server_pause()`, which the pause system calls **unguarded**. There are
+  no `_reapi_included` fallbacks, so without ReAPI the plugin does not compile,
+  and a binary built with it will not load if the module is absent.
+- **[KTP-ReHLDS](https://github.com/afraznein/KTP-ReHLDS)** — HUD updates during
+  pause, via the `RH_SV_UpdatePausedHUD` hook.
+- **KTPAmxxCurl** — `ktp_discord` is an unconditional include; Discord *delivery*
+  is optional, the module is not.
 
 **Optional:**
-- cURL extension (for Discord webhook notifications)
-- ReAPI module (for enhanced pause HUD updates - plugin works without it)
+- Discord configuration in `<configsdir>/discord.ini` — without it the plugin
+  runs fine and simply sends nothing.
 - [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) (automatic HLTV demo recording on match start/end)
 
 ### Installation
 
 1. **Compile** the plugin:
    ```bash
-   amxxpc KTPMatchHandler.sma -oKTPMatchHandler.amxx
+   bash compile.sh
    ```
 
+   `compile.sh` is the supported entry point — it generates the build-info
+   include (git SHA + build time) that `amx_ktp_versions` reports, and stages the
+   output. A separate `KTP_TEST_MODE=1 bash compile.sh` variant exists for
+   integration testing; it is not for fleet deploy.
+
 2. **Install** to your server:
-   - AMX Mod X: `addons/amxmodx/plugins/KTPMatchHandler.amxx`
-   - KTP AMX: `addons/ktpamx/plugins/KTPMatchHandler.amxx`
+   - `addons/ktpamx/plugins/KTPMatchHandler.amxx`
+
+   KTPAMXX only. This plugin includes `ktp_discord` and `ktp_version_reporter`
+   and makes ~58 `dodx_*` / `rh_*` calls that stock AMX Mod X does not provide —
+   it will not load there.
 
 3. **Add to** `plugins.ini`:
    ```
@@ -198,7 +215,9 @@ Team 2: .go        ← Confirms (both teams must agree)
 ```
 
 **Pause Features:**
-- `.ext` - Add 2 minutes (max 2× = 4 minutes total)
+- `.ext` - Add 2 minutes (max 2× = 4 minutes total). Requires
+  `ktp_pause_max_extensions` > 0 — extensions ship **disabled by default**, and
+  `.ext` is hidden until enabled.
 - Auto-warnings at 30s and 10s remaining
 - Auto-unpause when timer expires
 - `.nodc` - Cancel disconnect auto-pause (30-sec window)
@@ -213,6 +232,8 @@ Team 2: .go        ← Confirms (both teams must agree)
 .draft                  Initiate draft match (no password, always available)
 .12man                  Initiate 12-man match (Standard or 1.3 Community)
 .scrim                  Initiate scrim match (no password)
+.ktpOT <pw>             Start KTP overtime round (password required)
+.draftOT                Start draft overtime round (no password)
 .confirm                Confirm team ready for start
 .notconfirm             Remove team confirmation
 .ready, .rdy            Mark yourself ready
@@ -220,6 +241,16 @@ Team 2: .go        ← Confirms (both teams must agree)
 .status                 View detailed match status
 .prestatus              View pre-start confirmation status
 .cancel                 Cancel match/pre-start
+```
+
+The all-lowercase forms `.ktpot` and `.draftot` are registered too, and
+deliberately so — a 2026-04-26 incident on CHI2 had the lowercase form silently
+dropped mid-match.
+
+#### Overtime
+```
+.otbreak                Start the optional 10-minute break before an OT round
+.skip                   Skip the OT break and go straight to the round
 ```
 
 #### Pause Control
@@ -244,14 +275,44 @@ Team 2: .go        ← Confirms (both teams must agree)
 #### Help & Admin Commands
 ```
 .commands, .cmds        Show all commands (printed to console)
-ktp_pause               Server/RCON pause (same as .pause)
+ktp_pause               Server/RCON pause (ADMIN_RCON) — still works
 .cfg                    View current CVARs
+.whoneedsready          List players who have not readied up
 ```
+
+`ktp_pause` is **not** the console equivalent of `.pause`. `.pause`/`.tac` are
+hard-denied (see Pause Types below); `ktp_pause` calls the pause countdown
+directly and bypasses that disable, so it remains the only working tactical
+pause on the server.
+
+#### Match Recovery (ADMIN_RCON, destructive)
+
+Both require confirmation: run the command twice within 10 seconds, from the
+same player. Console equivalents exist under the `ktp_` prefix.
+
+```
+.forcereset             Clear ALL match state — recovers an abandoned server
+ktp_forcereset          Console equivalent
+
+.restarthalf            Restart the 2nd half to 0-0, preserving 1st half scores
+.h2restart              Alias
+ktp_restarthalf         Console equivalent
+```
+
+#### Ready-Limit Override
+
+```
+.override_ready_limits  Toggle the ready-count requirement for go-live
+```
+
+Gated by a **SteamID allowlist** (`OVERRIDE_ADMIN_SIDS`), not an admin flag — an
+ADMIN_RCON admin who isn't on the list cannot use it, and adding someone means
+editing the source. Intended for solo go-live validation, not routine play.
 
 #### Additional Aliases
 All commands also work with the `/` prefix and some have additional forms:
 - `pause`, `resume`, `confirm`, `cancel`, `status` (without prefix)
-- `/tactical`, `.tactical` (same as `.pause`)
+- `/tactical`, `.tactical` (same as `.pause` — and disabled with it)
 - `/technical` (same as `.tech`)
 
 ---
@@ -308,7 +369,7 @@ server_cmd("pause");         // Requires pausable 1
 ### Pause Flow
 
 ```
-Player types .pause
+Player types .tech
          ↓
 5-second countdown
   "Pausing in 5..."
@@ -379,7 +440,21 @@ discord_channel_id=1234567890123456789
 
 ; Authentication Secret (must match relay's RELAY_SHARED_SECRET)
 discord_auth_secret=your-secret-here
+
+; Per-match-type channels. NOT optional in the way they look — see below.
+discord_channel_id_default=1234567890123456789
+discord_channel_id_12man=1234567890123456789
+discord_channel_id_scrim=1234567890123456789
+discord_channel_id_draft=1234567890123456789
 ```
+
+**Channel routing — the fallback is not symmetric.** `discord_channel_id` is the
+competitive channel: `.ktp` and `.ktpOT` post there. The other three keys are
+required for their match type, with **no fallback** — leave
+`discord_channel_id_12man` unset and 12-man matches post *nowhere*, silently.
+Same for `_scrim` and `_draft`/`.draftOT`. Only `discord_channel_id_default`
+(non-match context: `.forcereset`, cancellations) falls back, to
+`discord_channel_id`.
 
 **Discord notifications sent for:**
 - ⏸️ Pause initiated (with countdown)
@@ -392,7 +467,7 @@ discord_auth_secret=your-secret-here
 - ❌ Pause cancelled
 - 🎮 Match start/end events
 
-**Setup Guide:** See `DISCORD_GUIDE.md` for complete Discord relay setup.
+**Setup Guide:** See [`documents/discord_guide.md`](documents/discord_guide.md) for complete Discord relay setup.
 
 ### All CVARs
 
@@ -411,6 +486,14 @@ ktp_unpause_reminder_secs "15"        // Reminder interval for unpause confirmat
 // (ready count is fixed per match type: 6 for .ktp/.ktpOT, 5 for scrim/12man/draft — the 12man 5/team is deliberate)
 ktp_tech_budget_seconds "300"         // Technical pause budget per team (5 min)
 ktp_unready_reminder_secs "30"        // Reminder interval for unready players
+ktp_match_competitive "0"             // 1 = competitive (.ktp/.ktpOT), 0 = casual.
+                                      // Set by the plugin, read by KTPCvarChecker
+                                      // to pick its enforcement tier — a cross-plugin
+                                      // contract, not an operator knob.
+
+// ===== Anti-Cheat Integration =====
+ktp_ac_baseline_mode "0"              // 1 = solo spray-baseline capture; weapon-timeline
+                                      // batches upload under a synthetic match_id
 
 // ===== File Paths (auto-detected, override only if needed) =====
 ktp_maps_file "<configsdir>/ktp_maps.ini"    // Auto-detected at runtime
@@ -423,7 +506,7 @@ ktp_cfg_basepath "configs/"           // Base path for map configs (relative to 
 ## Logging
 
 ### 1. AMX Log
-**Location:** `<logsdir>/L[MMDD].log` (e.g., `addons/ktpamx/logs/` or `addons/amxmodx/logs/`)
+**Location:** `<logsdir>/L[MMDD].log` (i.e. `addons/ktpamx/logs/`)
 
 Standard Half-Life log format with timestamps:
 ```
@@ -465,7 +548,7 @@ Rich notifications with:
 - ⏱️ Real-time event updates
 - 📊 Player/team information
 
-**See `DISCORD_GUIDE.md` for setup instructions.**
+**See [`documents/discord_guide.md`](documents/discord_guide.md) for setup instructions.**
 
 ---
 
@@ -955,10 +1038,8 @@ static bool:warned_10sec = false;
 - 📈 **Optimized HUD** - Only updates when needed
 
 **Documentation:**
-- 📚 `DISCORD_GUIDE.md` - Complete KTP stack guide (ReHLDS + ReAPI + plugins)
-- 📚 `REAPI_PAUSE_IMPLEMENTATION.md` - ReAPI pause technical guide
-- 📚 `SERVER_TROUBLESHOOTING.md` - Debugging guide
-- 📚 `PAUSE_SYSTEM_REDESIGN.md` - v0.4.0 pause system overview
+- 📚 `deployment/REAPI_PAUSE_IMPLEMENTATION.md` - ReAPI pause technical guide
+- 📚 `deployment/SERVER_TROUBLESHOOTING.md` - Debugging guide
 
 ### v0.3.3 - Previous Stable
 
@@ -1019,11 +1100,8 @@ MIT License - See [LICENSE](LICENSE) file for details
 
 ## Documentation
 
-- **[REAPI_PAUSE_IMPLEMENTATION.md](REAPI_PAUSE_IMPLEMENTATION.md)** - Complete guide to ReAPI pause system
-- **[DISCORD_GUIDE.md](DISCORD_GUIDE.md)** - Discord relay setup and configuration
-- **[SERVER_TROUBLESHOOTING.md](SERVER_TROUBLESHOOTING.md)** - Server setup and debugging
-- **[PAUSE_SYSTEM_REDESIGN.md](PAUSE_SYSTEM_REDESIGN.md)** - v0.4.0 pause system architecture
-- **[FEATURE_SUMMARY.md](FEATURE_SUMMARY.md)** - Complete feature list
+- **[deployment/REAPI_PAUSE_IMPLEMENTATION.md](deployment/REAPI_PAUSE_IMPLEMENTATION.md)** - Complete guide to ReAPI pause system
+- **[deployment/SERVER_TROUBLESHOOTING.md](deployment/SERVER_TROUBLESHOOTING.md)** - Server setup and debugging
 - **[CHANGELOG.md](CHANGELOG.md)** - Full version history
 
 ---
@@ -1062,7 +1140,7 @@ For support and questions, please open an issue on GitHub.
 
 ## Status
 
-- **Current Version**: v0.10.145
+- **Current Version**: v0.10.147
 - **Status**: Production (fleet-wide on KTP-ReHLDS extension mode; score persistence in live verification)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + KTPAMXX 2.7.x (extension mode, no Metamod)
 - **Last Updated**: July 2026
@@ -1074,7 +1152,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.145                    ║
+║             KTP MATCH HANDLER v0.10.147                    ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1082,6 +1160,8 @@ For support and questions, please open an issue on GitHub.
 ║  .draft         Start draft match (no password)            ║
 ║  .12man         Start 12-man (Standard/1.3 Community)      ║
 ║  .scrim         Start scrim match (no password)            ║
+║  .ktpOT <pw>    Start KTP overtime round (password req)    ║
+║  .draftOT       Start draft overtime round (no password)   ║
 ║  .confirm       Confirm team ready                         ║
 ║  .ready         Mark yourself ready                        ║
 ║  .status        View match status                          ║
@@ -1103,9 +1183,11 @@ For support and questions, please open an issue on GitHub.
 ║  DRAFT          .draft (always allowed)                    ║
 ║  12MAN          .12man (Standard or 1.3 Community)         ║
 ║  SCRIM          .scrim (always allowed)                    ║
+║  KTP OT         .ktpOT (password required)                 ║
+║  DRAFT OT       .draftOT (always allowed)                  ║
 ╚════════════════════════════════════════════════════════════╝
 ```
 
 ---
 
-**KTP Match Handler v0.10.145** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.147** - Making competitive Day of Defeat matches better, one pause at a time.

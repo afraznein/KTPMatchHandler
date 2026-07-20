@@ -22,9 +22,20 @@
 discord_relay_url=YOUR_RELAY_URL_HERE
 
 ; Discord Channel ID
-; The target Discord channel to send messages to
+; The competitive channel — .ktp and .ktpOT matches post here.
 ; Example: 1234567890123456789
 discord_channel_id=YOUR_CHANNEL_ID_HERE
+
+; Per-match-type channels.
+; 12man, scrim and draft have NO fallback: leave one unset and that match type
+; posts nowhere, silently. Set every type you actually run.
+discord_channel_id_12man=YOUR_CHANNEL_ID_HERE
+discord_channel_id_scrim=YOUR_CHANNEL_ID_HERE
+discord_channel_id_draft=YOUR_CHANNEL_ID_HERE
+
+; Channel for non-match events (.forcereset, cancellations).
+; This one DOES fall back to discord_channel_id when unset.
+discord_channel_id_default=YOUR_CHANNEL_ID_HERE
 
 ; Authentication Secret
 ; The secret key for X-Relay-Auth header authentication

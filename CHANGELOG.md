@@ -6,6 +6,132 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+Repo hygiene only — no plugin code change, so no version bump and no new build.
+
+### Removed
+
+#### Six ad-hoc ops scripts that hardcoded fleet SSH credentials
+
+`check_atl27019_players.py`, `deploy_atl5_baseline.py`, `deploy_spike_atl27019.py`,
+`restart_atl5_for_baseline.py`, `rollback_spike_atl27019.py` and
+`tail_atl5_baseline.py` each embedded a `dodserver` username, a real fleet IP and a
+plaintext password, passed straight to `ssh.connect()` — in a public repo. The
+password was the pre-2026-05-31 value; it no longer authenticates on the host the
+scripts targeted, so this is cleanup rather than an active exposure, but the commits
+remain public and the username/IP pairing is still reconnaissance. The scripts were
+one-off May 2026 spike-investigation tooling and that work has since shipped.
+
+#### Requirements section contradicted itself on ReAPI
+
+ReAPI was listed under **Required**, annotated *"optional but recommended"*, and
+listed again under **Optional** as "plugin works without it" — three claims about
+one dependency in seven lines. It is hard-required: `rh_set_server_pause()` is
+called unguarded at two sites with zero `_reapi_included` fallbacks, so the
+plugin will not compile without ReAPI and a binary built with it will not load if
+the module is absent.
+
+Also corrected in the same block: the platform line said "AMX Mod X 1.9+ / KTP
+AMX 2.0+", but `ktp_discord` and `ktp_version_reporter` are unconditional
+includes and stock AMXX has neither — KTPAMXX only. KTPAmxxCurl added as required
+(`ktp_discord.inc:110` includes `<curl>` unconditionally); what's actually
+optional is Discord *configuration*, not the module.
+
+Install step 2 offered `addons/amxmodx/plugins/` as an alternative tree. Removed
+for the same reason.
+
+#### Undocumented admin commands added to the command reference
+
+A full diff of `register_clcmd` registrations against the README found three
+commands with no entry:
+
+- `.restarthalf` / `.h2restart` (+ `ktp_restarthalf`) — restarts the 2nd half to
+  0-0. Destructive, ADMIN_RCON, confirm-twice-in-10s.
+- `.forcereset` (+ `ktp_forcereset`) — clears all match state. Same gating. It
+  existed in the README only as a historical changelog bullet, so an admin
+  scanning the command reference for a recovery tool found nothing.
+- `.override_ready_limits` — toggles the ready-count go-live requirement. Gated
+  by a **SteamID allowlist** (`OVERRIDE_ADMIN_SIDS`), not an admin flag, which is
+  worth stating explicitly: an ADMIN_RCON admin who isn't listed cannot use it.
+
+Permission enforcement was verified correct in all three; these were purely
+documentation gaps.
+
+#### Stale tracked plugin binary
+
+`KTPMatchHandler.amxx` sat in the repo root at **0.9.2**, last touched 2025-12-21,
+while source is 0.10.147 — seven months and dozens of versions behind. Build output
+belongs in the gitignored `compiled/` dir; this was a leftover from before that
+convention. Removed, with a `/*.amxx` rule so it cannot come back.
+
+#### Discord per-match-type channels were undocumented — and the fallback is not what it looks like
+
+`discord.ini` is parsed for four channel keys the config reference never
+mentioned: `discord_channel_id_default`, `_12man`, `_scrim`, `_draft`. Both the
+README and `documents/discord.ini.example` listed only the three original keys.
+
+The routing is asymmetric and that asymmetry is the operator-relevant part.
+`discord_channel_id` is the *competitive* channel — `.ktp`/`.ktpOT` post there.
+12man, scrim and draft have **no fallback**: leave one unset and that match type
+posts nowhere, silently, with no error. Only `discord_channel_id_default`
+(non-match context — `.forcereset`, cancellations) falls back to
+`discord_channel_id`. Documented in both places.
+
+#### `ktp_pause` documented as "same as `.pause`" while `.pause` is disabled
+
+The equivalence was true until v0.10.35 disabled tactical pauses, then silently
+inverted. `.pause`/`.tac` route through `handle_pause_request`, which hard-denies
+and logs `TACTICAL_PAUSE_DENIED`; `ktp_pause` routes to `cmd_rcon_pause`, which
+calls `trigger_pause_countdown()` directly and never sees that gate. So
+`ktp_pause` is not the console equivalent of a dead command — it is the only
+working tactical pause on the server, and the README said the opposite.
+
+Related, in the Pause Flow diagram: the flow opened with "Player types .pause",
+naming the disabled command as the entry point. Now `.tech`.
+
+#### Commands and cvars missing from the reference sections
+
+- `.ktpOT` / `.draftOT` were absent from Match Control and from the Quick
+  Reference Card despite being first-class match types. Added to both, with a
+  note that the lowercase `.ktpot`/`.draftot` forms are registered on purpose
+  (a 2026-04-26 CHI2 incident had the lowercase form silently dropped).
+- `.otbreak`, `.skip` (new Overtime block) and `.whoneedsready` existed only in
+  historical changelog prose.
+- `ktp_match_competitive` (default 0) and `ktp_ac_baseline_mode` (default 0)
+  were missing from a section titled "All CVARs". The first is a cross-plugin
+  contract KTPCvarChecker reads to pick its enforcement tier, not an operator
+  knob — worth saying so. `ktp_test_skip_ready_count` stays out: it is inside
+  `#if defined KTP_TEST_MODE` and does not exist in production builds.
+- Every cvar the README already listed was verified against its
+  `register_cvar` default. No documented-but-nonexistent cvar, and no wrong
+  default.
+
+#### Smaller corrections
+
+- Three README version sites (Current Version, Quick Reference banner, footer)
+  still read 0.10.145 while the header, source and CHANGELOG agreed on 0.10.147
+  — the 0.10.146 and 0.10.147 bumps each touched only the header. All four now
+  agree, and the repo `CLAUDE.md` checklist now names all four so the next bump
+  doesn't repeat it.
+- Install step 1 was a bare `amxxpc` invocation; `compile.sh` is the supported
+  path and the one that generates the build-info include `amx_ktp_versions`
+  reports from.
+- `.ext` was stated flatly as a feature 200 lines before the README disclosed
+  that `ktp_pause_max_extensions` defaults to 0 and hides it. The default is now
+  noted at the feature.
+- `## [0.10.133]` was dated 2026-05-23, out of order between two 05-22 entries.
+  Git dates the release 2026-05-22; corrected.
+
+### Added
+
+- `.gitignore` rule for `scripts/*.py`. Ad-hoc paramiko tooling has reached this repo
+  with live credentials twice; ignoring the whole class is the control that catches it
+  by default. `tests/` is unaffected, and a vetted script can still be added with
+  `git add -f`.
+
+---
+
 ## [0.10.147] - 2026-07-19
 
 The pre-start `.confirm` HUD (and `.prestatus`) now shows a confirmer's current name
@@ -456,7 +582,7 @@ Use case: 0.5.0 SuspiciousRecoilControl baseline collection — the analyzer nee
 
 ---
 
-## [0.10.133] - 2026-05-23
+## [0.10.133] - 2026-05-22
 
 ### Added
 

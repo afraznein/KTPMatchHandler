@@ -85,7 +85,7 @@ new g_cvarAutoReqSec;
 new g_cvarCountdown;          // unpause countdown seconds (ktp_pause_countdown)
 new g_cvarPrePauseSec;        // pre-pause chat countdown for live matches (ktp_prepause_seconds)
 new g_cvarPreMatchPauseSec;   // pre-pause countdown for pre-match pauses (ktp_prematch_pause_seconds)
-new g_cvarTechBudgetSec;      // technical pause budget per team per half (ktp_tech_budget_seconds)
+new g_cvarTechBudgetSec;      // technical pause budget per team per match (ktp_tech_budget_seconds)
 new g_cvarDiscordIniPath;     // path to discord.ini (ktp_discord_ini)
 // NOTE: pausable cvar variables removed - ReAPI pause bypasses pausable entirely
 new g_cvarPauseDuration;      // pause duration seconds (ktp_pause_duration)
@@ -241,7 +241,7 @@ new g_savedScoreCount = 0;
 new g_restartHalfPending = 0;                   // Player ID who initiated restart half (0 = none)
 new Float:g_restartHalfTime = 0.0;              // Time when restart half was initiated (expires after 10s)
 
-new g_techBudget[3] = {0, 0, 0}; // [1]=Allies, [2]=Axis; set at half start to g_techBudgetSecs
+new g_techBudget[3] = {0, 0, 0}; // [1]=Allies, [2]=Axis; set once at match start, carried across the half swap
 
 // ---------- Half Tracking ----------
 new g_currentHalf = 0;          // 0 = no match, 1 = first half, 2 = second half
@@ -339,7 +339,7 @@ new g_otBreakTimeLeft = 0;          // Break countdown seconds remaining
 new g_countdownSeconds = 5;    // unpause countdown
 new g_prePauseSeconds = 5;     // pre-pause countdown for live pauses
 new g_preMatchPauseSeconds = 5;  // OPTIMIZED: Cached from g_cvarPreMatchPauseSec (Phase 5 optimization)
-new g_techBudgetSecs = 300;    // 5 minutes tech budget per team per half
+new g_techBudgetSecs = 300;    // 5 minutes tech budget per team, per match (spans both halves)
 new bool:g_readyOverride = false;  // Debug override: when true, only 1 player needed per team
 new g_readyOverrideArmerSid[44];   // SteamID that armed the override (for armer-disconnect disarm)
 new g_countdownLeft = 0;

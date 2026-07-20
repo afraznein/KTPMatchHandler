@@ -46,7 +46,10 @@ See `N:\Nein_\KTP Git Projects\KTPAmxxCurl\*.py` for working deployment scripts.
 ## Key Files to Update on Version Bump
 1. `KTPMatchHandler.sma` - `#define PLUGIN_VERSION`
 2. `CHANGELOG.md` - Add new version section
-3. `README.md` - Update version in header
+3. `README.md` - **four** version sites, not one: the header, "Current Version",
+   the Quick Reference Card banner, and the footer line. The 0.10.146 and
+   0.10.147 bumps each touched only the header and left the other three at
+   0.10.145.
 4. `N:\Nein_\KTP Git Projects\TODO.md` - Update completed/pending items
 
 ## Dependencies
@@ -67,6 +70,8 @@ See `N:\Nein_\KTP Git Projects\KTPAmxxCurl\*.py` for working deployment scripts.
 - `.ktpOT <password>` - Start KTP overtime round
 - `.draftOT` - Start draft overtime round (no password)
 - `.forcereset` - Admin command to recover abandoned servers (ADMIN_RCON, requires confirmation)
+- `.restarthalf` / `.h2restart` - Restart 2nd half to 0-0, keeping 1st half scores (ADMIN_RCON, requires confirmation)
+- `.override_ready_limits` - Toggle the ready-count go-live requirement. Gated by a SteamID allowlist (`OVERRIDE_ADMIN_SIDS`), NOT an admin flag
 - `.pause` / `.tac` - **DISABLED** - Only `.tech` allowed
 - `.tech` - Technical pause (uses team budget)
 

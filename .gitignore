@@ -43,3 +43,11 @@ __pycache__/
 # Keep the analysis text (.txt, .md) committed for forensics.
 research/*.so
 research/*.so.*
+
+# Ad-hoc paramiko/ops scripts: these have twice carried live fleet credentials
+# into this PUBLIC repo. Keep one-off server tooling local. Tests are unaffected.
+# Deliberate exception: git add -f scripts/<name>.py after a credential check.
+scripts/*.py
+
+# Compiled plugins belong in the gitignored compiled/ dir, never the repo root.
+/*.amxx
