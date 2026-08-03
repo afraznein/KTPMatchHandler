@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.147** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.148** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -191,6 +191,20 @@ Map config auto-executes
 
 > **Note:** Tactical pauses (`.pause` / `.tac`) are disabled. Only `.tech` is allowed.
 
+`.tech` works during a live match **and** during the non-live match windows —
+pre-start confirm, ready-up pending, and the post-map-change halftime/OT gap
+(v0.10.148). It is refused when no match context exists at all, and during the
+live half-end intermission (changelevel in flight). Non-live tech time is
+never charged to the budget. A non-live pause is ended by the pause-owning
+team with `.resume` (RCON admins can always resume; everyone readying up also
+unpauses at go-live).
+
+**LAN mode (`ktp_lan_mode 1`, default 0):** tech pauses never expire (run until
+resolved), the team budget neither gates nor gets charged, and the pause HUD
+shows `Remaining: NO LIMIT (LAN)` instead of a countdown. The cvar is read live
+at every decision point, so it can be flipped over rcon mid-match — even
+mid-pause. With it at 0, behavior is exactly the pre-0.10.148 behavior.
+
 **During Pause (shows real-time HUD):**
 ```
   == GAME PAUSED ==
@@ -297,7 +311,19 @@ ktp_forcereset          Console equivalent
 .restarthalf            Restart the 2nd half to 0-0, preserving 1st half scores
 .h2restart              Alias
 ktp_restarthalf         Console equivalent
+
+.setstate <half> <allies> <axis> <h1team1> <h1team2>
+                        Set match state directly (chat-only, no console form)
 ```
+
+`.setstate` overwrites the current half, both scoreboard totals, and the saved
+1st-half split, then persists everything to localinfo so it survives a map
+change. `allies`/`axis` are the cumulative totals as shown on the scoreboard
+NOW; `h1team1`/`h1team2` are 1st-half scores **by team identity** (team 1
+started as Allies, team 2 as Axis — sides swap in the 2nd half). The command
+echoes the derived 2nd-half split and refuses inconsistent numbers (negative
+derived H2). Requires a live non-OT match; the confirmation retype must match
+the first request exactly.
 
 #### Ready-Limit Override
 
@@ -485,6 +511,9 @@ ktp_unpause_reminder_secs "15"        // Reminder interval for unpause confirmat
 // ===== Match System =====
 // (ready count is fixed per match type: 6 for .ktp/.ktpOT, 5 for scrim/12man/draft — the 12man 5/team is deliberate)
 ktp_tech_budget_seconds "300"         // Technical pause budget per team (5 min)
+ktp_lan_mode "0"                      // 1 = LAN event mode: tech pauses never expire
+                                      // and don't charge the budget. Read live —
+                                      // flip over rcon any time, no restart needed
 ktp_unready_reminder_secs "30"        // Reminder interval for unready players
 ktp_match_competitive "0"             // 1 = competitive (.ktp/.ktpOT), 0 = casual.
                                       // Set by the plugin, read by KTPCvarChecker
@@ -1140,10 +1169,10 @@ For support and questions, please open an issue on GitHub.
 
 ## Status
 
-- **Current Version**: v0.10.147
+- **Current Version**: v0.10.148
 - **Status**: Production (fleet-wide on KTP-ReHLDS extension mode; score persistence in live verification)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + KTPAMXX 2.7.x (extension mode, no Metamod)
-- **Last Updated**: July 2026
+- **Last Updated**: August 2026
 - **Platforms**: Day of Defeat 1.3
 
 ---
@@ -1152,7 +1181,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.147                    ║
+║             KTP MATCH HANDLER v0.10.148                    ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1190,4 +1219,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.147** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.148** - Making competitive Day of Defeat matches better, one pause at a time.

@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.147"
+#define PLUGIN_VERSION "0.10.148"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -93,6 +93,8 @@ new g_cvarPauseExtension;     // pause extension seconds (ktp_pause_extension)
 new g_cvarMaxExtensions;      // max pause extensions (ktp_pause_max_extensions)
 new g_cvarUnreadyReminderSec; // unready reminder interval (ktp_unready_reminder_secs)
 new g_cvarUnpauseReminderSec; // unpause reminder interval (ktp_unpause_reminder_secs)
+new g_cvarLanMode;            // LAN event mode (ktp_lan_mode): cvar not ktp.ini so it can be
+                              // flipped live over rcon without a restart; read live per call
 
 #if defined KTP_TEST_MODE
 new g_cvarTestSkipReadyCount; // test-mode: when 1, get_required_ready_count() returns 1 so
@@ -240,6 +242,10 @@ new g_savedScoreCount = 0;
 // ---------- Restart Half Confirmation ----------
 new g_restartHalfPending = 0;                   // Player ID who initiated restart half (0 = none)
 new Float:g_restartHalfTime = 0.0;              // Time when restart half was initiated (expires after 10s)
+new g_setStatePending = 0;                      // Player ID with a pending .setstate confirmation (0 = none)
+new g_setStatePendingSid[44];                   // Authid captured at request time — a slot alone is not an identity
+new Float:g_setStateTime = 0.0;                 // Time when .setstate was requested (expires after 10s)
+new g_setStateArgs[5];                          // Pending values: half, allies, axis, h1team1, h1team2
 
 new g_techBudget[3] = {0, 0, 0}; // [1]=Allies, [2]=Axis; set once at match start, carried across the half swap
 
@@ -506,6 +512,7 @@ new g_taskRoundLiveTimeoutId = 55626;      // Task ID for roundlive timeout fall
 new g_taskContinuationAnnounceId = 55629;  // Task ID for deferred 2nd-half/OT announce (clients reconnect window)
 new g_taskContinuationReminderId = 55630;  // Task ID base for early ".ready" chat reminders (uses +1 for 2nd reminder)
 new g_taskWeaponFlushId = 55632;           // Task ID for repeating AC weapon-timeline flush (55631 reserved: reminder base +1)
+new g_taskSetStateDiscordId = 55633;       // Task ID for deferred setstate Discord embed (0.2s)
 
 // Delayed match start log data (for HLStatsX UDP timing issue)
 new g_delayedMatchId[64];                   // Match ID for delayed log
@@ -513,6 +520,7 @@ new g_delayedMap[64];                       // Map name for delayed log
 new g_delayedHalf[16];                      // Half text for delayed log
 new g_deferredHalfText[16];                 // Half text for deferred match start task
 new g_restartHalfByName[64];                // Admin name for deferred restarthalf Discord embed
+new g_setStateByName[64];                   // Admin name for deferred setstate Discord embed
 new g_pendingPhaseInitiator[64];            // Initiator name for deferred enter_pending_phase
 new g_generalWatchdogMap[64];               // Map for general changelevel watchdog
 new bool:g_generalWatchdogArmed = false;    // Whether watchdog has been armed this map cycle
@@ -1923,6 +1931,42 @@ stock get_total_pause_duration() {
     return g_pauseDurationSec + (g_pauseExtensions * g_pauseExtensionSec);
 }
 
+// LAN event mode (ktp_lan_mode). Read live at every decision point — not cached —
+// so an rcon flip changes behavior immediately, including mid-pause.
+stock bool:is_lan_mode() {
+    return bool:(g_cvarLanMode && get_pcvar_num(g_cvarLanMode) != 0);
+}
+
+// Clear the per-pause session state and timers. Central exit for the non-live
+// pause paths (go-live, non-live .resume, prestart cancel); countdown_tick /
+// OnPausedHUDUpdate / forcereset keep their historical inline copies.
+stock clear_pause_session_state() {
+    g_pauseOwnerTeam = 0;
+    g_unpauseRequested = false;
+    g_unpauseConfirmedOther = false;
+    g_isTechPause = false;
+    g_techPauseStartTime = 0;
+    g_techPauseFrozenTime = 0;
+    g_disconnectedPlayerName[0] = EOS;
+    g_disconnectedPlayerTeam = 0;
+    g_disconnectedPlayerSteamId[0] = EOS;
+    g_disconnectCountdown = 0;
+    remove_task(g_taskDisconnectCountdownId);
+    g_autoConfirmLeft = 0;
+    g_countdownActive = false;
+    g_countdownLeft = 0;
+    // A pre-pause countdown still in flight would fire execute_pause AFTER this
+    // clear — and with g_isTechPause freshly false it would grant a full
+    // tactical-duration pause on whatever state comes next.
+    g_prePauseCountdown = false;
+    g_prePauseLeft = 0;
+    remove_task(g_taskPrePauseId);
+    remove_task(g_taskCountdownId);
+    remove_task(g_taskAutoConfirmId);
+    remove_task(g_taskAutoUnpauseReqId);
+    remove_task(g_taskAutoReqCountdownId);
+}
+
 // ---------- Localinfo State Helpers (consolidated format) ----------
 
 // Format consolidated state: "pauseA,pauseX,techA,techX"
@@ -2271,8 +2315,14 @@ stock show_pause_hud_message(const pauseType[]) {
 
     new elapsedMin = elapsed / 60;
     new elapsedSec = elapsed % 60;
-    new remainMin = remaining / 60;
-    new remainSec = remaining % 60;
+
+    // LAN mode: an expiring MM:SS would be a lie (expiry is gated off)
+    new remainStr[20];
+    if (g_isTechPause && is_lan_mode()) {
+        copy(remainStr, charsmax(remainStr), "NO LIMIT (LAN)");
+    } else {
+        formatex(remainStr, charsmax(remainStr), "%d:%02d", remaining / 60, remaining % 60);
+    }
 
     // Build status line based on current state
     new statusLine[128];
@@ -2319,11 +2369,11 @@ stock show_pause_hud_message(const pauseType[]) {
     // became the only pause type (time budget, not counts) — the stat was
     // rendering meaningless numbers.
     ShowSyncHudMsg(0, g_hudSync,
-        "== GAME PAUSED ==^nType: %s^nBy: %s^n^nElapsed: %d:%02d%s | Remaining: %d:%02d^nExtensions: %d/%d^n^n%s",
+        "== GAME PAUSED ==^nType: %s^nBy: %s^n^nElapsed: %d:%02d%s | Remaining: %s^nExtensions: %d/%d^n^n%s",
         pauseType,
         pausedByName[0] ? pausedByName : "Server",
         elapsedMin, elapsedSec, frozenIndicator,
-        remainMin, remainSec,
+        remainStr,
         g_pauseExtensions, cachedMaxExt,
         statusLine);
 }
@@ -3329,6 +3379,10 @@ public disconnect_countdown_tick() {
 
         // Set pause duration to remaining tech budget (same as manual .tech)
         g_pauseDurationSec = g_techBudget[g_disconnectedPlayerTeam];
+        if (is_lan_mode() && g_pauseDurationSec <= 0) {
+            // Same rationale as cmd_tech_pause: keep the broken-gate tripwire quiet
+            g_pauseDurationSec = 300;
+        }
 
         // Clear pre-pause initiator ID so execute_pause doesn't use a stale player ID
         // (disconnect auto-pause bypasses trigger_pause_countdown which normally sets this)
@@ -3394,6 +3448,12 @@ stock check_pause_timer_realtime() {
     // If tech pause budget is frozen (owner did /resume), skip timer checks
     // The auto-confirmunpause timer handles resuming in this case
     if (g_isTechPause && g_techPauseFrozenTime > 0) {
+        return;
+    }
+
+    // LAN mode: tech pauses never expire — no warnings, no auto-unpause.
+    // Read live, so flipping ktp_lan_mode off mid-pause re-arms expiry.
+    if (g_isTechPause && is_lan_mode()) {
         return;
     }
 
@@ -3490,44 +3550,60 @@ public OnPausedHUDUpdate() {
                                 currentTime, g_techPauseStartTime);
                     }
 
-                    // Deduct from budget
-                    new budgetBefore = g_techBudget[teamId];
-                    g_techBudget[teamId] -= techPauseElapsed;
-                    if (g_techBudget[teamId] < 0) g_techBudget[teamId] = 0;
-
                     new teamName[16];
                     team_name_from_id(teamId, teamName, charsmax(teamName));
 
-                    log_ktp("event=TECH_BUDGET_DEDUCT team=%d elapsed=%d budget_before=%d budget_after=%d",
-                            teamId, techPauseElapsed, budgetBefore, g_techBudget[teamId]);
+                    if (is_lan_mode()) {
+                        // LAN mode: pause time is not charged to the team budget
+                        log_ktp("event=TECH_BUDGET_DEDUCT_SKIPPED reason=lan_mode team=%d elapsed=%d budget=%d",
+                                teamId, techPauseElapsed, g_techBudget[teamId]);
+                        new buf1[16];
+                        fmt_seconds(techPauseElapsed, buf1, charsmax(buf1));
+                        announce_all("Tech pause lasted %s. LAN mode - no budget charged.", buf1);
+                    } else if (!g_matchLive) {
+                        // Non-live tech pauses are never charged: the other
+                        // non-live exits (go-live, non-live .resume) don't
+                        // deduct, and charging only the expiry exit would be
+                        // incoherent.
+                        log_ktp("event=TECH_BUDGET_DEDUCT_SKIPPED reason=non_live team=%d elapsed=%d budget=%d",
+                                teamId, techPauseElapsed, g_techBudget[teamId]);
+                    } else {
+                        // Deduct from budget
+                        new budgetBefore = g_techBudget[teamId];
+                        g_techBudget[teamId] -= techPauseElapsed;
+                        if (g_techBudget[teamId] < 0) g_techBudget[teamId] = 0;
 
-                    // Sync OT tech budget so it persists across OT rounds
-                    if (g_inOvertime) {
-                        g_otTechBudget[teamId] = g_techBudget[teamId];
-                    }
+                        log_ktp("event=TECH_BUDGET_DEDUCT team=%d elapsed=%d budget_before=%d budget_after=%d",
+                                teamId, techPauseElapsed, budgetBefore, g_techBudget[teamId]);
 
-                    // Persist tech budget to localinfo unconditionally (v0.10.118).
-                    // Previously gated on g_currentHalf == 1, which left 2nd-half + OT
-                    // tech-budget deductions in-memory only. A server crash between
-                    // .resume and the actual unpause-end returned spent tech budget
-                    // to the team — competitive integrity issue in OT where budgets
-                    // are tight. save_state_to_localinfo is cheap (single set_localinfo).
-                    save_state_to_localinfo();
+                        // Sync OT tech budget so it persists across OT rounds
+                        if (g_inOvertime) {
+                            g_otTechBudget[teamId] = g_techBudget[teamId];
+                        }
 
-                    // Announce tech pause duration and remaining budget
-                    new buf1[16], buf2[16];
-                    fmt_seconds(techPauseElapsed, buf1, charsmax(buf1));
-                    fmt_seconds(g_techBudget[teamId], buf2, charsmax(buf2));
-                    announce_all("Tech pause lasted %s. %s budget remaining: %s",
-                        buf1, teamName, buf2);
+                        // Persist tech budget to localinfo unconditionally (v0.10.118).
+                        // Previously gated on g_currentHalf == 1, which left 2nd-half + OT
+                        // tech-budget deductions in-memory only. A server crash between
+                        // .resume and the actual unpause-end returned spent tech budget
+                        // to the team — competitive integrity issue in OT where budgets
+                        // are tight. save_state_to_localinfo is cheap (single set_localinfo).
+                        save_state_to_localinfo();
 
-                    // Warn if budget is low or exhausted
-                    if (g_techBudget[teamId] == 0) {
-                        announce_all("WARNING: %s tech budget EXHAUSTED!", teamName);
-                    } else if (g_techBudget[teamId] <= 60) {
-                        new buf[16];
-                        fmt_seconds(g_techBudget[teamId], buf, charsmax(buf));
-                        announce_all("WARNING: %s has only %s of tech budget remaining!", teamName, buf);
+                        // Announce tech pause duration and remaining budget
+                        new buf1[16], buf2[16];
+                        fmt_seconds(techPauseElapsed, buf1, charsmax(buf1));
+                        fmt_seconds(g_techBudget[teamId], buf2, charsmax(buf2));
+                        announce_all("Tech pause lasted %s. %s budget remaining: %s",
+                            buf1, teamName, buf2);
+
+                        // Warn if budget is low or exhausted
+                        if (g_techBudget[teamId] == 0) {
+                            announce_all("WARNING: %s tech budget EXHAUSTED!", teamName);
+                        } else if (g_techBudget[teamId] <= 60) {
+                            new buf[16];
+                            fmt_seconds(g_techBudget[teamId], buf, charsmax(buf));
+                            announce_all("WARNING: %s has only %s of tech budget remaining!", teamName, buf);
+                        }
                     }
                 }
             }
@@ -3621,14 +3697,18 @@ public pending_hud_tick() {
         // Show pre-pause countdown
         formatex(pauseInfo, charsmax(pauseInfo), "^nPausing in %d seconds...", g_prePauseLeft);
     } else if (g_isPaused && g_pauseStartTime > 0) {
-        // Show actual pause time remaining
-        new elapsed = get_systime() - g_pauseStartTime;
-        new duration = get_total_pause_duration();
-        new remaining = duration - elapsed;
-        if (remaining < 0) remaining = 0;
-        new buf[16];
-        fmt_seconds(remaining, buf, charsmax(buf));
-        formatex(pauseInfo, charsmax(pauseInfo), "^nPause Time: %s remaining", buf);
+        if (g_isTechPause && is_lan_mode()) {
+            formatex(pauseInfo, charsmax(pauseInfo), "^nPause Time: no limit (LAN mode)");
+        } else {
+            // Show actual pause time remaining
+            new elapsed = get_systime() - g_pauseStartTime;
+            new duration = get_total_pause_duration();
+            new remaining = duration - elapsed;
+            if (remaining < 0) remaining = 0;
+            new buf[16];
+            fmt_seconds(remaining, buf, charsmax(buf));
+            formatex(pauseInfo, charsmax(pauseInfo), "^nPause Time: %s remaining", buf);
+        }
     }
 
     // 2nd Half or OT pending: Show prominent score context HUD
@@ -3663,13 +3743,17 @@ stock show_pending_hud_during_pause() {
     // Calculate pause time remaining using real-time clock
     new pauseInfo[64] = "";
     if (g_pauseStartTime > 0) {
-        new elapsed = get_systime() - g_pauseStartTime;
-        new duration = get_total_pause_duration();
-        new remaining = duration - elapsed;
-        if (remaining < 0) remaining = 0;
-        new buf[16];
-        fmt_seconds(remaining, buf, charsmax(buf));
-        formatex(pauseInfo, charsmax(pauseInfo), "^nPause Time: %s remaining", buf);
+        if (g_isTechPause && is_lan_mode()) {
+            formatex(pauseInfo, charsmax(pauseInfo), "^nPause Time: no limit (LAN mode)");
+        } else {
+            new elapsed = get_systime() - g_pauseStartTime;
+            new duration = get_total_pause_duration();
+            new remaining = duration - elapsed;
+            if (remaining < 0) remaining = 0;
+            new buf[16];
+            fmt_seconds(remaining, buf, charsmax(buf));
+            formatex(pauseInfo, charsmax(pauseInfo), "^nPause Time: %s remaining", buf);
+        }
     }
 
     // 2nd Half or OT pending: Show prominent score context HUD
@@ -3876,6 +3960,15 @@ public plugin_init() {
     g_changeLevelHandled = false;
     g_changeLevelHandledTime = 0.0;
     g_pfnChangeLevelProcessed = false;  // per-intermission debounce; extension-mode globals persist, so clear it per map here
+    g_inIntermission = false;  // "changelevel in flight on THIS map" — inherently per-map; H1-end sets it
+                               // and no pre-0.10.148 path cleared it before the next go-live
+
+    // .setstate confirm window — extension-mode globals persist across maps,
+    // and gametime resets per map (a stale pending + reset clock could satisfy
+    // the 10s window check on the new map)
+    g_setStatePending = 0;
+    g_setStatePendingSid[0] = EOS;
+    g_setStateTime = 0.0;
 
     // Reset DODX stats pause — g_bStatsPaused (C++ global) survives map change,
     // but Pawn g_roundLive resets to true. Unconditional unpause ensures clean state.
@@ -3923,6 +4016,9 @@ public plugin_init() {
     g_cvarMaxExtensions  = register_cvar("ktp_pause_max_extensions", "0");   // 0 = extensions disabled
     g_cvarUnreadyReminderSec = register_cvar("ktp_unready_reminder_secs", "30");  // unready reminder interval
     g_cvarUnpauseReminderSec = register_cvar("ktp_unpause_reminder_secs", "15");  // unpause reminder interval
+    // LAN event mode: tech pauses don't expire and don't charge the team budget.
+    // Deliberately a cvar (not ktp.ini) so it can be flipped over rcon mid-event.
+    g_cvarLanMode        = register_cvar("ktp_lan_mode", "0");
 
     // Match type indicator for other plugins (KTPCvarChecker uses this)
     // 1 = competitive (.ktp, .ktpOT), 0 = casual (12man, scrim, draft)
@@ -4803,6 +4899,11 @@ stock end_match_cleanup() {
     g_matchEnded = true;  // Disable auto-DC technicals until new match starts
     clear_match_id();
 
+    // .setstate confirm latch + its deferred embed must not outlive the match
+    g_setStatePending = 0;
+    g_setStatePendingSid[0] = EOS;
+    remove_task(g_taskSetStateDiscordId);
+
     // Clear persistent roster (match is over)
     clear_match_roster();
 
@@ -5347,6 +5448,10 @@ stock on_client_left(id) {
         // Clear pending admin confirmations if the requesting admin disconnects
         if (id == g_forceResetPending) g_forceResetPending = 0;
         if (id == g_restartHalfPending) g_restartHalfPending = 0;
+        if (id == g_setStatePending) {
+            g_setStatePending = 0;
+            g_setStatePendingSid[0] = EOS;
+        }
 
         // Disarm the ready-limit override if the arming player leaves — closes
         // the arm-then-idle window (no match teardown would otherwise fire).
@@ -5373,8 +5478,8 @@ stock on_client_left(id) {
             new tid = get_user_team_id(id);
             // Only trigger for players on actual teams (not spectators)
             if (tid >= 1 && tid <= 2) {
-                // Check if team has tech budget
-                if (g_techBudget[tid] > 0) {
+                // Check if team has tech budget (LAN mode: budget never gates)
+                if (g_techBudget[tid] > 0 || is_lan_mode()) {
                     // If already counting down for another disconnect, just announce
                     if (g_disconnectCountdown > 0) {
                         new name[32], teamName[16], sid[44];
@@ -5665,8 +5770,31 @@ stock handle_resume_request(id, const name[], const sid[], const team[], teamId)
         return PLUGIN_HANDLED;
     }
 
-    // Server is paused. Only the owning team can request unpause.
+    // Non-live pause (pending / pre-start): unpause directly. There is no live
+    // match to protect with the two-team ceremony, and in LAN mode expiry is
+    // off — without this a pre-start pause would have no player-accessible
+    // exit (.go is also refused pre-start). Non-live tech time is never
+    // charged, so no deduction here.
     if (g_matchPending || g_preStartPending) {
+        if (g_isPaused) {
+            // Owner-locked (operator decision): only the pause-owning team may
+            // end it — otherwise either team could cut the other's tech fix
+            // short. No-owner pauses (admin ktp_pause) and RCON admins pass.
+            if (teamId == g_pauseOwnerTeam || g_pauseOwnerTeam == 0 || (get_user_flags(id) & ADMIN_RCON)) {
+                log_ktp("event=NONLIVE_RESUME by='%s' steamid=%s team=%d owner=%d prestart=%d pending=%d",
+                        name, safe_sid(sid), teamId, g_pauseOwnerTeam, g_preStartPending ? 1 : 0, g_matchPending ? 1 : 0);
+                announce_all("%s resumed the game.", name);
+                ktp_unpause_now("non_live_resume");
+                clear_pause_session_state();
+                return PLUGIN_HANDLED;
+            }
+            new ownerTeamName[32];
+            team_name_from_id(g_pauseOwnerTeam, ownerTeamName, charsmax(ownerTeamName));
+            client_print(id, print_chat, "[KTP] Only the pause-owning team (%s) may .resume this pause.", ownerTeamName);
+            log_ktp("event=NONLIVE_RESUME_DENIED by='%s' steamid=%s team=%d owner=%d",
+                    name, safe_sid(sid), teamId, g_pauseOwnerTeam);
+            return PLUGIN_HANDLED;
+        }
         client_print(id, print_chat, "[KTP] Match is pending. Use .rdy; server will resume automatically.");
         return PLUGIN_HANDLED;
     }
@@ -5689,10 +5817,15 @@ stock handle_resume_request(id, const name[], const sid[], const team[], teamId)
     copy(g_lastUnpauseBy, charsmax(g_lastUnpauseBy), name);
 
     // If this is a tech pause, freeze the budget now (stop deducting time)
+    // The frozen timestamp is still set in LAN mode — it stops the HUD clock and
+    // keeps the countdown-finish path from running its own deduction later.
     if (g_isTechPause && g_techPauseStartTime > 0 && g_techPauseFrozenTime == 0) {
         g_techPauseFrozenTime = get_systime();
         new elapsed = g_techPauseFrozenTime - g_techPauseStartTime;
-        if (elapsed > 0 && elapsed < 3600) {  // sanity check
+        if (is_lan_mode()) {
+            log_ktp("event=TECH_BUDGET_FREEZE_SKIPPED reason=lan_mode team=%d elapsed=%d budget=%d",
+                    g_pauseOwnerTeam, elapsed, g_techBudget[g_pauseOwnerTeam]);
+        } else if (elapsed > 0 && elapsed < 3600) {  // sanity check
             new budgetBefore = g_techBudget[g_pauseOwnerTeam];
             g_techBudget[g_pauseOwnerTeam] -= elapsed;
             if (g_techBudget[g_pauseOwnerTeam] < 0) g_techBudget[g_pauseOwnerTeam] = 0;
@@ -6059,8 +6192,22 @@ public cmd_cancel_disconnect_pause(id) {
 
 // ===== Technical Pause Command =====
 public cmd_tech_pause(id) {
-    if (!g_matchLive) {
-        client_print(id, print_chat, "[KTP] Technical pauses are only available during live matches.");
+    // Live match OR a non-live match window (pre-start confirm, ready-up pending —
+    // which includes the post-map-change halftime gap and OT pending, since the
+    // restore path re-enters g_matchPending). With no match context at all,
+    // keep refusing.
+    if (!g_matchLive && !g_matchPending && !g_preStartPending) {
+        client_print(id, print_chat, "[KTP] Technical pauses require an active match (live or waiting for players).");
+        return PLUGIN_HANDLED;
+    }
+
+    // Half-end intermission: g_matchLive is still true there (the H1-end path
+    // never clears it), so the gate above does NOT cover it. Pausing would
+    // fight the queued changelevel and the halftime watchdog — refuse. The
+    // g_matchLive term keeps this correct even if the intermission flag ever
+    // goes stale again: the window needing protection is the live one.
+    if (g_matchLive && is_in_intermission()) {
+        client_print(id, print_chat, "[KTP] Half/map change in progress - pause after the next map loads.");
         return PLUGIN_HANDLED;
     }
 
@@ -6084,8 +6231,21 @@ public cmd_tech_pause(id) {
         return PLUGIN_HANDLED;
     }
 
-    // Check if team has tech budget remaining
-    if (g_techBudget[tid] <= 0) {
+    // Pre-match window: budgets aren't seeded until H1 go-live, so a .tech during
+    // pre-start/1st-half pending would always hit the budget gate. Seed both teams
+    // here; H1 go-live re-seeds to full, so pre-match tech time is deliberately free.
+    // !g_secondHalfPending excludes the h2/OT continuation windows — OT pending
+    // also has g_currentHalf == 0, and re-seeding there would refill a genuinely
+    // consumed OT budget (a consumed budget must never be refilled).
+    if (!g_matchLive && !g_secondHalfPending && g_currentHalf == 0
+        && g_techBudget[1] == 0 && g_techBudget[2] == 0) {
+        g_techBudget[1] = g_techBudgetSecs;
+        g_techBudget[2] = g_techBudgetSecs;
+        log_ktp("event=TECH_BUDGET_PREMATCH_SEED secs=%d", g_techBudgetSecs);
+    }
+
+    // Check if team has tech budget remaining (LAN mode: budget never gates)
+    if (g_techBudget[tid] <= 0 && !is_lan_mode()) {
         client_print(id, print_chat, "[KTP] Your team has no technical pause budget remaining.");
         log_ktp("event=TECH_PAUSE_DENY_BUDGET team=%d budget=%d", tid, g_techBudget[tid]);
         return PLUGIN_HANDLED;
@@ -6114,6 +6274,11 @@ public cmd_tech_pause(id) {
 
     // Set pause duration to remaining tech budget (not fixed 5 minutes)
     g_pauseDurationSec = g_techBudget[tid];
+    if (is_lan_mode() && g_pauseDurationSec <= 0) {
+        // LAN mode ignores expiry, so duration is display/fallback-only here —
+        // but a zero would trip the execute_pause broken-gate tripwire.
+        g_pauseDurationSec = 300;
+    }
 
     // Schedule auto-unpause request
     setup_auto_unpause_request();
@@ -6131,12 +6296,14 @@ public cmd_tech_pause(id) {
     // design — `.tech` is a deliberate team-initiated action, auto-DC is
     // punishment-free since the team didn't choose to pause.
     g_techPauseStartTime = get_systime();
+    g_techPauseFrozenTime = 0;  // stale frozen stamp from a leaked prior session must not survive
 
     log_ktp("event=TECH_PAUSE player='%s' steamid=%s ip=%s team=%s map=%s budget_remaining=%d",
             name, safe_sid(sid), ip[0]?ip:"NA", team, map, g_techBudget[tid]);
 
-    // Trigger pre-pause countdown with new system
-    trigger_pause_countdown(name, "tech_pause", false, id);
+    // Trigger pre-pause countdown with new system (non-live windows use the
+    // pre-match countdown cvar, same auto-detect as cmd_rcon_pause)
+    trigger_pause_countdown(name, "tech_pause", !g_matchLive, id);
 
     return PLUGIN_HANDLED;
 }
@@ -6356,6 +6523,7 @@ public cmd_commands(id) {
     client_print(id, print_console, "--- Admin Commands (RCON flag) ---");
     client_print(id, print_console, "  .forcereset      - Force reset all match state (requires confirmation)");
     client_print(id, print_console, "  .restarthalf / .h2restart - Restart 2nd half to 0-0 (requires confirmation)");
+    client_print(id, print_console, "  .setstate <half> <allies> <axis> <h1t1> <h1t2> - Set match state directly (requires confirmation)");
     client_print(id, print_console, "  .changemap       - Map selection menu, no match active (KTPAdminAudit)");
     client_print(id, print_console, "  .hltvrestart     - Restart paired HLTV instance");
 
@@ -6490,6 +6658,13 @@ public cmd_say_hook(id) {
         }
     }
 
+    // .setstate takes arguments, so it must route through here (see .ktpOT comment)
+    if (equali(args, "/setstate", 9) || equali(args, ".setstate", 9)) {
+        if (strlen(args) == 9 || args[9] == ' ') {
+            return cmd_setstate(id);
+        }
+    }
+
     return PLUGIN_CONTINUE;
 }
 
@@ -6554,6 +6729,12 @@ public cmd_say_team_hook(id) {
     if (equali(args, "/setaxis", 8) || equali(args, ".setaxis", 8)) {
         if (strlen(args) == 8 || args[8] == ' ') {
             return cmd_setteamaxis(id);
+        }
+    }
+
+    if (equali(args, "/setstate", 9) || equali(args, ".setstate", 9)) {
+        if (strlen(args) == 9 || args[9] == ' ') {
+            return cmd_setstate(id);
         }
     }
 
@@ -7260,6 +7441,14 @@ public cmd_cancel(id) {
     if (g_preStartPending) {
         new name[32], sid[44], ip[32], team[16], map[32];
         get_full_identity(id, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team), map, charsmax(map));
+        // A pre-start .tech pause must not survive the cancel — prestart_reset
+        // doesn't unpause, and a paused empty server has no way out. The clear
+        // runs unconditionally: a pre-pause countdown still mid-flight (not yet
+        // paused) would otherwise fire execute_pause on the reset server.
+        if (g_isPaused) {
+            ktp_unpause_now("prestart_cancel");
+        }
+        clear_pause_session_state();
         prestart_reset();
         disarm_ready_override("prestart_cancel");
         log_ktp("event=PRESTART_CANCEL by='%s' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
@@ -7377,10 +7566,13 @@ public cmd_cancel(id) {
         g_matchType = MATCH_TYPE_COMPETITIVE;
         g_disableDiscord = false;
 
-        // Unpause if paused
+        // Unpause if paused, then clear the whole pause session — a pending
+        // .tech (or its still-running pre-pause countdown) must not survive
+        // the cancel
         if (g_isPaused) {
             ktp_unpause_now("secondhalf_cancel");
         }
+        clear_pause_session_state();
 
         update_server_hostname();
         // Restart idle command hints (stopped at match start)
@@ -7419,17 +7611,13 @@ public cmd_cancel(id) {
     remove_task(g_taskPendingHudId);
     remove_task(g_taskUnreadyReminderId);
 
-    // Reset tech budgets and pre-pause state
+    // Reset tech budgets and the whole pause session (owner/tech flags, pre-pause
+    // countdown, session tasks) — the old inline list missed g_isTechPause and
+    // the countdown/auto-unpause tasks
     g_techBudget[1] = 0;
     g_techBudget[2] = 0;
-    g_techPauseStartTime = 0;
-    g_techPauseFrozenTime = 0;
     g_pauseStartTime = 0;
-    g_autoConfirmLeft = 0;
-    remove_task(g_taskPrePauseId);
-    remove_task(g_taskAutoConfirmId);
-    g_prePauseCountdown = false;
-    g_prePauseLeft = 0;
+    clear_pause_session_state();
 
     // OPTIMIZED: Use cached map name instead of get_mapname()
     log_ktp("event=PENDING_CANCEL by='%s' steamid=%s ip=%s team=%s map=%s", name2, safe_sid(sid2), ip2[0]?ip2:"NA", team2, g_currentMap);
@@ -7646,6 +7834,9 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     g_deferredDiscordFwdCount = 0;
     remove_task(g_taskRestartHalfStatsId);
     remove_task(g_taskRestartHalfDiscordId);
+    remove_task(g_taskSetStateDiscordId);
+    g_setStatePending = 0;
+    g_setStatePendingSid[0] = EOS;
     remove_task(g_taskPendingPhaseId);
     remove_task(g_taskRoundLiveTimeoutId);
     remove_task(g_taskHalftimeWatchdogId);
@@ -7853,6 +8044,256 @@ public task_restarthalf_discord() {
             "**%s** restarted the 2nd half.\n\n**1st Half Score:** %s %d - %d %s\n**2nd Half:** Reset to 0-0",
             g_restartHalfByName, g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
         send_discord_simple_embed("<:ktp:1105490705188659272> 2nd Half Restarted", discordDesc, DISCORD_COLOR_ORANGE);
+    }
+}
+
+// ========== SET MATCH STATE COMMAND (Admin) ==========
+// .setstate <half> <allies> <axis> <h1team1> <h1team2>
+// Direct override of half/score state — recovery tool for a match whose state
+// machine lost track of reality (e.g. halftime context lost, state re-grafted
+// onto a fresh .ktp). allies/axis are the CURRENT cumulative scoreboard totals;
+// h1team1/h1team2 are 1st-half scores BY TEAM IDENTITY (team1 started as
+// Allies, team2 as Axis — in the 2nd half sides are swapped).
+// ADMIN_RCON + retype-to-confirm within 10s, keyed on slot AND authid.
+
+public cmd_setstate(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) {
+        client_print(id, print_chat, "[KTP] Access denied. Requires RCON admin.");
+        return PLUGIN_HANDLED;
+    }
+
+    new name[32], sid[44], ip[32];
+    get_user_name(id, name, charsmax(name));
+    get_user_authid(id, sid, charsmax(sid));
+    get_user_ip(id, ip, charsmax(ip), 1);
+
+    // State gates re-run on the confirm pass too — the match can end or flip to
+    // OT inside the 10-second window.
+    if (!g_matchLive) {
+        client_print(id, print_chat, "[KTP] No live match. Start the match first, then .setstate to correct it.");
+        return PLUGIN_HANDLED;
+    }
+    if (g_inOvertime) {
+        client_print(id, print_chat, "[KTP] .setstate does not support overtime. Use .forcereset if needed.");
+        return PLUGIN_HANDLED;
+    }
+    // Half-end intermission: g_matchLive stays true on the H1-end path, and a
+    // confirm here would persist LIVE=1 + H2 scores that the next map load
+    // finalizes as a completed match. g_matchLive term: same rationale as the
+    // cmd_tech_pause gate — only the live intermission window needs refusing.
+    if (g_matchLive && is_in_intermission()) {
+        client_print(id, print_chat, "[KTP] Half/map change in progress - wait for the next map to load, then .setstate.");
+        return PLUGIN_HANDLED;
+    }
+
+    // Parse ".setstate <half> <allies> <axis> <h1team1> <h1team2>" from chat args
+    new args[128];
+    read_args(args, charsmax(args));
+    remove_quotes(args);
+    trim(args);
+
+    new tok[7][12];
+    new count = explode_string(args, " ", tok, 7, 11);
+    new bool:parseOk = (count == 6);  // command word + exactly 5 values
+    new vals[5];
+    if (parseOk) {
+        for (new i = 0; i < 5; i++) {
+            new len = strlen(tok[i + 1]);
+            if (!len || len > 3) { parseOk = false; break; }  // digits only, <= 999
+            for (new j = 0; j < len; j++) {
+                if (!isdigit(tok[i + 1][j])) { parseOk = false; break; }
+            }
+            if (!parseOk) break;
+            vals[i] = str_to_num(tok[i + 1]);
+        }
+    }
+    if (!parseOk) {
+        client_print(id, print_chat, "[KTP] Usage: .setstate <half> <allies> <axis> <h1team1> <h1team2> (whole numbers)");
+        client_print(id, print_chat, "[KTP] allies/axis = current scoreboard totals. h1 scores are by TEAM: team1 started as Allies.");
+        return PLUGIN_HANDLED;
+    }
+
+    new half = vals[0], allies = vals[1], axis = vals[2], h1t1 = vals[3], h1t2 = vals[4];
+
+    if (half != 1 && half != 2) {
+        client_print(id, print_chat, "[KTP] Invalid half %d - must be 1 or 2.", half);
+        return PLUGIN_HANDLED;
+    }
+
+    // Consistency: the four scores must describe a possible match state.
+    new t1h2 = 0, t2h2 = 0;
+    if (half == 2) {
+        // 2nd half sides are swapped: Allies = Team 2, Axis = Team 1
+        t1h2 = axis - h1t1;
+        t2h2 = allies - h1t2;
+        if (t1h2 < 0 || t2h2 < 0) {
+            client_print(id, print_chat, "[KTP] Rejected: totals minus H1 give a negative 2nd-half score (team1 H2=%d, team2 H2=%d).", t1h2, t2h2);
+            client_print(id, print_chat, "[KTP] Those numbers are inconsistent - re-check the H1 split against the scoreboard.");
+            log_ktp("event=SETSTATE_REJECTED reason=negative_h2 by='%s' steamid=%s half=%d allies=%d axis=%d h1=%d,%d",
+                    name, safe_sid(sid), half, allies, axis, h1t1, h1t2);
+            return PLUGIN_HANDLED;
+        }
+    } else {
+        // 1st half: cumulative totals ARE the 1st-half scores in progress
+        // (team1 = Allies), so the pairs must agree.
+        if (allies != h1t1 || axis != h1t2) {
+            client_print(id, print_chat, "[KTP] Rejected: in half 1 the totals ARE the H1 scores - use .setstate 1 A X A X.");
+            log_ktp("event=SETSTATE_REJECTED reason=h1_mismatch by='%s' steamid=%s allies=%d axis=%d h1=%d,%d",
+                    name, safe_sid(sid), allies, axis, h1t1, h1t2);
+            return PLUGIN_HANDLED;
+        }
+    }
+
+    // Confirmation: same slot, same authid, same values, within 10 seconds.
+    // The negative-delta guard covers a stale pending surviving into a new map's
+    // reset gametime (plugin_init also clears the latch).
+    new Float:now = get_gametime();
+    if (g_setStatePending == id && now >= g_setStateTime && (now - g_setStateTime) < 10.0) {
+        if (!equal(sid, g_setStatePendingSid)) {
+            // Slot recycled to a different person inside the window — refuse and reset
+            log_ktp("event=SETSTATE_IDENTITY_MISMATCH slot=%d expected_sid=%s got_sid=%s",
+                    id, safe_sid(g_setStatePendingSid), safe_sid(sid));
+            g_setStatePending = 0;
+            g_setStatePendingSid[0] = EOS;
+            client_print(id, print_chat, "[KTP] Pending confirmation belonged to a different player. Start over.");
+            return PLUGIN_HANDLED;
+        }
+        if (half == g_setStateArgs[0] && allies == g_setStateArgs[1] && axis == g_setStateArgs[2]
+            && h1t1 == g_setStateArgs[3] && h1t2 == g_setStateArgs[4]) {
+            g_setStatePending = 0;
+            g_setStatePendingSid[0] = EOS;
+            g_setStateTime = 0.0;
+            execute_setstate(id, name, sid, ip, half, allies, axis, h1t1, h1t2, t1h2, t2h2);
+            return PLUGIN_HANDLED;
+        }
+        // Same admin, different values — fall through and re-arm with the new values
+    }
+
+    // First request (or changed values) - arm the window and echo the arithmetic
+    g_setStatePending = id;
+    copy(g_setStatePendingSid, charsmax(g_setStatePendingSid), sid);
+    g_setStateTime = now;
+    g_setStateArgs[0] = half;
+    g_setStateArgs[1] = allies;
+    g_setStateArgs[2] = axis;
+    g_setStateArgs[3] = h1t1;
+    g_setStateArgs[4] = h1t2;
+
+    update_match_scores_from_dodx();
+    announce_all("*** SETSTATE requested by %s ***", name);
+    announce_all("Will set: half %d | Scoreboard: Allies %d - %d Axis", half, allies, axis);
+    announce_all("1st half by team: %s %d - %d %s", g_team1Name, h1t1, h1t2, g_team2Name);
+    if (half == 2) {
+        announce_all("Derived 2nd half: %s %d - %d %s", g_team1Name, t1h2, t2h2, g_team2Name);
+    }
+    announce_all("Currently: half %d | Allies %d - %d Axis | H1 %d-%d",
+        g_currentHalf, g_matchScore[1], g_matchScore[2], g_firstHalfScore[1], g_firstHalfScore[2]);
+    announce_all("Type the exact same .setstate command again within 10 seconds to confirm.");
+
+    log_ktp("event=SETSTATE_REQUESTED by='%s' steamid=%s ip=%s new_half=%d new_score=%d-%d new_h1=%d,%d derived_h2=%d,%d cur_half=%d cur_score=%d-%d cur_h1=%d,%d",
+            name, safe_sid(sid), ip[0] ? ip : "NA", half, allies, axis, h1t1, h1t2, t1h2, t2h2,
+            g_currentHalf, g_matchScore[1], g_matchScore[2], g_firstHalfScore[1], g_firstHalfScore[2]);
+
+    return PLUGIN_HANDLED;
+}
+
+stock execute_setstate(id, const name[], const sid[], const ip[], half, allies, axis, h1t1, h1t2, t1h2, t2h2) {
+    #pragma unused id
+
+    // Capture pre-override state for the audit trail
+    update_match_scores_from_dodx();
+    log_ktp("event=SETSTATE_EXECUTED by='%s' steamid=%s ip=%s match_id='%s' map=%s old_half=%d old_score=%d-%d old_h1=%d,%d new_half=%d new_score=%d-%d new_h1=%d,%d derived_h2=%d,%d",
+            name, safe_sid(sid), ip[0] ? ip : "NA", g_matchId, g_currentMap,
+            g_currentHalf, g_matchScore[1], g_matchScore[2], g_firstHalfScore[1], g_firstHalfScore[2],
+            half, allies, axis, h1t1, h1t2, t1h2, t2h2);
+
+    g_currentHalf = half;
+    g_matchScore[1] = allies;
+    g_matchScore[2] = axis;
+    g_firstHalfScore[1] = h1t1;
+    g_firstHalfScore[2] = h1t2;
+
+    // Side identity must match the half or announcements/score displays invert
+    // (same mapping the h2 restore path applies)
+    if (half == 2) {
+        copy(g_teamName[1], charsmax(g_teamName[]), g_team2Name);
+        copy(g_teamName[2], charsmax(g_teamName[]), g_team1Name);
+    } else {
+        copy(g_teamName[1], charsmax(g_teamName[]), g_team1Name);
+        copy(g_teamName[2], charsmax(g_teamName[]), g_team2Name);
+    }
+
+    // Scoreboard: immediate write when gamerules is valid; otherwise fall back
+    // to the deferred pending-score path (never a bare dodx_set_team_score in a
+    // changelevel window). Unlike execute_restart_half the deferred write is
+    // NOT armed unconditionally — there is no round restart here, so a 12s
+    // re-broadcast would revert any flag capped in the interim.
+    #if defined HAS_DODX
+    if (dodx_has_gamerules()) {
+        dodx_set_team_score(1, allies);
+        dodx_set_team_score(2, axis);
+    } else {
+        g_pendingScoreAllies = allies;
+        g_pendingScoreAxis = axis;
+        schedule_score_restoration();
+        log_ktp("event=SETSTATE_SCORE_DEFERRED reason=no_gamerules allies=%d axis=%d", allies, axis);
+    }
+    #endif
+
+    // Persist so the corrected state survives a map change — same canonical key
+    // set as the halftime save block. MODE stays "h2" for a live regulation
+    // match in either half (the restore path disambiguates by H2 scores).
+    new buf[32];
+    set_localinfo(LOCALINFO_MATCH_ID, g_matchId);
+    set_localinfo(LOCALINFO_MATCH_MAP, g_matchMap);
+    set_localinfo(LOCALINFO_MODE, "h2");
+    set_localinfo(LOCALINFO_LIVE, "1");
+    format_state(buf, charsmax(buf),
+        g_pauseCountTeam[1], g_pauseCountTeam[2],
+        g_techBudget[1], g_techBudget[2]);
+    set_localinfo(LOCALINFO_STATE, buf);
+    format_scores(buf, charsmax(buf), g_firstHalfScore[1], g_firstHalfScore[2]);
+    set_localinfo(LOCALINFO_H1_SCORES, buf);
+    if (half == 2) {
+        format_scores(buf, charsmax(buf), allies, axis);
+        set_localinfo(LOCALINFO_H2_SCORES, buf);
+    } else {
+        // A stale H2 row would make the restore path treat half 1 as a finished match
+        set_localinfo(LOCALINFO_H2_SCORES, "");
+    }
+    set_localinfo(LOCALINFO_TEAMNAME1, g_team1Name);
+    set_localinfo(LOCALINFO_TEAMNAME2, g_team2Name);
+    set_localinfo(LOCALINFO_MATCH_TYPE, fmt("%d", _:g_matchType));
+
+    log_ktp("event=SETSTATE_CONTEXT_SAVED match_id=%s mode=h2 live=1 h1=%d,%d team1=%s team2=%s",
+            g_matchId, g_firstHalfScore[1], g_firstHalfScore[2], g_team1Name, g_team2Name);
+
+    announce_all("========================================");
+    announce_all("*** MATCH STATE SET by %s ***", name);
+    announce_all("Half: %d | Scoreboard: Allies %d - %d Axis", half, allies, axis);
+    announce_all("1st half: %s %d - %d %s", g_team1Name, h1t1, h1t2, g_team2Name);
+    if (half == 2) {
+        announce_all("2nd half so far: %s %d - %d %s", g_team1Name, t1h2, t2h2, g_team2Name);
+    }
+    announce_all("========================================");
+
+    // Deferred Discord notification (phase pattern, unique task id)
+    copy(g_setStateByName, charsmax(g_setStateByName), name);
+    remove_task(g_taskSetStateDiscordId);
+    set_task(0.2, "task_setstate_discord", g_taskSetStateDiscordId);
+}
+
+// =============== Deferred setstate Discord (0.2s) ===============
+public task_setstate_discord() {
+    if (!g_matchLive) return;
+
+    if (g_discordRelayUrl[0] && !g_disableDiscord) {
+        new discordDesc[256];
+        formatex(discordDesc, charsmax(discordDesc),
+            "**%s** manually set match state.\n\n**Half:** %d\n**Scoreboard:** Allies %d - %d Axis\n**1st Half:** %s %d - %d %s",
+            g_setStateByName, g_currentHalf, g_matchScore[1], g_matchScore[2],
+            g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
+        send_discord_simple_embed("<:KTP:1002382703020212245> Match State Set", discordDesc, DISCORD_COLOR_ORANGE);
     }
 }
 
@@ -8238,10 +8679,13 @@ public cmd_ready(id) {
 
         log_ktp("event=HALF_START half=%s map=%s match_id=%s", halfText, g_currentMap, g_matchId);
 
-        // Reset pause state
-        g_pauseOwnerTeam  = 0;
-        g_unpauseRequested = false;
-        g_unpauseConfirmedOther = false;
+        // Reset pause state — full session clear, not just the owner trio: a
+        // pending-phase .tech that ends via go-live would otherwise leak
+        // g_isTechPause/g_techPauseStartTime into the live half (mislabeling a
+        // later ktp_pause as TECHNICAL and letting a .resume deduct a stale
+        // interval). Pending-phase tech time is deliberately uncharged on this
+        // exit — non-live tech pauses are never charged.
+        clear_pause_session_state();
 
         // Go LIVE immediately - unpause if needed
         if (g_isPaused) {

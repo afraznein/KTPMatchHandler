@@ -132,6 +132,129 @@ naming the disabled command as the entry point. Now `.tech`.
 
 ---
 
+## [0.10.148] - 2026-08-02
+
+Built for the 2026 LAN after the LAN-1 halftime incident (2026-08-01): a tech
+issue during the halftime window couldn't be paused for (`.tech` required a live
+match), the halftime clock ran out, and the h2 context was lost with no way to
+reconstruct it. One recovery tool and two prevention changes.
+
+### Added
+
+#### `.setstate <half> <allies> <axis> <h1team1> <h1team2>` — direct match-state override (ADMIN_RCON)
+
+Sets `g_currentHalf`, both cumulative scoreboard totals, and the saved 1st-half
+split in one shot, then persists the full context to localinfo (`_ktp_mid`,
+`_ktp_map`, `_ktp_mode`, `_ktp_live`, `_ktp_state`, `_ktp_h1`, `_ktp_h2`,
+team names, `_ktp_mtyp`) so the corrected state survives a map change. Scores
+are written immediately via `dodx_set_team_score()` when gamerules is valid,
+with the deferred `g_pendingScoreAllies/Axis` + `schedule_score_restoration()`
+path as the fallback when it is not — never a bare score write in a changelevel
+window. The deferred path is deliberately NOT armed unconditionally: its 12s
+delay is tuned to `.restarthalf`'s round restart, which `.setstate` does not do,
+so re-broadcasting later would silently revert any flag capped in between.
+
+- `allies`/`axis` are the current cumulative totals; `h1team1`/`h1team2` are by
+  **team identity** (team 1 started Allies). For half 2 the command derives the
+  per-team 2nd-half split (`team1H2 = axis - h1team1`, `team2H2 = allies -
+  h1team2`) and refuses if either is negative; for half 1 the totals must equal
+  the H1 pair. Values are digits-only, ≤ 999, exactly five of them.
+- Confirmation mirrors `.restarthalf` (retype within 10s) but is keyed on slot
+  **and** authid captured at request time — a recycled slot inside the window is
+  refused — and the retype must carry identical values or the window re-arms
+  with the new ones. Latch cleared in `plugin_init()`, on requester disconnect,
+  and by a negative-gametime-delta guard (map-change clock reset).
+- Sets the `g_teamName[]` side mapping for the chosen half (same mapping the h2
+  restore path applies), so displays don't invert.
+- Requires a live, non-OT, non-intermission match (OT → `.forcereset`; the
+  half-end intermission is refused because `g_matchLive` stays true there and
+  a confirm would persist LIVE=1 + H2 scores that the next map load finalizes
+  as a completed match). All state gates re-checked on the confirm pass. Logs
+  `SETSTATE_REQUESTED/REJECTED/EXECUTED/CONTEXT_SAVED` with admin
+  name/steamid/ip and full before/after values; deferred Discord embed
+  (task 55633). Confirm latch cleared in `plugin_init()`, on requester
+  disconnect, in `end_match_cleanup()` and in `.forcereset`.
+- The deferred `g_pendingScoreAllies/Axis` + `schedule_score_restoration()`
+  path is the **fallback** for a briefly-invalid gamerules pointer, not armed
+  unconditionally — `.setstate` performs no round restart, so an unconditional
+  12s re-broadcast would revert any flag capped in the interim (deliberate
+  deviation from `execute_restart_half`, where the delay is load-bearing).
+- Chat-only (`.setstate`/`/setstate`, say + say_team) — routed through the say
+  hooks because it takes arguments.
+
+#### `ktp_lan_mode` cvar — indefinite tech pauses for LAN events (default 0)
+
+Deliberately a cvar rather than a ktp.ini key so it can be flipped live over
+rcon (ktp.ini is only read at plugin startup). Read live via `is_lan_mode()` at
+every decision point — flipping it mid-pause immediately changes expiry
+behavior. When 1:
+
+- Tech pauses never expire: no 30s/10s warnings, no auto-unpause
+  (`check_pause_timer_realtime` returns early for tech pauses).
+- The team budget neither gates `.tech`/auto-DC nor gets charged — both
+  deduction sites (unpause-countdown finish, `.resume` freeze) skip the
+  arithmetic and log `TECH_BUDGET_DEDUCT_SKIPPED`/`TECH_BUDGET_FREEZE_SKIPPED`.
+  The `.resume` freeze timestamp is still recorded (stops the HUD clock and
+  keeps the countdown-finish path from double-processing).
+- Pause HUD shows `Remaining: NO LIMIT (LAN)`; the pending-phase HUDs show
+  `Pause Time: no limit (LAN mode)` — no misleading countdown.
+- `g_pauseDurationSec` gets a 300s floor when the budget is 0 so the
+  `execute_pause` broken-gate tripwire doesn't false-alarm (the value is
+  display/fallback-only while LAN mode is on).
+
+When 0, every added branch is dead and behavior is unchanged.
+
+### Changed
+
+#### `.tech` allowed in non-live match windows
+
+The live-only gate (`!g_matchLive` → refuse) is now
+`!g_matchLive && !g_matchPending && !g_preStartPending` → refuse. This opens
+`.tech` during pre-start confirm, ready-up pending, and the post-map-change
+halftime/OT gap (the restore path re-enters `g_matchPending`) — the exact
+window the LAN-1 match died in. Still refused with no match context. The
+half-end intermission gets its own explicit refusal
+(`g_matchLive && is_in_intermission()`): `g_matchLive` is still true there, so
+the flag gate alone never covered it (true in 0.10.147 as well), and pausing
+would fight the queued changelevel and the halftime watchdog. The same refusal
+gates `.setstate`. Supporting fix: `g_inIntermission` is now cleared per map in
+`plugin_init()` — it is set on the H1-end path and was previously only cleared
+at go-live/forcereset, so as a persistent extension-mode global it stayed true
+through the halftime map change (a bare intermission gate would have re-closed
+the exact halftime gap this release opens; the `g_matchLive` term is the
+backstop if the flag lifecycle ever regresses).
+
+- Pre-match (`g_currentHalf == 0`, not a h2/OT continuation): budgets aren't
+  seeded until go-live, so both teams are lazily seeded from
+  `ktp_tech_budget_seconds` on first pre-match `.tech`
+  (`TECH_BUDGET_PREMATCH_SEED`). The `!g_secondHalfPending` term matters: OT
+  pending also parks `g_currentHalf` at 0, and seeding there would refill a
+  genuinely consumed OT budget.
+- **Non-live tech time is never charged.** All three non-live exits agree:
+  go-live (full pause-session clear via new `clear_pause_session_state()`,
+  which also stops a pending-phase `.tech` leaking `g_isTechPause`/start time
+  into the live half), non-live `.resume`, and expiry
+  (`TECH_BUDGET_DEDUCT_SKIPPED reason=non_live`).
+- `.resume` during pending/pre-start now unpauses directly (logged
+  `NONLIVE_RESUME`), **locked to the pause-owning team** — no-owner pauses
+  (admin `ktp_pause`) and RCON admins pass; anyone else gets a refusal naming
+  the owning team (`NONLIVE_RESUME_DENIED`). Rationale: in LAN mode expiry is
+  off, so a pre-start pause would otherwise have no player-accessible exit
+  (`.go` is also refused pre-start), but the exit must not let the other team
+  cut a tech fix short. All three `.cancel` teardown branches (pre-start,
+  pending, 2nd-half-pending) now run the central `clear_pause_session_state()`
+  — the old inline lists missed `g_isTechPause` and a still-running pre-pause
+  countdown, which could fire `execute_pause` on the reset (or gone-live)
+  state as a full-duration tactical pause. The same pre-pause-countdown kill
+  is in the go-live clear.
+- Non-live `.tech` uses the pre-match countdown cvar
+  (`trigger_pause_countdown(..., !g_matchLive, ...)`), matching
+  `cmd_rcon_pause`'s auto-detect.
+- The manual-`.tech`-charges-its-pre-pause / auto-DC-punishment-free asymmetry
+  is untouched for live pauses.
+
+---
+
 ## [0.10.147] - 2026-07-19
 
 The pre-start `.confirm` HUD (and `.prestatus`) now shows a confirmer's current name
