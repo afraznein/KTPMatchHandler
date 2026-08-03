@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.148"
+#define PLUGIN_VERSION "0.10.149"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -5764,8 +5764,15 @@ stock handle_pause_request(id, const name[], const sid[], const ip[], const team
 }
 
 stock handle_resume_request(id, const name[], const sid[], const team[], teamId) {
-    // Spectators cannot request unpause
-    if (teamId != 1 && teamId != 2) {
+    // Spectators cannot request unpause — except an RCON admin during a NON-live
+    // pause. LAN admins commonly sit in spec, and the non-live branch below is the
+    // only player-accessible exit from a LAN-mode pause (expiry is off there).
+    // Admins are deliberately still barred from the LIVE path: it assigns
+    // g_pauseOwnerTeam = teamId and then indexes g_techBudget[] by it, so a
+    // spectator's 0 would set a bogus owner and deduct against slot 0.
+    new bool:nonLivePause = (g_matchPending || g_preStartPending);
+    if (teamId != 1 && teamId != 2
+        && !(nonLivePause && (get_user_flags(id) & ADMIN_RCON))) {
         client_print(id, print_chat, "[KTP] You must be on a team to request unpause.");
         return PLUGIN_HANDLED;
     }
@@ -5775,12 +5782,13 @@ stock handle_resume_request(id, const name[], const sid[], const team[], teamId)
     // off — without this a pre-start pause would have no player-accessible
     // exit (.go is also refused pre-start). Non-live tech time is never
     // charged, so no deduction here.
-    if (g_matchPending || g_preStartPending) {
+    if (nonLivePause) {
         if (g_isPaused) {
             // Owner-locked (operator decision): only the pause-owning team may
             // end it — otherwise either team could cut the other's tech fix
             // short. No-owner pauses (admin ktp_pause) and RCON admins pass.
-            if (teamId == g_pauseOwnerTeam || g_pauseOwnerTeam == 0 || (get_user_flags(id) & ADMIN_RCON)) {
+            // teamId != 0 keeps "is the owner" from matching a spectator's 0.
+            if ((teamId == g_pauseOwnerTeam && teamId != 0) || g_pauseOwnerTeam == 0 || (get_user_flags(id) & ADMIN_RCON)) {
                 log_ktp("event=NONLIVE_RESUME by='%s' steamid=%s team=%d owner=%d prestart=%d pending=%d",
                         name, safe_sid(sid), teamId, g_pauseOwnerTeam, g_preStartPending ? 1 : 0, g_matchPending ? 1 : 0);
                 announce_all("%s resumed the game.", name);

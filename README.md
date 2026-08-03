@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.148** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.149** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -196,14 +196,31 @@ pre-start confirm, ready-up pending, and the post-map-change halftime/OT gap
 (v0.10.148). It is refused when no match context exists at all, and during the
 live half-end intermission (changelevel in flight). Non-live tech time is
 never charged to the budget. A non-live pause is ended by the pause-owning
-team with `.resume` (RCON admins can always resume; everyone readying up also
-unpauses at go-live).
+team with `.resume`, by an RCON admin (including one sitting in spectator —
+v0.10.149), or by everyone readying up, which unpauses at go-live. Admins are
+deliberately still barred from spectator-`.resume` on a **live** pause: that
+path assigns the pause owner from the caller's team and would record a bogus
+one.
 
 **LAN mode (`ktp_lan_mode 1`, default 0):** tech pauses never expire (run until
 resolved), the team budget neither gates nor gets charged, and the pause HUD
 shows `Remaining: NO LIMIT (LAN)` instead of a countdown. The cvar is read live
 at every decision point, so it can be flipped over rcon mid-match — even
-mid-pause. With it at 0, behavior is exactly the pre-0.10.148 behavior.
+mid-pause. With it at 0, pause behavior is exactly the pre-0.10.148 behavior.
+
+> **Unsticking a LAN-mode pause when nobody can end it.** If the pause-owning
+> team has left and no admin is available — on a team, or in spectator for a
+> non-live pause — expiry is off and there is no in-game exit. The graceful fix
+> is rcon **`ktp_lan_mode 0`**, which re-arms expiry. It does **not** unpause
+> instantly: the pause still has to run past its duration, which for a tech
+> pause is the team's remaining budget (5:00 by default, and LAN mode never
+> charged it). Flip the cvar 90 seconds in and nothing visible happens until
+> the 5:00 mark, with the usual 30s/10s warnings on the way. Give it time
+> before reaching for `.forcereset`, which is the destructive fallback and at
+> halftime costs you the match. One case the cvar cannot fix: if the budget was
+> frozen by an earlier `.resume`, expiry is suppressed independently of LAN
+> mode and only the auto-confirm-unpause timer will end it. None of this is
+> discoverable in-game, so it belongs in the LAN runbook.
 
 **During Pause (shows real-time HUD):**
 ```
@@ -1169,7 +1186,7 @@ For support and questions, please open an issue on GitHub.
 
 ## Status
 
-- **Current Version**: v0.10.148
+- **Current Version**: v0.10.149
 - **Status**: Production (fleet-wide on KTP-ReHLDS extension mode; score persistence in live verification)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + KTPAMXX 2.7.x (extension mode, no Metamod)
 - **Last Updated**: August 2026
@@ -1181,7 +1198,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.148                    ║
+║             KTP MATCH HANDLER v0.10.149                    ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1219,4 +1236,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.148** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.149** - Making competitive Day of Defeat matches better, one pause at a time.

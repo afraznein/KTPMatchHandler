@@ -132,6 +132,36 @@ naming the disabled command as the entry point. Now `.tech`.
 
 ---
 
+## [0.10.149] - 2026-08-03
+
+Follow-up to 0.10.148, which was reviewed and built but never shipped. Closes
+the one review finding left as a documentation item, now that fixing it no
+longer means shipping unreviewed code on top of an approval.
+
+### Fixed
+
+- **A spectating RCON admin could not `.resume` a non-live pause.** The
+  "you must be on a team" gate ran ahead of the admin term, so the escape
+  never evaluated. LAN admins commonly sit in spec, and during a LAN-mode
+  pause (expiry off) that left no way out short of `.forcereset`. The escape
+  is scoped to the **non-live** branch only: the live path assigns
+  `g_pauseOwnerTeam = teamId` and then indexes `g_techBudget[]` by it, so a
+  spectator's `0` would record a bogus owner and deduct against slot 0.
+
+### Documentation
+
+- README now records the **`ktp_lan_mode 0` unstick**: if the pause-owning
+  team leaves during a LAN-mode pause and no admin can end it, flipping the
+  cvar off over rcon re-arms expiry. It is not instant — the pause still runs
+  to its duration (the team's remaining tech budget, 5:00 by default), with
+  the usual 30s/10s warnings. Said plainly because an admin who expects an
+  instant unpause will conclude it failed and reach for `.forcereset`, which
+  at halftime costs the match. Also notes the one case the cvar can't fix: a
+  budget frozen by an earlier `.resume` suppresses expiry independently of LAN
+  mode. Undiscoverable in-game, hence written down.
+- Corrected the README claim that "RCON admins can always resume" — true only
+  after this release, and only for non-live pauses.
+
 ## [0.10.148] - 2026-08-02
 
 Built for the 2026 LAN after the LAN-1 halftime incident (2026-08-01): a tech
