@@ -132,6 +132,69 @@ naming the disabled command as the entry point. Now `.tech`.
 
 ---
 
+## [0.10.150] - 2026-08-04
+
+Makes `.setstate` reachable from the Tier-2 integration harness. `.setstate`
+shipped in 0.10.148 and has never been executed by an automated test: it is
+chat-only, and the harness has no connected-client capability (DoD ships no bot
+AI, so `addbot` yields a slot with nobody in it). It was the sole unexecuted
+path in the 0.10.149 build.
+
+### Added
+
+#### `amx_ktp_test_setstate` — test-mode RCON driver for `.setstate`
+
+`<half> <allies> <axis> <h1team1> <h1team2>`, `ADMIN_RCON`, compiled out of the
+production binary by `#if defined KTP_TEST_MODE` like every other
+`amx_ktp_test_*` command.
+
+It skips two things: splitting a chat string into tokens, and the
+retype-within-10s confirmation window. Everything else runs the production
+path, including `execute_setstate()` and its deferred Discord embed.
+
+**What that leaves uncovered, stated plainly:** the confirmation window is not
+only an interactive affordance. It also carries the slot-recycle identity guard
+that re-checks the requesting admin's authid before executing — the
+async-boundary rule that exists because a slot index is not an identity. That
+guard, the re-arm-on-changed-values branch, and the negative-gametime-delta
+check remain unexercised by any test. "`.setstate` is now covered" is true of
+its state machine and its arithmetic, and not true of its confirmation
+security.
+
+Reject reasons are emitted as names (`gate=overtime`, `scores=negative_h2`)
+rather than enum ordinals, reusing the vocabulary already present in the
+`SETSTATE_REJECTED` log lines, so tests assert on meaning and an enum that grows
+later does not silently re-point an assertion.
+
+### Changed
+
+#### `.setstate` preconditions extracted into three shared stocks
+
+`setstate_parse_token()` (digits only, 0..999 — the input domain),
+`setstate_gate_reason()` (live / not-OT / not-intermission) and
+`setstate_validate_scores()` (half validity, the H1-vs-total consistency rule,
+and the 2nd-half derivation with its side swap) now hold the rules once.
+`cmd_setstate` and the new test RCON both route through them.
+
+The token rule is shared for the same reason as the other two, and review
+caught it being skipped: the first cut of the test command used a bare
+`str_to_num`, which would have accepted `-5` and driven a negative score
+through `dodx_set_team_score()` — a state no production input can produce. The
+arithmetic was shared; the domain the arithmetic operates on was not.
+
+The alternative — letting the test command re-implement the checks, as
+`amx_ktp_test_restarthalf` does — would have produced a test that can pass while
+the production command rejects, or vice versa. Duplicated validation drifting
+apart is the defect class behind two prior incidents in this plugin, and it is
+worth avoiding in the one command whose entire purpose is repairing a match
+whose state is already wrong.
+
+User-facing behavior is unchanged: the same chat messages, the same
+`SETSTATE_REJECTED` log lines with the same `reason=` values, and the same order
+of evaluation (state gates before argument parsing, score arithmetic after).
+
+---
+
 ## [0.10.149] - 2026-08-03
 
 Follow-up to 0.10.148, which was reviewed and built but never shipped. Closes

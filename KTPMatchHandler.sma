@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.149"
+#define PLUGIN_VERSION "0.10.150"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -4355,6 +4355,8 @@ public plugin_init() {
         "[TEST-MODE] — bypass .forcereset confirmation; call execute_force_reset() directly with synthetic admin metadata");
     register_concmd("amx_ktp_test_restarthalf", "cmd_test_restarthalf", ADMIN_RCON,
         "[TEST-MODE] — bypass .restarthalf confirmation; call execute_restart_half() directly with synthetic admin metadata (requires live h2)");
+    register_concmd("amx_ktp_test_setstate", "cmd_test_setstate", ADMIN_RCON,
+        "[TEST-MODE] <half> <allies> <axis> <h1team1> <h1team2> — bypass .setstate retype-confirm; runs the same gate + score validation, then execute_setstate()");
     register_concmd("amx_ktp_test_reset",         "cmd_test_reset",         ADMIN_RCON,
         "[TEST-MODE] reset all match state to idle (test teardown helper)");
     register_concmd("amx_ktp_test_get_state",     "cmd_test_get_state",     ADMIN_RCON,
@@ -8056,6 +8058,68 @@ public task_restarthalf_discord() {
 }
 
 // ========== SET MATCH STATE COMMAND (Admin) ==========
+enum SetStateGate {
+    SETSTATE_GATE_OK = 0,
+    SETSTATE_GATE_NOT_LIVE,
+    SETSTATE_GATE_OVERTIME,
+    SETSTATE_GATE_INTERMISSION
+};
+
+enum SetStateScores {
+    SETSTATE_SCORES_OK = 0,
+    SETSTATE_SCORES_BAD_HALF,
+    SETSTATE_SCORES_NEGATIVE_H2,
+    SETSTATE_SCORES_H1_MISMATCH
+};
+
+// One .setstate score token: digits only, 1..3 chars, so 0..999 with no sign.
+// The domain matters as much as the arithmetic — execute_setstate() hands these
+// straight to dodx_set_team_score(), which bounds-checks the team index and
+// writes the score verbatim. A negative would produce a match state no
+// production input can reach.
+stock bool:setstate_parse_token(const tok[], &out) {
+    new len = strlen(tok);
+    if (!len || len > 3) return false;
+    for (new i = 0; i < len; i++) {
+        if (!isdigit(tok[i])) return false;
+    }
+    out = str_to_num(tok);
+    return true;
+}
+
+// Whether the state machine will accept a .setstate right now. Chat command and
+// test-mode rcon share this so the gates cannot drift apart.
+stock SetStateGate:setstate_gate_reason() {
+    if (!g_matchLive) return SETSTATE_GATE_NOT_LIVE;
+    if (g_inOvertime) return SETSTATE_GATE_OVERTIME;
+    // Half-end intermission: g_matchLive stays true on the H1-end path, and a
+    // confirm here would persist LIVE=1 + H2 scores that the next map load
+    // finalizes as a completed match. g_matchLive term: same rationale as the
+    // cmd_tech_pause gate — only the live intermission window needs refusing.
+    if (g_matchLive && is_in_intermission()) return SETSTATE_GATE_INTERMISSION;
+    return SETSTATE_GATE_OK;
+}
+
+// Do the four score numbers describe a reachable match state? Also derives the
+// 2nd-half split (populated even on rejection — the caller prints it). Pure
+// arithmetic, no state reads; shared with the test-mode rcon.
+stock SetStateScores:setstate_validate_scores(half, allies, axis, h1t1, h1t2, &t1h2, &t2h2) {
+    t1h2 = 0;
+    t2h2 = 0;
+    if (half != 1 && half != 2) return SETSTATE_SCORES_BAD_HALF;
+    if (half == 2) {
+        // 2nd half sides are swapped: Allies = Team 2, Axis = Team 1
+        t1h2 = axis - h1t1;
+        t2h2 = allies - h1t2;
+        if (t1h2 < 0 || t2h2 < 0) return SETSTATE_SCORES_NEGATIVE_H2;
+    } else if (allies != h1t1 || axis != h1t2) {
+        // 1st half: cumulative totals ARE the 1st-half scores in progress
+        // (team1 = Allies), so the pairs must agree.
+        return SETSTATE_SCORES_H1_MISMATCH;
+    }
+    return SETSTATE_SCORES_OK;
+}
+
 // .setstate <half> <allies> <axis> <h1team1> <h1team2>
 // Direct override of half/score state — recovery tool for a match whose state
 // machine lost track of reality (e.g. halftime context lost, state re-grafted
@@ -8077,21 +8141,19 @@ public cmd_setstate(id) {
 
     // State gates re-run on the confirm pass too — the match can end or flip to
     // OT inside the 10-second window.
-    if (!g_matchLive) {
-        client_print(id, print_chat, "[KTP] No live match. Start the match first, then .setstate to correct it.");
-        return PLUGIN_HANDLED;
-    }
-    if (g_inOvertime) {
-        client_print(id, print_chat, "[KTP] .setstate does not support overtime. Use .forcereset if needed.");
-        return PLUGIN_HANDLED;
-    }
-    // Half-end intermission: g_matchLive stays true on the H1-end path, and a
-    // confirm here would persist LIVE=1 + H2 scores that the next map load
-    // finalizes as a completed match. g_matchLive term: same rationale as the
-    // cmd_tech_pause gate — only the live intermission window needs refusing.
-    if (g_matchLive && is_in_intermission()) {
-        client_print(id, print_chat, "[KTP] Half/map change in progress - wait for the next map to load, then .setstate.");
-        return PLUGIN_HANDLED;
+    switch (setstate_gate_reason()) {
+        case SETSTATE_GATE_NOT_LIVE: {
+            client_print(id, print_chat, "[KTP] No live match. Start the match first, then .setstate to correct it.");
+            return PLUGIN_HANDLED;
+        }
+        case SETSTATE_GATE_OVERTIME: {
+            client_print(id, print_chat, "[KTP] .setstate does not support overtime. Use .forcereset if needed.");
+            return PLUGIN_HANDLED;
+        }
+        case SETSTATE_GATE_INTERMISSION: {
+            client_print(id, print_chat, "[KTP] Half/map change in progress - wait for the next map to load, then .setstate.");
+            return PLUGIN_HANDLED;
+        }
     }
 
     // Parse ".setstate <half> <allies> <axis> <h1team1> <h1team2>" from chat args
@@ -8106,13 +8168,7 @@ public cmd_setstate(id) {
     new vals[5];
     if (parseOk) {
         for (new i = 0; i < 5; i++) {
-            new len = strlen(tok[i + 1]);
-            if (!len || len > 3) { parseOk = false; break; }  // digits only, <= 999
-            for (new j = 0; j < len; j++) {
-                if (!isdigit(tok[i + 1][j])) { parseOk = false; break; }
-            }
-            if (!parseOk) break;
-            vals[i] = str_to_num(tok[i + 1]);
+            if (!setstate_parse_token(tok[i + 1], vals[i])) { parseOk = false; break; }
         }
     }
     if (!parseOk) {
@@ -8123,28 +8179,21 @@ public cmd_setstate(id) {
 
     new half = vals[0], allies = vals[1], axis = vals[2], h1t1 = vals[3], h1t2 = vals[4];
 
-    if (half != 1 && half != 2) {
-        client_print(id, print_chat, "[KTP] Invalid half %d - must be 1 or 2.", half);
-        return PLUGIN_HANDLED;
-    }
-
     // Consistency: the four scores must describe a possible match state.
     new t1h2 = 0, t2h2 = 0;
-    if (half == 2) {
-        // 2nd half sides are swapped: Allies = Team 2, Axis = Team 1
-        t1h2 = axis - h1t1;
-        t2h2 = allies - h1t2;
-        if (t1h2 < 0 || t2h2 < 0) {
+    switch (setstate_validate_scores(half, allies, axis, h1t1, h1t2, t1h2, t2h2)) {
+        case SETSTATE_SCORES_BAD_HALF: {
+            client_print(id, print_chat, "[KTP] Invalid half %d - must be 1 or 2.", half);
+            return PLUGIN_HANDLED;
+        }
+        case SETSTATE_SCORES_NEGATIVE_H2: {
             client_print(id, print_chat, "[KTP] Rejected: totals minus H1 give a negative 2nd-half score (team1 H2=%d, team2 H2=%d).", t1h2, t2h2);
             client_print(id, print_chat, "[KTP] Those numbers are inconsistent - re-check the H1 split against the scoreboard.");
             log_ktp("event=SETSTATE_REJECTED reason=negative_h2 by='%s' steamid=%s half=%d allies=%d axis=%d h1=%d,%d",
                     name, safe_sid(sid), half, allies, axis, h1t1, h1t2);
             return PLUGIN_HANDLED;
         }
-    } else {
-        // 1st half: cumulative totals ARE the 1st-half scores in progress
-        // (team1 = Allies), so the pairs must agree.
-        if (allies != h1t1 || axis != h1t2) {
+        case SETSTATE_SCORES_H1_MISMATCH: {
             client_print(id, print_chat, "[KTP] Rejected: in half 1 the totals ARE the H1 scores - use .setstate 1 A X A X.");
             log_ktp("event=SETSTATE_REJECTED reason=h1_mismatch by='%s' steamid=%s allies=%d axis=%d h1=%d,%d",
                     name, safe_sid(sid), allies, axis, h1t1, h1t2);
@@ -9457,6 +9506,91 @@ public cmd_test_restarthalf(id) {
     execute_restart_half(id, "test_admin", "STEAM_0:0:99999999", "127.0.0.1");
 
     console_print(id, "KTP_TEST_RESTARTHALF: ok match_id=%s", g_matchId);
+    return PLUGIN_HANDLED;
+}
+
+// Drive `.setstate` without the chat layer: <half> <allies> <axis> <h1t1> <h1t2>.
+//
+// Unlike cmd_test_restarthalf above, this does NOT re-implement the
+// preconditions — it calls the same setstate_parse_token(),
+// setstate_gate_reason() and setstate_validate_scores() stocks cmd_setstate
+// calls, so a rule that changes in one path cannot silently pass in the other.
+//
+// Skipped: splitting a chat string into tokens (the harness has no connected
+// client to type one), and the retype-to-confirm window. The latter is NOT
+// purely an interactive affordance — it also carries the slot-recycle identity
+// guard, which therefore stays unexercised by any test.
+//
+// Reject reasons are emitted as names, not enum ordinals, and reuse the
+// vocabulary already in the SETSTATE_REJECTED log lines so tests assert on
+// meaning rather than on a number that shifts when the enum grows.
+//
+// execute_setstate() schedules the deferred Discord embed exactly as production
+// does — the fake-ingest fixture observes it, same as the advance_live rcon.
+public cmd_test_setstate(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    if (read_argc() != 6) {
+        console_print(id, "KTP_TEST_SETSTATE: ERROR usage=<half> <allies> <axis> <h1team1> <h1team2>");
+        return PLUGIN_HANDLED;
+    }
+
+    new arg[12], vals[5];
+    for (new i = 0; i < 5; i++) {
+        read_argv(i + 1, arg, charsmax(arg));
+        if (!setstate_parse_token(arg, vals[i])) {
+            console_print(id, "KTP_TEST_SETSTATE: REJECTED parse=bad_token pos=%d arg='%s'", i + 1, arg);
+            return PLUGIN_HANDLED;
+        }
+    }
+    new half = vals[0], allies = vals[1], axis = vals[2], h1t1 = vals[3], h1t2 = vals[4];
+
+    switch (setstate_gate_reason()) {
+        case SETSTATE_GATE_NOT_LIVE: {
+            console_print(id, "KTP_TEST_SETSTATE: REJECTED gate=not_live");
+            return PLUGIN_HANDLED;
+        }
+        case SETSTATE_GATE_OVERTIME: {
+            console_print(id, "KTP_TEST_SETSTATE: REJECTED gate=overtime");
+            return PLUGIN_HANDLED;
+        }
+        case SETSTATE_GATE_INTERMISSION: {
+            console_print(id, "KTP_TEST_SETSTATE: REJECTED gate=intermission");
+            return PLUGIN_HANDLED;
+        }
+    }
+
+    new t1h2 = 0, t2h2 = 0;
+    switch (setstate_validate_scores(half, allies, axis, h1t1, h1t2, t1h2, t2h2)) {
+        case SETSTATE_SCORES_BAD_HALF: {
+            console_print(id, "KTP_TEST_SETSTATE: REJECTED scores=bad_half half=%d", half);
+            return PLUGIN_HANDLED;
+        }
+        case SETSTATE_SCORES_NEGATIVE_H2: {
+            console_print(id, "KTP_TEST_SETSTATE: REJECTED scores=negative_h2 t1h2=%d t2h2=%d", t1h2, t2h2);
+            return PLUGIN_HANDLED;
+        }
+        case SETSTATE_SCORES_H1_MISMATCH: {
+            console_print(id, "KTP_TEST_SETSTATE: REJECTED scores=h1_mismatch");
+            return PLUGIN_HANDLED;
+        }
+    }
+
+    log_ktp("event=TEST_SETSTATE match_id=%s half=%d allies=%d axis=%d h1=%d,%d",
+        g_matchId, half, allies, axis, h1t1, h1t2);
+
+    // Mirror the production confirm branch, which clears the latch immediately
+    // before executing. Unreachable in the harness (no connected client can arm
+    // it), but leaving a stale latch behind would be a difference for no reason.
+    g_setStatePending = 0;
+    g_setStatePendingSid[0] = EOS;
+    g_setStateTime = 0.0;
+
+    execute_setstate(id, "test_admin", "STEAM_0:0:99999999", "127.0.0.1",
+        half, allies, axis, h1t1, h1t2, t1h2, t2h2);
+
+    console_print(id, "KTP_TEST_SETSTATE: ok half=%d allies=%d axis=%d h1=%d,%d h2=%d,%d",
+        half, allies, axis, h1t1, h1t2, t1h2, t2h2);
     return PLUGIN_HANDLED;
 }
 
