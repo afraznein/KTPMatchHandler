@@ -663,8 +663,10 @@ public OnPfnChangeLevel(const map[], const landmark[]) {
     // globals persist across map changes, so without that reset this latch would
     // stay true for the whole process life after the first intermission.
 
-    // === PRESTART or PENDING: block changelevel during ready-up ===
-    // HC_SUPERCEDE prevents the changelevel from queuing in the command buffer.
+    // === PRESTART or PENDING: cancel the match, ALLOW the changelevel ===
+    // Nothing is blocked here — this branch returns HC_CONTINUE. A timelimit that
+    // expires during ready-up cancels the pending match and lets the map change
+    // through; blocking it would strand the game DLL in g_fGameOver.
     // Admin .changemap goes through Host_Changelevel_f, not here.
     //
     // IMPORTANT: If already processed (g_pfnChangeLevelProcessed), we already cancelled
