@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.154"
+#define PLUGIN_VERSION "0.10.155"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -4004,6 +4004,13 @@ public plugin_init() {
     g_otScoreBase[1] = 0;
     g_otScoreBase[2] = 0;
 
+    // Same rule, and now load-bearing: g_otRound gates the map-config budget
+    // reseed and g_inOvertime gates the H1 seed/score-reset/roster-clear. Safe to
+    // zero here because restore runs later, in plugin_cfg, and re-derives both
+    // from _ktp_mode.
+    g_inOvertime = false;
+    g_otRound = 0;
+
     // Reset DODX stats pause — g_bStatsPaused (C++ global) survives map change,
     // but Pawn g_roundLive resets to true. Unconditional unpause ensures clean state.
     #if defined HAS_DODX
@@ -4997,8 +5004,6 @@ stock end_match_cleanup() {
     set_task(IDLE_HINT_INTERVAL, "task_idle_hint", g_taskIdleHintId, _, _, "b");
 }
 
-// Finalize a match that was abandoned (plugin_end never ran, detected on next map load)
-// This is called when we detect mode is set but map doesn't match and match was live
 // The single clear for flags that outlive a match. Every teardown exit routes here.
 // ktp_match_competitive is an ENGINE cvar: it survives changelevel, so an exit that
 // resets the state flags but not this leaves KTPCvarChecker enforcing competitive
@@ -5016,6 +5021,8 @@ stock clear_competitive_match_flags(const reason[]) {
     // is the part that outlives the match.
 }
 
+// Close a match abandoned without plugin_end -- detected on the next map load,
+// when the saved mode is set but the map does not match and the match was live.
 stock finalize_abandoned_match(const mode[], const savedMap[]) {
     // Restore saved match context for logging
     new team1Name[32], team2Name[32];
@@ -5209,12 +5216,13 @@ stock finalize_completed_second_half() {
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_currentMap, _:g_matchType, team1Total, team2Total);
     }
 
-    // Guarded on !g_inOvertime: this function can TRIGGER overtime, and an OT round
-    // is still the same competitive match — clearing the flag there would drop
-    // enforcement mid-match. Only a match that truly ended clears it.
-    if (!g_inOvertime) {
-        clear_competitive_match_flags("second_half_complete");
-    }
+    // Unguarded, deliberately. The old !g_inOvertime guard claimed this function
+    // can trigger overtime; it cannot — g_inOvertime is set only at the localinfo
+    // restore and in EXPLICIT_OT_INIT, neither reachable from here, and the sole
+    // caller sits inside the isSecondHalf branch. So the guard could only ever
+    // fire on a STALE flag, suppressing exactly the cvar-leak clear this exists
+    // to perform.
+    clear_competitive_match_flags("second_half_complete");
 
     // Note: Caller will clear localinfo after this returns (unless OT triggered)
 }
@@ -9002,8 +9010,10 @@ public task_apply_match_config_and_start() {
         g_techBudget[1] = g_techBudgetSecs;
         g_techBudget[2] = g_techBudgetSecs;
         if (g_inOvertime) {
-            // save_ot_context persists g_otTechBudget[], not g_techBudget[] --
-            // without this, round 2 inherits the pre-config value.
+            // save_ot_state_for_next_round() persists g_otTechBudget[], not
+            // g_techBudget[] -- without this, round 2 inherits the pre-config
+            // value. (Not save_ot_context(): that is dead code, reachable only
+            // through the never-armed OT-break subsystem.)
             g_otTechBudget[1] = g_techBudgetSecs;
             g_otTechBudget[2] = g_techBudgetSecs;
         }

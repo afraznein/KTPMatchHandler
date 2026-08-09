@@ -6,33 +6,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.10.154] - 2026-08-09
-
-### Fixed
-- The map-config tech-budget reseed still excluded explicit-OT round 1. 0.10.153
-  compensated the Phase-0 seed block for that case but left the identical
-  `!g_inOvertime` gate at `task_apply_match_config_and_start` uncompensated — the
-  same defect class, at the sibling site. Round 1's budget is genuinely fresh
-  (`EXPLICIT_OT_INIT` seeds it from the same pre-config cache this block exists to
-  correct), so the gate is now `!g_inOvertime || g_otRound <= 1`, and the reseed
-  mirrors into `g_otTechBudget[]` — `save_ot_context()` persists that array, not
-  `g_techBudget[]`, so round 2 would otherwise inherit the pre-config value.
-  Latent: no map config on the fleet sets `ktp_tech_budget_seconds`.
-- The OT budget guard could refill a legitimately exhausted budget. 0.10.153
-  replaced an emptiness test with `g_otTechBudget[1] <= 0 && [2] <= 0`, but
-  `"0,0,<side>"` is exactly what `save_ot_context()` writes when both teams have
-  spent everything — so the next OT round silently refilled both to full,
-  violating the invariant stated three lines away. `parse_ot_state()` now returns
-  its field count and the guard fires on `< 3`, which still catches `""` and a
-  corrupt `"abc"` without touching a real `0,0`.
-
-### Changed
-- `end_match_cleanup`, `.cancel`-after-H1 and `.forcereset` now route through
-  `clear_competitive_match_flags()` instead of clearing the engine cvar inline.
-  All six teardown exits go through one function, so `g_otScoreBase` is cleared on
-  every one of them — previously three exits cleared the cvar and not the base,
-  while a comment claimed the stock ran "wherever a match closes".
-
 ## [Unreleased]
 
 Repo hygiene only — no plugin code change, so no version bump and no new build.
@@ -158,6 +131,60 @@ naming the disabled command as the entry point. Now `.tech`.
   `git add -f`.
 
 ---
+
+## [0.10.155] - 2026-08-09
+
+### Fixed
+- `finalize_completed_second_half` no longer guards its competitive-flag clear on
+  `!g_inOvertime`. The guard's stated reason — that this function can trigger
+  overtime — is false: `g_inOvertime` is set only at the localinfo restore and in
+  `EXPLICIT_OT_INIT`, neither reachable from here, and the sole caller sits inside
+  the `isSecondHalf` branch. So the guard could only ever fire on a **stale** flag,
+  suppressing exactly the cvar-leak clear it was added to perform.
+- `g_inOvertime` and `g_otRound` are now reset in `plugin_init()` alongside
+  `g_otScoreBase`. Plugin globals live for the whole server process, not per map,
+  and 0.10.154 promoted `g_otRound` to a correctness discriminator for the
+  map-config budget reseed — a stale value silently disables it. No live path
+  reaches either stale today (every exit that clears `_ktp_mode` clears
+  `g_inOvertime`, and restore re-derives both), so this is the latch rule applied
+  before it costs something, not a bug fix.
+
+### Changed
+- The budget-mirror comment cited `save_ot_context()`, which is **dead code** —
+  reachable only through the OT-break subsystem, whose `g_otBreakActive` is never
+  set true and whose vote task is never scheduled. The live persister of
+  `g_otTechBudget[]` is `save_ot_state_for_next_round()`, and it is also what
+  writes the `"0,0,<side>"` record the seed guard must not refill. The mirror is
+  still required; the comment now names the function that actually runs.
+- Restored `finalize_abandoned_match`'s doc comment, orphaned above
+  `clear_competitive_match_flags` when the stock was introduced.
+
+## [0.10.154] - 2026-08-09
+
+### Fixed
+- The map-config tech-budget reseed still excluded explicit-OT round 1. 0.10.153
+  compensated the Phase-0 seed block for that case but left the identical
+  `!g_inOvertime` gate at `task_apply_match_config_and_start` uncompensated — the
+  same defect class, at the sibling site. Round 1's budget is genuinely fresh
+  (`EXPLICIT_OT_INIT` seeds it from the same pre-config cache this block exists to
+  correct), so the gate is now `!g_inOvertime || g_otRound <= 1`, and the reseed
+  mirrors into `g_otTechBudget[]` — `save_ot_context()` persists that array, not
+  `g_techBudget[]`, so round 2 would otherwise inherit the pre-config value.
+  Latent: no map config on the fleet sets `ktp_tech_budget_seconds`.
+- The OT budget guard could refill a legitimately exhausted budget. 0.10.153
+  replaced an emptiness test with `g_otTechBudget[1] <= 0 && [2] <= 0`, but
+  `"0,0,<side>"` is exactly what `save_ot_context()` writes when both teams have
+  spent everything — so the next OT round silently refilled both to full,
+  violating the invariant stated three lines away. `parse_ot_state()` now returns
+  its field count and the guard fires on `< 3`, which still catches `""` and a
+  corrupt `"abc"` without touching a real `0,0`.
+
+### Changed
+- `end_match_cleanup`, `.cancel`-after-H1 and `.forcereset` now route through
+  `clear_competitive_match_flags()` instead of clearing the engine cvar inline.
+  All six teardown exits go through one function, so `g_otScoreBase` is cleared on
+  every one of them — previously three exits cleared the cvar and not the base,
+  while a comment claimed the stock ran "wherever a match closes".
 
 ## [0.10.153] - 2026-08-09
 
