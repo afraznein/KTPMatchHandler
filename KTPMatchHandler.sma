@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.152"
+#define PLUGIN_VERSION "0.10.153"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -933,7 +933,15 @@ stock bool:process_ot_round_end_changelevel() {
     // (diffs telescope), which is why wrong numbers survived this long.
     new alliesRound = g_matchScore[1] - g_otScoreBase[1];
     new axisRound   = g_matchScore[2] - g_otScoreBase[2];
-    if (alliesRound < 0) alliesRound = 0;   // a mid-round score reset must not go negative
+    if (alliesRound < 0 || axisRound < 0) {
+        // Guards a mid-round score reset, but it can also HIDE a failed restore: the
+        // base is the value go-live intended, while the write happens 12s later in
+        // task_delayed_score_restore, which can abort. A swallowed round keeps the
+        // totals tied, so OT just runs another round. Never clamp silently.
+        log_ktp("event=OT_ROUND_SCORE_UNDERFLOW round=%d allies=%d axis=%d base=%d,%d",
+                g_otRound, g_matchScore[1], g_matchScore[2], g_otScoreBase[1], g_otScoreBase[2]);
+    }
+    if (alliesRound < 0) alliesRound = 0;
     if (axisRound   < 0) axisRound   = 0;
 
     // Determine this round's scores based on which side team1 is on
@@ -4732,13 +4740,10 @@ stock restore_match_context_from_localinfo() {
         get_localinfo(LOCALINFO_OT_STATE, otStateBuf, charsmax(otStateBuf));
         parse_ot_state(otStateBuf, g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs);
 
-        // No OT state yet means this is the FIRST OT round of a tied regulation
-        // match: nothing has ever written _ktp_otst, so the parse leaves the budget
-        // at zero and .tech would be denied for the whole of OT. Seed it fresh --
-        // OT carries its own budget, separate from regulation.
-        // This used to be masked by the 1st-half seed block re-running on every OT
-        // go-live; that block is now correctly gated off for OT, so the gap is real.
-        if (otStateBuf[0] == EOS) {
+        // Defence in depth: a zero budget here would deny .tech for the whole OT.
+        // Tests the PARSED result, not the buffer -- a corrupt "abc" is non-empty and
+        // would pass an emptiness check while still parsing to zero.
+        if (g_otTechBudget[1] <= 0 && g_otTechBudget[2] <= 0) {
             g_otTechBudget[1] = g_techBudgetSecs;
             g_otTechBudget[2] = g_techBudgetSecs;
             log_ktp("event=OT_BUDGET_SEED round=%d secs=%d reason=no_prior_ot_state",
@@ -4995,6 +5000,9 @@ stock end_match_cleanup() {
 // rules on pub play until the next go-live or a manual .forcereset. end_match_cleanup,
 // .cancel and .forcereset already do this; the three restore-path finalizers did not.
 stock clear_competitive_match_flags(const reason[]) {
+    // OT per-round score base is match-scoped: clear it wherever a match closes.
+    g_otScoreBase[1] = 0;
+    g_otScoreBase[2] = 0;
     if (get_cvar_num("ktp_match_competitive")) {
         log_ktp("event=COMPETITIVE_FLAG_CLEARED reason=%s", reason);
     }
@@ -8551,6 +8559,15 @@ public cmd_ready(id) {
             g_techBudget[2]   = g_techBudgetSecs;
             g_otTechBudget[1] = g_techBudgetSecs;
             g_otTechBudget[2] = g_techBudgetSecs;
+            // EXPLICIT_OT_INIT sets g_inOvertime in this same frame, ~250 lines before
+            // the 1st-half seed block -- so that block's !g_inOvertime gate skips these
+            // two for round 1 as well. Do them here or a stale roster pins players to
+            // the previous match's team identity (add_to_match_roster refuses a SteamID
+            // already in either roster, and the Phase-2 snapshot cannot repair it), and
+            // stale scores survive because update_match_scores_from_dodx keeps its
+            // cached value when gamerules is unavailable.
+            reset_match_scores();
+            clear_match_roster();
             // Clear any previous OT scores (2D array)
             for (new r = 0; r < sizeof g_otScores; r++) {
                 g_otScores[r][0] = 0;

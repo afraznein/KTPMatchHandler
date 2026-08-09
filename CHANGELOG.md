@@ -132,6 +132,42 @@ naming the disabled command as the entry point. Now `.tech`.
 
 ---
 
+## [0.10.153] - 2026-08-09
+
+### Fixed
+
+#### Review fixes on the 0.10.151 OT cluster — including a regression 0.10.151 introduced
+
+`ktp-code-review` returned **NOT-APPROVED** on 0.10.151. It was right.
+
+**The `!g_inOvertime` gate was over-broad and silently dropped two things from explicit-OT
+round 1.** `EXPLICIT_OT_INIT` sets `g_inOvertime` in the *same frame*, ~250 lines before the
+1st-half seed block, so that block's new gate skipped round 1 as well. 0.10.151 compensated for
+one of the block's three effects (the budget seed) and dropped the other two: a stale roster
+pins players to the previous match's team identity — `add_to_match_roster` refuses a SteamID
+already in either roster and the Phase-2 snapshot cannot repair it — and stale scores survive,
+because `update_match_scores_from_dodx` keeps its cached value when gamerules is unavailable.
+Both calls now run in `EXPLICIT_OT_INIT`.
+
+**The round-underflow clamp was silent.** It guards a mid-round score reset, but it can also
+hide a failed restore: the base is what go-live *intended*, while the write happens 12s later in
+`task_delayed_score_restore`, which can abort. A swallowed round leaves the totals tied, so OT
+simply runs another round — up to `MAX_OT_ROUNDS`. It now logs `OT_ROUND_SCORE_UNDERFLOW`.
+
+**The OT-budget guard tested the wrong thing, on a false premise.** 0.10.151 claimed the seed
+covered "OT reached from a tied regulation match" — **there is no such path**: a tie logs
+`TIE_DETECTED triggering_ot=false` and requires an explicit `.ktpOT`/`.draftOT`.
+`save_ot_state_for_first_round()` has no callers because that design was *replaced*, not because
+a writer was forgotten. The guard is kept as defence-in-depth but now tests the **parsed**
+budget rather than an empty buffer — a corrupt `"abc"` is non-empty and would have passed the
+old emptiness check while still parsing to zero.
+
+`g_otScoreBase[]` now clears in `clear_competitive_match_flags()`, which the match-close exits
+funnel through, rather than relying on the producer re-initialising it.
+
+README version bumped at all four sites — the repo's own `CLAUDE.md` names this as the recurring
+miss on 0.10.146 and 0.10.147.
+
 ## [0.10.152] - 2026-08-09
 
 ### Fixed
