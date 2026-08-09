@@ -158,6 +158,12 @@ naming the disabled command as the entry point. Now `.tech`.
   still required; the comment now names the function that actually runs.
 - Restored `finalize_abandoned_match`'s doc comment, orphaned above
   `clear_competitive_match_flags` when the stock was introduced.
+- Removed the same falsehood at the three remaining sites in this call graph: a
+  dead `if (g_inOvertime) { ... return; }` branch in the restore path, the
+  "Can trigger overtime if scores are tied" function header, and an "(unless OT
+  triggered)" note. All three are unreachable by the same argument that justified
+  removing the guard, and the stale header sat three lines above the corrected
+  comment — leaving it is what would regenerate the guard on the next pass.
 
 ## [0.10.154] - 2026-08-09
 

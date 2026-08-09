@@ -4612,11 +4612,6 @@ stock restore_match_context_from_localinfo() {
             log_ktp("event=SECOND_HALF_ENDED_DETECTED match_id=%s map=%s h2_scores=%s", g_matchId, savedMatchMap, h2ScoresBuf);
             finalize_completed_second_half();
 
-            // If OT was triggered, don't clear state - OT system handles it
-            if (g_inOvertime) {
-                log_ktp("event=OVERTIME_TRIGGERED_FROM_FINALIZE");
-                return;  // OT is now pending, don't clear
-            }
 
             // Match ended normally, clear state (OT continuation already
             // returned above, so the override correctly persists into OT)
@@ -5121,8 +5116,11 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
 }
 
 // Finalize a completed 2nd half (detected when map cycled back to same map with _ktp_live="1")
-// This handles the case where plugin_end didn't run but we're on the correct map
-// Can trigger overtime if scores are tied
+// This handles the case where plugin_end didn't run but we're on the correct map.
+// It does NOT trigger overtime — a tie is announced and the match ends; OT is
+// explicit (.ktpOT / .draftOT) and starts a new match. Believing otherwise is what
+// put a !g_inOvertime guard on the flag clear below, which could then only fire on
+// a stale flag and suppress the clear.
 stock finalize_completed_second_half() {
     // Restore team names from localinfo
     new team1Name[32], team2Name[32];
@@ -5224,7 +5222,7 @@ stock finalize_completed_second_half() {
     // to perform.
     clear_competitive_match_flags("second_half_complete");
 
-    // Note: Caller will clear localinfo after this returns (unless OT triggered)
+    // Note: Caller will clear localinfo after this returns.
 }
 
 // Clear all persisted match context from localinfo
