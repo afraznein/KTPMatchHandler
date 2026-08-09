@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.151"
+#define PLUGIN_VERSION "0.10.152"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -4568,6 +4568,7 @@ stock restore_match_context_from_localinfo() {
         }
         clear_localinfo_match_context();
         reset_team_names();
+        clear_competitive_match_flags("h2_pending_abandoned");
         g_matchId[0] = EOS;
         return;
     }
@@ -4988,6 +4989,21 @@ stock end_match_cleanup() {
 
 // Finalize a match that was abandoned (plugin_end never ran, detected on next map load)
 // This is called when we detect mode is set but map doesn't match and match was live
+// Clear the flags that outlive a match on the restore-path exits.
+// ktp_match_competitive is an ENGINE cvar: it survives changelevel, so an exit that
+// resets the state flags but not this leaves KTPCvarChecker enforcing competitive
+// rules on pub play until the next go-live or a manual .forcereset. end_match_cleanup,
+// .cancel and .forcereset already do this; the three restore-path finalizers did not.
+stock clear_competitive_match_flags(const reason[]) {
+    if (get_cvar_num("ktp_match_competitive")) {
+        log_ktp("event=COMPETITIVE_FLAG_CLEARED reason=%s", reason);
+    }
+    set_cvar_num("ktp_match_competitive", 0);
+    // g_matchType is deliberately NOT reset — there is no NONE sentinel (the enum
+    // starts at COMPETITIVE = 0) and the next match start sets it. The engine cvar
+    // is the part that outlives the match.
+}
+
 stock finalize_abandoned_match(const mode[], const savedMap[]) {
     // Restore saved match context for logging
     new team1Name[32], team2Name[32];
@@ -5081,6 +5097,7 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
     g_inOvertime = false;
     g_otRound = 0;
     g_currentHalf = 0;
+    clear_competitive_match_flags("abandoned");
     disarm_ready_override("abandon");
 }
 
@@ -5178,6 +5195,13 @@ stock finalize_completed_second_half() {
     {
         new ret;
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_currentMap, _:g_matchType, team1Total, team2Total);
+    }
+
+    // Guarded on !g_inOvertime: this function can TRIGGER overtime, and an OT round
+    // is still the same competitive match — clearing the flag there would drop
+    // enforcement mid-match. Only a match that truly ended clears it.
+    if (!g_inOvertime) {
+        clear_competitive_match_flags("second_half_complete");
     }
 
     // Note: Caller will clear localinfo after this returns (unless OT triggered)

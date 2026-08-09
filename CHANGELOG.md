@@ -132,6 +132,31 @@ naming the disabled command as the entry point. Now `.tech`.
 
 ---
 
+## [0.10.152] - 2026-08-09
+
+### Fixed
+
+#### Abandoned matches left `ktp_match_competitive` set
+
+`ktp_match_competitive` is an **engine cvar**, so it survives a changelevel. Three restore-path
+exits reset the match state flags but not the cvar — `finalize_abandoned_match`,
+`finalize_completed_second_half`, and the `h2_pending_abandoned` branch — while
+`end_match_cleanup`, `.cancel` and `.forcereset` all did. After an abandoned official match,
+KTPCvarChecker therefore kept enforcing competitive rules on pub play until the next go-live or a
+manual `.forcereset`.
+
+All three now route through one `clear_competitive_match_flags()` stock rather than three copies,
+the same reasoning as the teardown stock — three hand-rolled copies is how the exits diverged in
+the first place. It logs `COMPETITIVE_FLAG_CLEARED` only when the flag was actually set.
+
+⚠️ The `finalize_completed_second_half` call is guarded on `!g_inOvertime`: that function can
+**trigger** overtime, and an OT round is still the same competitive match — clearing there would
+drop enforcement mid-match.
+
+`g_matchType` is deliberately not reset: the enum has no NONE sentinel (it starts at
+COMPETITIVE = 0) and the next match start sets it. The engine cvar is the part that outlives the
+match.
+
 ## [0.10.151] - 2026-08-09
 
 ### Fixed
