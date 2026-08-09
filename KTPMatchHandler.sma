@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.153"
+#define PLUGIN_VERSION "0.10.154"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -2034,15 +2034,19 @@ stock format_ot_state(buf[], maxlen, techA, techX, side) {
 }
 
 // Parse OT state: "techA,techX,side"
+// Returns the field count so a caller can tell "never written" from "written as
+// zero" -- "0,0,<side>" is what a fully-spent OT budget serializes to, and
+// re-seeding on that would refill it.
 stock parse_ot_state(const buf[], &techA, &techX, &side) {
     techA = 0; techX = 0; side = 1;
-    if (!buf[0]) return;
+    if (!buf[0]) return 0;
 
     new parts[3][12];
     new count = explode_string(buf, ",", parts, 3, 11);
     if (count >= 1) techA = str_to_num(parts[0]);
     if (count >= 2) techX = str_to_num(parts[1]);
     if (count >= 3) side  = str_to_num(parts[2]);
+    return count;
 }
 
 // Append OT round score to OT scores string: "t1,t2|t1,t2|..."
@@ -4738,16 +4742,17 @@ stock restore_match_context_from_localinfo() {
         // Restore OT state: techA,techX,side
         new otStateBuf[32];
         get_localinfo(LOCALINFO_OT_STATE, otStateBuf, charsmax(otStateBuf));
-        parse_ot_state(otStateBuf, g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs);
+        new otStateFields = parse_ot_state(otStateBuf, g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs);
 
         // Defence in depth: a zero budget here would deny .tech for the whole OT.
-        // Tests the PARSED result, not the buffer -- a corrupt "abc" is non-empty and
-        // would pass an emptiness check while still parsing to zero.
-        if (g_otTechBudget[1] <= 0 && g_otTechBudget[2] <= 0) {
+        // Gated on the FIELD COUNT, not on the parsed values -- "" and a corrupt
+        // "abc" come back short, while "0,0,<side>" is a complete record of both
+        // teams having spent everything, and must not be refilled.
+        if (otStateFields < 3) {
             g_otTechBudget[1] = g_techBudgetSecs;
             g_otTechBudget[2] = g_techBudgetSecs;
-            log_ktp("event=OT_BUDGET_SEED round=%d secs=%d reason=no_prior_ot_state",
-                    g_otRound, g_techBudgetSecs);
+            log_ktp("event=OT_BUDGET_SEED round=%d secs=%d fields=%d reason=unparseable_ot_state",
+                    g_otRound, g_techBudgetSecs, otStateFields);
         }
 
         // Set tech budgets for this OT round
@@ -4959,7 +4964,7 @@ stock end_match_cleanup() {
     // CvarChecker keys enforcement off this cvar; without the reset it kept
     // enforcing competitive rules on pub play after every match (only the
     // .forcereset path cleared it).
-    set_cvar_num("ktp_match_competitive", 0);
+    clear_competitive_match_flags("end_match_cleanup");
 
     // Disarm the ready-limit/solo override — same only-.forcereset-cleared
     // class of leak as ktp_match_competitive above: an override armed for a
@@ -4994,13 +4999,12 @@ stock end_match_cleanup() {
 
 // Finalize a match that was abandoned (plugin_end never ran, detected on next map load)
 // This is called when we detect mode is set but map doesn't match and match was live
-// Clear the flags that outlive a match on the restore-path exits.
+// The single clear for flags that outlive a match. Every teardown exit routes here.
 // ktp_match_competitive is an ENGINE cvar: it survives changelevel, so an exit that
 // resets the state flags but not this leaves KTPCvarChecker enforcing competitive
-// rules on pub play until the next go-live or a manual .forcereset. end_match_cleanup,
-// .cancel and .forcereset already do this; the three restore-path finalizers did not.
+// rules on pub play until the next go-live or a manual .forcereset.
 stock clear_competitive_match_flags(const reason[]) {
-    // OT per-round score base is match-scoped: clear it wherever a match closes.
+    // OT per-round score base is match-scoped.
     g_otScoreBase[1] = 0;
     g_otScoreBase[2] = 0;
     if (get_cvar_num("ktp_match_competitive")) {
@@ -7580,7 +7584,7 @@ public cmd_cancel(id) {
         // it for official types). Kept so a future change to either the gate or
         // the go-live set can't leave KTPCvarChecker enforcing competitive rules
         // into casual play.
-        set_cvar_num("ktp_match_competitive", 0);
+        clear_competitive_match_flags("cancel_after_h1");
 
         // Send Discord BEFORE resetting match type (routing depends on g_matchType)
         if (g_discordRelayUrl[0]) {
@@ -7865,7 +7869,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     // Reset match type
     g_matchType = MATCH_TYPE_COMPETITIVE;
     g_disableDiscord = false;
-    set_cvar_num("ktp_match_competitive", 0);  // Reset competitive mode indicator
+    clear_competitive_match_flags("forcereset");
 
     // Clear team names
     reset_team_names();
@@ -8988,13 +8992,23 @@ public task_apply_match_config_and_start() {
     // map config just changed ktp_tech_budget_seconds, re-seed — but only a
     // fresh match with untouched budgets (budget is per-match; a consumed
     // budget must never be refilled).
-    // !g_inOvertime for the same reason as the Phase-0 seed block: an OT round
-    // runs with g_currentHalf == 1, and its budget is restored, not fresh.
-    if (g_currentHalf == 1 && !g_inOvertime && g_techBudgetSecs != prevBudgetSecs
+    // An OT round also runs with g_currentHalf == 1, but only round 1 has a
+    // fresh budget: rounds 2+ restore theirs from _ktp_otst, so a reseed there
+    // is a refill. Round 1's was seeded by EXPLICIT_OT_INIT from the same
+    // pre-config cache, which is exactly what this block exists to correct.
+    new bool:freshBudget = (!g_inOvertime || g_otRound <= 1);
+    if (g_currentHalf == 1 && freshBudget && g_techBudgetSecs != prevBudgetSecs
         && g_techBudget[1] == prevBudgetSecs && g_techBudget[2] == prevBudgetSecs) {
         g_techBudget[1] = g_techBudgetSecs;
         g_techBudget[2] = g_techBudgetSecs;
-        log_ktp("event=TECH_BUDGET_RESEED old=%d new=%d reason=map_config_override", prevBudgetSecs, g_techBudgetSecs);
+        if (g_inOvertime) {
+            // save_ot_context persists g_otTechBudget[], not g_techBudget[] --
+            // without this, round 2 inherits the pre-config value.
+            g_otTechBudget[1] = g_techBudgetSecs;
+            g_otTechBudget[2] = g_techBudgetSecs;
+        }
+        log_ktp("event=TECH_BUDGET_RESEED old=%d new=%d ot=%d reason=map_config_override",
+                prevBudgetSecs, g_techBudgetSecs, g_inOvertime ? g_otRound : 0);
     }
 }
 
