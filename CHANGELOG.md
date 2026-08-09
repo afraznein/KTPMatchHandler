@@ -132,6 +132,44 @@ naming the disabled command as the entry point. Now `.tech`.
 
 ---
 
+## [0.10.151] - 2026-08-09
+
+### Fixed
+
+#### The OT correctness cluster — three coupled bugs, one fix
+
+Reachable in **every multi-round overtime**. They had to be fixed together: fixing the first
+alone makes the second strictly worse.
+
+**1. OT go-live re-ran the 1st-half seed block.** An OT round sets `g_currentHalf = 1` so
+`handle_map_change` can detect it, which also satisfied the new-match gate. Every OT round
+therefore refilled the tech budget it had just restored, called `reset_match_scores()` — which
+re-derives team1/team2 names from *current sides*, so **round 3+ announced the wrong team as
+winner** — and wiped the roster, which Phase 2 then re-captured inverted on Axis-start rounds.
+Numeric attribution keys on `g_otTeam1StartsAs` and stayed correct throughout; every
+human-facing label did not. Both the Phase-0 seed block and the map-config budget reseed are
+now gated on `!g_inOvertime`.
+
+**2. The OT tech budget was never seeded — masked by bug 1.** With bug 1 fixed, an OT round
+would have opened at **zero budget**, denying `.tech` in the pending window, which is exactly
+when someone who dropped on the map change needs it. Two entry points needed seeding, not one:
+`EXPLICIT_OT_INIT` for `.ktpOT`/`.draftOT`, and the localinfo restore path for OT reached from
+a tied regulation match — the latter had **no seed at all**, because
+`save_ot_state_for_first_round()` has zero callers and never wrote the state key. A missing
+`_ktp_otst` now seeds a fresh budget and logs `OT_BUDGET_SEED`.
+
+**3. OT round scores double-counted from round 2.** Round end read the scoreboard as *this
+round's* score, but go-live deliberately restores it to grand totals, so `g_otScores[]`
+compounded. Every announcement, embed, `.score`, `MATCH_END_OT` and `_ktp_ots` value was
+inflated. **The winner was provably unaffected** — diffs telescope and rounds only continue at
+diff 0 — which is why it survived: tied rounds are usually 0-0, so the first 1-1 round is what
+exposes it. Go-live now records the per-side base it restored (`g_otScoreBase[]`) and round end
+subtracts it, clamped at 0 so a mid-round score reset cannot go negative.
+
+`g_otScoreBase[]` is cleared in `plugin_init()` alongside the other latches — extension-mode
+globals live for the whole process, so a stale base would under-report the next match's first
+OT round.
+
 ## [0.10.150] - 2026-08-04
 
 Makes `.setstate` reachable from the Tier-2 integration harness. `.setstate`

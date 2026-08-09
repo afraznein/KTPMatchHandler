@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.150"
+#define PLUGIN_VERSION "0.10.151"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -335,6 +335,11 @@ new g_regulationScore[3];           // Regulation totals [1]=team1, [2]=team2
 #define MAX_OT_ROUNDS 31
 new g_otScores[MAX_OT_ROUNDS + 1][3]; // OT scores per round [round][team] - indices 1..MAX_OT_ROUNDS
 new g_otTechBudget[3];              // OT tech budgets (reset once at OT start)
+// Per-SIDE scoreboard value this OT round started from. go-live restores grand
+// totals to the scoreboard, so round end must subtract this or g_otScores[]
+// compounds from round 2 on. Zero means nothing was restored, so nothing to
+// subtract -- keep it that way if the dodx restore below does not run.
+new g_otScoreBase[3];
 new g_otTeam1StartsAs = 0;          // Which side team1 starts on this OT round (1=Allies, 2=Axis)
 new bool:g_otBreakActive = false;   // Break in progress before OT
 new g_otBreakVotes[33];             // Player votes for break (0=none, 1=yes)
@@ -921,14 +926,24 @@ stock bool:process_ot_round_end_changelevel() {
     // Get current scoreboard scores
     update_match_scores_from_dodx();
 
+    // The scoreboard carries GRAND totals -- go-live restored them -- so this
+    // round's score is the delta since then, not the raw value. Without the
+    // subtraction g_otScores[] compounds from round 2 and every announcement,
+    // embed, .score and _ktp_ots value is inflated. The winner is unaffected
+    // (diffs telescope), which is why wrong numbers survived this long.
+    new alliesRound = g_matchScore[1] - g_otScoreBase[1];
+    new axisRound   = g_matchScore[2] - g_otScoreBase[2];
+    if (alliesRound < 0) alliesRound = 0;   // a mid-round score reset must not go negative
+    if (axisRound   < 0) axisRound   = 0;
+
     // Determine this round's scores based on which side team1 is on
     new team1RoundScore, team2RoundScore;
     if (g_otTeam1StartsAs == 1) {
-        team1RoundScore = g_matchScore[1];
-        team2RoundScore = g_matchScore[2];
+        team1RoundScore = alliesRound;
+        team2RoundScore = axisRound;
     } else {
-        team1RoundScore = g_matchScore[2];
-        team2RoundScore = g_matchScore[1];
+        team1RoundScore = axisRound;
+        team2RoundScore = alliesRound;
     }
 
     // Record this round's scores
@@ -3972,6 +3987,11 @@ public plugin_init() {
     g_setStatePendingSid[0] = EOS;
     g_setStateTime = 0.0;
 
+    // OT per-round score base — same reason: a stale base would under-report the
+    // first OT round of the next match on this process.
+    g_otScoreBase[1] = 0;
+    g_otScoreBase[2] = 0;
+
     // Reset DODX stats pause — g_bStatsPaused (C++ global) survives map change,
     // but Pawn g_roundLive resets to true. Unconditional unpause ensures clean state.
     #if defined HAS_DODX
@@ -4710,6 +4730,19 @@ stock restore_match_context_from_localinfo() {
         new otStateBuf[32];
         get_localinfo(LOCALINFO_OT_STATE, otStateBuf, charsmax(otStateBuf));
         parse_ot_state(otStateBuf, g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs);
+
+        // No OT state yet means this is the FIRST OT round of a tied regulation
+        // match: nothing has ever written _ktp_otst, so the parse leaves the budget
+        // at zero and .tech would be denied for the whole of OT. Seed it fresh --
+        // OT carries its own budget, separate from regulation.
+        // This used to be masked by the 1st-half seed block re-running on every OT
+        // go-live; that block is now correctly gated off for OT, so the gap is real.
+        if (otStateBuf[0] == EOS) {
+            g_otTechBudget[1] = g_techBudgetSecs;
+            g_otTechBudget[2] = g_techBudgetSecs;
+            log_ktp("event=OT_BUDGET_SEED round=%d secs=%d reason=no_prior_ot_state",
+                    g_otRound, g_techBudgetSecs);
+        }
 
         // Set tech budgets for this OT round
         g_techBudget[1] = g_otTechBudget[1];
@@ -8484,6 +8517,16 @@ public cmd_ready(id) {
             g_regulationScore[1] = 0;     // Independent OT - no regulation scores
             g_regulationScore[2] = 0;
             g_otTeam1StartsAs = 1;        // Team 1 starts as Allies
+            g_otScoreBase[1] = 0;
+            g_otScoreBase[2] = 0;
+            // Seed both budgets here. The H1 seed block no longer runs for OT, and
+            // without this an OT round-2 pending window opens at zero budget --
+            // denying .tech exactly when someone who dropped on the map change
+            // needs it. OT carries its own budget, separate from regulation.
+            g_techBudget[1]   = g_techBudgetSecs;
+            g_techBudget[2]   = g_techBudgetSecs;
+            g_otTechBudget[1] = g_techBudgetSecs;
+            g_otTechBudget[2] = g_techBudgetSecs;
             // Clear any previous OT scores (2D array)
             for (new r = 0; r < sizeof g_otScores; r++) {
                 g_otScores[r][0] = 0;
@@ -8522,6 +8565,8 @@ public cmd_ready(id) {
             // OVERTIME ROUND
             g_secondHalfPending = false;
             g_currentHalf = 1;  // Use half=1 for OT round detection in handle_map_change
+            g_otScoreBase[1] = 0;  // stays 0 unless the restore below actually runs
+            g_otScoreBase[2] = 0;
             formatex(halfText, charsmax(halfText), "OT%d", g_otRound);
 
             // Calculate running OT totals
@@ -8568,6 +8613,10 @@ public cmd_ready(id) {
                 // Sync g_matchScore for embed calculations
                 g_matchScore[1] = alliesScore;
                 g_matchScore[2] = axisScore;
+
+                // Round end subtracts this to get THIS round's score.
+                g_otScoreBase[1] = alliesScore;
+                g_otScoreBase[2] = axisScore;
 
                 log_ktp("event=OT_SCOREBOARD_RESTORE round=%d allies=%d axis=%d team1_total=%d team2_total=%d",
                         g_otRound, alliesScore, axisScore, team1GrandTotal, team2GrandTotal);
@@ -8704,8 +8753,12 @@ public cmd_ready(id) {
         set_cvar_num("ktp_match_competitive", isCompetitive);
 
         // Reset tech budgets only for NEW matches (1st half), not 2nd half continuation
-        // Tech budget persists across halves (per-match budget, not per-half)
-        if (g_currentHalf == 1) {
+        // Tech budget persists across halves (per-match budget, not per-half).
+        // !g_inOvertime is load-bearing: an OT round sets g_currentHalf = 1 for
+        // handle_map_change's benefit, which otherwise re-enters this block every
+        // round -- refilling the budget it just restored, and re-deriving the team
+        // names from current sides so round 3+ announces the wrong winner.
+        if (g_currentHalf == 1 && !g_inOvertime) {
             g_techBudget[1]   = g_techBudgetSecs;
             g_techBudget[2]   = g_techBudgetSecs;
             // Reset match scores for new match (1st half only)
@@ -8894,7 +8947,9 @@ public task_apply_match_config_and_start() {
     // map config just changed ktp_tech_budget_seconds, re-seed — but only a
     // fresh match with untouched budgets (budget is per-match; a consumed
     // budget must never be refilled).
-    if (g_currentHalf == 1 && g_techBudgetSecs != prevBudgetSecs
+    // !g_inOvertime for the same reason as the Phase-0 seed block: an OT round
+    // runs with g_currentHalf == 1, and its budget is restored, not fresh.
+    if (g_currentHalf == 1 && !g_inOvertime && g_techBudgetSecs != prevBudgetSecs
         && g_techBudget[1] == prevBudgetSecs && g_techBudget[2] == prevBudgetSecs) {
         g_techBudget[1] = g_techBudgetSecs;
         g_techBudget[2] = g_techBudgetSecs;
