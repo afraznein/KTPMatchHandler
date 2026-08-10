@@ -32,7 +32,17 @@ echo
 # Path Configuration
 # ============================================
 
-KTPAMXX_DIR="/mnt/n/Nein_/KTP Git Projects/KTPAMXX"
+# Resolve KTPAMXX. Order: explicit override -> sibling checkout -> the path this
+# script used to hardcode. A contributor who clones the repos side by side gets
+# the sibling case for free; nobody has to edit this file to build, which they
+# previously did.
+if [ -n "${KTPAMXX_ROOT:-}" ]; then
+    KTPAMXX_DIR="$KTPAMXX_ROOT"
+elif [ -d "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../KTPAMXX" ]; then
+    KTPAMXX_DIR="$(cd "$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/../KTPAMXX" && pwd)"
+else
+    KTPAMXX_DIR="/mnt/n/Nein_/KTP Git Projects/KTPAMXX"
+fi
 KTPAMXX_BUILD="$KTPAMXX_DIR/obj-linux/packages/base/addons/ktpamx/scripting"
 KTPAMXX_INCLUDES="$KTPAMXX_DIR/plugins/include"
 
@@ -48,7 +58,15 @@ if [ "$TEST_MODE" = "1" ]; then
 else
     OUTPUT_DIR="$SCRIPT_DIR/compiled"
 fi
-STAGE_DIR="/mnt/n/Nein_/KTP Git Projects/KTP DoD Server/serverfiles/dod/addons/ktpamx/plugins"
+# Staging is the maintainer's local test tree; overridable, and every
+# call site already skips it when absent, so a contributor just builds.
+STAGE_DIR="${KTP_STAGING_DIR:-/mnt/n/Nein_/KTP Git Projects/KTP DoD Server/serverfiles/dod/addons/ktpamx/plugins}"
+# Set KTP_NO_STAGE=1 to build WITHOUT touching the staging tree. Verifying a
+# change to this script must not overwrite a staged artifact whose md5 is
+# pinned to a reviewed build -- doing exactly that churned a wave pin on
+# 2026-08-10. Every stage call site already tests -d, so a sentinel disables it.
+[ -n "${KTP_NO_STAGE:-}" ] && STAGE_DIR="(staging disabled by KTP_NO_STAGE)"
+
 
 TEMP_BUILD="/tmp/ktpbuild"
 
