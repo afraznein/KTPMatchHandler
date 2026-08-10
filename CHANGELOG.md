@@ -198,6 +198,14 @@ naming the disabled command as the entry point. Now `.tech`.
   first one shed". Anything that gives a shed player bytes (a stub row, say) silently breaks the
   fairness rotation without breaking anything visible.
 
+### Third review pass (`ktp-code-review`, 2026-08-10)
+- **The headroom guard is derived from `KEEP_WINDOWS` instead of being a bare literal.** The buffer
+  was re-derived when retention went 8→16; the `768` guard beside it was not, leaving **67 bytes** of
+  margin against a practical-worst row. Its failure mode is worse than the truncation it prevents: a
+  row cut mid-token is **malformed JSON**, so the API rejects the payload for *every* player, silently,
+  while the log still reports `truncated=0` because nothing was shed. `AIM_ROW_MAX` now follows
+  `AIM_KEEP_WINDOWS` automatically.
+
 ## [0.10.156] - 2026-08-10
 
 ### Added

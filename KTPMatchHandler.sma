@@ -175,14 +175,28 @@ new g_weaponTimelineJsonBuf[14336];             // 14KB JSON payload scratch —
 // MAX_PLAYERS bound rather than at an assumed roster size. Preallocated for the
 // same reason as the buffer above -- never on the stack.
 //
-// Re-derive this whenever DODX's KEEP_WINDOWS changes: the cost is a ~131-byte
-// per-player header plus KEEP_WINDOWS x ~34 bytes, taken at MAX_PLAYERS. At
-// KEEP_WINDOWS 16 that is 32 x (131 + 544) + envelope = ~21.7KB, so 24576 clears
-// it with the 768-byte headroom guard still intact.
+// Sized FROM the constants below rather than from a measured example, because the
+// last two times this was a hand-computed literal it was wrong in one direction or
+// the other. Change AIM_KEEP_WINDOWS to match DODX and both the buffer and the
+// headroom guard follow.
 new g_aimGeometryJsonBuf[24576];
 // Rotating start slot. Truncation must not always fall on the same player: a fixed
 // scan order turns "the payload was full" into "this one player is never measured".
 new g_aimFlushCursor = 1;
+
+// Payload arithmetic, kept as constants so the headroom guard cannot drift from the
+// buffer the way a bare literal did. Must match DODX's KTPAim::KEEP_WINDOWS.
+#define AIM_KEEP_WINDOWS   16
+// One window renders as [dur,slope,rms,n] plus its separator: 5 brackets/commas +
+// 6 + 8 + 9 + 6 digits at their practical maxima.
+#define AIM_WINDOW_BYTES   35
+// Header at its worst: a 39-char authid, three ints at 11, and 67 bytes of literals.
+#define AIM_HEADER_BYTES   139
+// What one player can cost, which is exactly what the guard must reserve. Leaving
+// this as a literal is how it ended up 67 bytes from overflowing: a row cut mid-token
+// yields MALFORMED JSON, the API rejects the whole payload for every player, and the
+// log still says truncated=0 because nothing was shed.
+#define AIM_ROW_MAX        (AIM_HEADER_BYTES + AIM_KEEP_WINDOWS * AIM_WINDOW_BYTES + 8)
 
 // Baseline recording mode — when ktp_ac_baseline_mode is 1, weapon-timeline
 // batches upload under a synthetic match_id ("baseline-<host>-<unixts>")
@@ -2860,7 +2874,7 @@ stock send_ac_aim_geometry_batch() {
         // Headroom for this player's windows plus the closing braces. Count the
         // shed players rather than breaking silently -- a bounded table that drops
         // rows without saying so reads as "nothing to report".
-        if (pos > buflen - 768) {
+        if (pos > buflen - AIM_ROW_MAX) {
             truncated++;
             continue;
         }
