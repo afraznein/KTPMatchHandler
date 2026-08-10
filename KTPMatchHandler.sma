@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.155"
+#define PLUGIN_VERSION "0.10.156"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -167,6 +167,11 @@ new g_hitCount = 0;
 new g_hitDropped = 0;
 
 new g_weaponTimelineJsonBuf[14336];             // 14KB JSON payload scratch — preallocated, NEVER on stack
+// Aim-geometry payload. Smaller than the weapon timeline because it is bounded
+// by PLAYERS x KEEP_WINDOWS rather than by event rate: 12 players x 8 windows x
+// ~26 bytes plus per-player headers, so 4KB is ~2x the worst case. Preallocated
+// for the same reason as the buffer above -- never on the stack.
+new g_aimGeometryJsonBuf[4096];
 
 // Baseline recording mode — when ktp_ac_baseline_mode is 1, weapon-timeline
 // batches upload under a synthetic match_id ("baseline-<host>-<unixts>")
@@ -2764,6 +2769,103 @@ stock send_ac_weapon_timeline_batch() {
     g_hitDropped = 0;
 }
 
+// =============== Aim-geometry batch (blind audit 2.4 / 2.6) ===============
+// DODX samples sustained-fire aim geometry and ground contact once per usercmd
+// and holds it in fixed per-player storage. This drains that to the API on the
+// same cadence as the weapon timeline.
+//
+// SHAPE ONLY, NO JUDGEMENT — here or in DODX. Both layers are public, so a
+// threshold in either is a published threshold and a reader can sit just
+// outside it. What the numbers mean is decided server-side.
+//
+// Reset regardless of HTTP outcome, matching the sibling batch above: DODX's
+// buffer is fixed-size and evicts by smallest residual, so a retry would not
+// recover anything and WOULD re-send windows the API already stored.
+stock send_ac_aim_geometry_batch() {
+    if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !g_acServerEndpoint[0]) return;
+
+    new matchId[64];
+    dodx_get_match_id(matchId, charsmax(matchId));
+    // No synthetic-id fallback here, unlike the weapon timeline: baseline mode
+    // exists to capture spray patterns on demand, and aim geometry outside a
+    // match is warmup noise that would dilute the very distribution this feeds.
+    if (!matchId[0]) {
+        for (new i = 1; i <= MAX_PLAYERS; i++)
+            if (is_user_connected(i)) dodx_reset_aim_stats(i);
+        return;
+    }
+
+    new pos = 0;
+    new buflen = sizeof(g_aimGeometryJsonBuf) - 1;
+    pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos,
+        "{^"matchId^":^"%s^",^"server^":^"%s^",^"players^":[", matchId, g_acServerEndpoint);
+
+    new stats[5], win[4], authid[40];
+    new emitted = 0, windowsEmitted = 0;
+
+    for (new id = 1; id <= MAX_PLAYERS; id++) {
+        if (!is_user_connected(id) || is_user_bot(id)) continue;
+        if (!dodx_get_aim_stats(id, stats)) continue;
+
+        // Nothing observed is not the same as nothing to say -- but it is not
+        // worth a row either, and an empty row per player per interval would be
+        // most of the payload on a quiet server.
+        if (stats[0] == 0 && stats[2] == 0) { dodx_reset_aim_stats(id); continue; }
+
+        get_user_authid(id, authid, charsmax(authid));
+
+        // Leave headroom for this player's windows plus the closing braces;
+        // 8 windows * ~64 bytes + the player header.
+        if (pos > buflen - 768) break;
+
+        if (emitted > 0) pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos, ",");
+        pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos,
+            "{^"steamId^":^"%s^",^"windows^":%d,^"groundTouches^":%d,^"shortContacts^":%d,^"maxConsecShort^":%d,^"w^":[",
+            authid, stats[0], stats[2], stats[3], stats[4]);
+
+        new wEmitted = 0;
+        for (new slot = 0; slot < stats[1]; slot++) {
+            if (!dodx_get_aim_window(id, slot, win)) continue;
+            if (wEmitted > 0) pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos, ",");
+            // dur ms, slope milli-deg/s, residual micro-deg, samples. Integers
+            // end to end: a float round-trip through Pawn and JSON is where a
+            // comparison silently shifts.
+            pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos,
+                "[%d,%d,%d,%d]", win[0], win[1], win[2], win[3]);
+            wEmitted++;
+            windowsEmitted++;
+        }
+
+        pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos, "]}");
+        emitted++;
+        dodx_reset_aim_stats(id);
+    }
+
+    pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos, "]}");
+
+    if (emitted == 0) return;
+
+    new url[256];
+    formatex(url, charsmax(url), "%s/api/match/aim-geometry-batch", g_acApiBaseUrl);
+
+    new CURL:curl = curl_easy_init();
+    if (!curl) {
+        log_ktp("event=AC_ERROR reason='curl_init_failed' endpoint=aim-geometry-batch");
+        return;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_acCurlHeaders);
+    curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_aimGeometryJsonBuf);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
+
+    log_ktp("event=AC_AIM_GEOMETRY_SEND match_id=%s players=%d windows=%d bytes=%d",
+        matchId, emitted, windowsEmitted, pos);
+
+    curl_easy_perform(curl, "ac_callback");
+}
+
 #endif  // HAS_CURL
 
 // ================ 0.5.0 Weapon Timeline Forward Handlers ================
@@ -2925,6 +3027,9 @@ public client_damage(att, vic, dmg, wpn, hitplace, TA) {
 public task_flush_weapon_timeline() {
 #if defined HAS_CURL
     send_ac_weapon_timeline_batch();
+    // Same cadence, same task: a second timer would drift against this one and
+    // make two payloads describing the same interval disagree about its bounds.
+    send_ac_aim_geometry_batch();
 #endif
 }
 

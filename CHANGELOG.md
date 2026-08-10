@@ -132,6 +132,37 @@ naming the disabled command as the entry point. Now `.tech`.
 
 ---
 
+## [0.10.156] - 2026-08-10
+
+### Added
+- **Aim-geometry batch upload (`POST /api/match/aim-geometry-batch`).** Drains the per-usercmd aim and
+  ground-contact sampling that DODX 2.7.27 accumulates, on the existing weapon-timeline flush cadence.
+
+  **Requires DODX 2.7.27 or later** — it calls `dodx_get_aim_stats`, `dodx_get_aim_window` and
+  `dodx_reset_aim_stats`, which do not exist before it. Deploy the module first, or this plugin loads
+  without its natives.
+
+  **Shape only, no judgement**, here or in DODX. Both layers are public repositories, so a threshold
+  in either is a published threshold and a reader can sit just outside it. What the numbers mean is
+  decided server-side, where the reasoning is not readable.
+
+  Details worth keeping:
+  - **Fires from the existing flush task, not a new timer.** A second timer would drift against the
+    first and make two payloads describing the same interval disagree about its bounds.
+  - **No synthetic-match-id fallback**, unlike the weapon timeline. Baseline mode exists to capture
+    spray patterns on demand; aim geometry outside a match is warmup noise that would dilute the
+    distribution this feeds. Outside a match the accumulators are drained and discarded.
+  - **Counters reset regardless of HTTP outcome**, matching the sibling batch. DODX's storage is
+    fixed-size and evicts by smallest residual, so a retry recovers nothing and *would* re-send
+    windows the API already stored.
+  - **Integers end to end** — durations in ms, slopes in milli-deg/s, residuals in micro-deg. A float
+    round-trip through Pawn and then JSON is where a comparison silently shifts; micro-degrees because
+    the interesting range is fractions of a degree.
+  - Players with nothing observed are skipped rather than emitted empty; on a quiet server empty rows
+    would be most of the payload.
+
+---
+
 ## [0.10.155] - 2026-08-09
 
 ### Fixed
