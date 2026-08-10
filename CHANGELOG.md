@@ -206,6 +206,13 @@ naming the disabled command as the entry point. Now `.tech`.
   while the log still reports `truncated=0` because nothing was shed. `AIM_ROW_MAX` now follows
   `AIM_KEEP_WINDOWS` automatically.
 
+### Fourth review pass (`ktp-code-review`, 2026-08-10)
+- **Module/plugin retention mismatch is now an observable event.** `AIM_KEEP_WINDOWS` must match
+  DODX's `KTPAim::KEEP_WINDOWS`, and nothing enforced that across two repositories. If the module ever
+  retained more than the plugin budgeted, the row would exceed `AIM_ROW_MAX` and the payload would
+  malform **silently, with `truncated=0`**. The loop now bounds on the plugin's own budget and logs
+  `AC_AIM_KEEP_MISMATCH` once per boot, using data it already had.
+
 ## [0.10.156] - 2026-08-10
 
 ### Added

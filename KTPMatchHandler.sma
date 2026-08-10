@@ -183,6 +183,8 @@ new g_aimGeometryJsonBuf[24576];
 // Rotating start slot. Truncation must not always fall on the same player: a fixed
 // scan order turns "the payload was full" into "this one player is never measured".
 new g_aimFlushCursor = 1;
+// One-shot: a module/plugin retention mismatch is a build-pairing fault, not an event.
+new bool: g_aimKeepMismatchLogged = false;
 
 // Payload arithmetic, kept as constants so the headroom guard cannot drift from the
 // buffer the way a bare literal did. Must match DODX's KTPAim::KEEP_WINDOWS.
@@ -2884,8 +2886,18 @@ stock send_ac_aim_geometry_batch() {
             "{^"steamId^":^"%s^",^"windows^":%d,^"groundTouches^":%d,^"shortestGroundMs^":%d,^"w^":[",
             authid, stats[0], stats[2], stats[3]);
 
+        // stats[1] is DODX's keptCount, bounded by ITS KEEP_WINDOWS. If the module
+        // ever retains more than this plugin budgeted for, the row exceeds AIM_ROW_MAX
+        // and the payload malforms silently with truncated=0 -- so say it out loud
+        // rather than rely on the two constants being kept in step by hand.
+        if (stats[1] > AIM_KEEP_WINDOWS && !g_aimKeepMismatchLogged) {
+            g_aimKeepMismatchLogged = true;
+            log_ktp("event=AC_AIM_KEEP_MISMATCH module_kept=%d plugin_budget=%d",
+                    stats[1], AIM_KEEP_WINDOWS);
+        }
+
         new wEmitted = 0;
-        for (new slot = 0; slot < stats[1]; slot++) {
+        for (new slot = 0; slot < stats[1] && wEmitted < AIM_KEEP_WINDOWS; slot++) {
             if (!dodx_get_aim_window(id, slot, win)) continue;
             if (wEmitted > 0) pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos, ",");
             // dur ms, slope milli-deg/s, residual micro-deg, samples. Integers
