@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.156"
+#define PLUGIN_VERSION "0.10.157"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -1586,6 +1586,16 @@ stock schedule_score_restoration() {
 // The UDP log isn't sent correctly when log_message() is called immediately after dodx_flush_all_stats()
 // due to engine state timing issues. Adding a small delay allows the engine to stabilize.
 public task_delayed_match_start_log() {
+    // Same refusal as task_roundlive_match_context, because this is an independent
+    // emitter of KTP_MATCH_START -- guarding only the other one leaves the hole open
+    // on whichever path happens to run. See there for why an empty id is worse than
+    // an absent one.
+    if (!g_delayedMatchId[0]) {
+        log_ktp("event=MATCH_START_REFUSED reason='empty_match_id' map=%s half=%s path=delayed",
+                g_delayedMap, g_delayedHalf);
+        return;
+    }
+
     // One-shot guard: prevent rapid-fire if engine reentrancy causes multiple task fires
     if (g_matchStartLogFired) return;
     g_matchStartLogFired = true;
@@ -1663,6 +1673,18 @@ public msg_RoundState() {
 // Fires when round goes live after match start — sets match context in DODX and logs KTP_MATCH_START
 public task_roundlive_match_context() {
     if (!g_matchLive) return;
+
+    // Refuse to announce a half with no match id rather than logging an empty one.
+    // hlstats' getProperties parses (matchid "") by slurping past the empty quote
+    // pair to the NEXT one, so an empty id does not read as absent -- it becomes the
+    // literal `") (map "dod_foo`, which then presents as a real match. Philly
+    // 2026-08-02 spread exactly that across 13 tables / 721 rows. Loud, because a
+    // half running unattributed is worse than a half that refuses to start clean.
+    if (!g_delayedMatchId[0]) {
+        log_ktp("event=MATCH_START_REFUSED reason='empty_match_id' map=%s half=%s",
+                g_delayedMap, g_delayedHalf);
+        return;
+    }
 
     // One-shot guard: prevent rapid-fire if engine reentrancy causes multiple task fires
     if (g_matchStartLogFired) return;
@@ -4694,6 +4716,18 @@ stock restore_match_context_from_localinfo() {
         reset_team_names();
         clear_competitive_match_flags("h2_pending_abandoned");
         g_matchId[0] = EOS;
+        // The localinfo side is symmetric -- clear_localinfo_match_context() drops
+        // LOCALINFO_H1_SCORES with the rest. What survived was the IN-MEMORY half
+        // state, and extension mode never reloads plugins across a changelevel, so
+        // returning to the match map re-entered the 2nd-half go-live branch with a
+        // match id we had just cleared. Philly 2026-08-02 ran a real half that way:
+        // every line carried match_id= empty, and hlstats' getProperties slurped past
+        // the empty quote pair into the next one, spreading a phantom id across 13
+        // tables / 721 rows. Mirrors finalize_abandoned_match's reset block.
+        g_secondHalfPending = false;
+        g_firstHalfScore[0] = 0;
+        g_firstHalfScore[1] = 0;
+        g_matchMap[0] = EOS;
         return;
     }
 

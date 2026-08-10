@@ -132,6 +132,45 @@ naming the disabled command as the entry point. Now `.tech`.
 
 ---
 
+## [0.10.157] - 2026-08-10
+
+### Fixed
+- **`abandoned_pending` left in-memory half state behind, so a half could run with an empty match id.**
+  The localinfo side was already symmetric — `clear_localinfo_match_context()` drops
+  `LOCALINFO_H1_SCORES` with the rest — but `g_secondHalfPending`, `g_firstHalfScore[]` and
+  `g_matchMap` were not reset on that exit while `g_matchId` was. Extension mode never reloads plugins
+  across a changelevel, so returning to the match map re-entered the second-half go-live branch with
+  an id that had just been cleared.
+
+  **Confirmed production damage, not a hypothetical.** Philly 2026-08-02, match
+  `1785715972-KTP1`: abandoned while pending between halves at 20:53:19, half 2 started anyway at
+  21:01:33, and every line carried `match_id=` empty. It was provably the same match — `half1=138-22`
+  plus `half2=48-204` sums exactly to the reported `186-226`. Downstream, `hlstats.pl`'s
+  `getProperties` parses `(matchid "")` by slurping past the *empty* quote pair to the next one,
+  producing the literal id `") (map "dod_harrington`, which spread across 13 tables / 721 rows and
+  presented as a 101st match.
+
+  Two halves to the fix, because either alone leaves the hole open:
+  - Reset the in-memory second-half state on that exit, mirroring `finalize_abandoned_match`.
+  - **Refuse to announce a half with no match id** rather than logging an empty one. An empty id does
+    not read as absent to the parser — it reads as a *different, valid-looking* id, which is why a
+    half running unattributed is worse than one that refuses to start.
+
+  The refusal is applied at **both** production emitters of `KTP_MATCH_START` —
+  `task_roundlive_match_context` and `task_delayed_match_start_log`. Guarding only one would leave the
+  hole open on whichever path happened to run; the timeout fallback delegates to the first, so it
+  inherits it. The third emitter is `cmd_test_fire_match_start_log`, which exists to exercise the emit
+  and is deliberately left unguarded.
+
+### Notes
+- **The companion finding — abandoned matches leaving `ktp_match_competitive` set — was already
+  fixed.** Re-verified at source before writing anything: `clear_competitive_match_flags()` exists as
+  the shared stock the backlog asks for, and all six exits call it (`end_match_cleanup`,
+  `finalize_abandoned_match`, `finalize_completed_second_half`, `h2_pending_abandoned`,
+  `cancel_after_h1`, `forcereset`). No change needed; the backlog entry was stale.
+
+---
+
 ## [0.10.156] - 2026-08-10
 
 ### Added
