@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.158"
+#define PLUGIN_VERSION "0.10.159"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -410,6 +410,73 @@ const AUTO_REQUEST_MAX_SECS = 3600; // 1 hour maximum
 // the other.
 const DISCONNECT_COUNTDOWN_SECS = 30;
 const AUTO_CONFIRM_SECS = 60;
+
+// ---------- Weapon-fire batch (miss denominator) ----------
+// Ring buffer for the dod_client_weapon_fire forward: every weapon actuation,
+// including the pure misses the client_damage hits-stream never sees — the
+// denominator that makes accuracy computable. TRANSPORT ONLY, same rule as the
+// aim-geometry batch: this repo is public, so what the counts mean is decided
+// in the private consumer. Everything the forward reports is shipped
+// (grenades/rockets included); the consumer filters by weapon id.
+//
+// Rows carry a roster index, never a slot: a slot is not an identity, so the
+// authid is captured at fire time into a per-batch roster and the slot is not
+// read again. A mid-interval substitute gets a fresh roster entry and the
+// previous occupant's shots keep their own name.
+// (This section sits below the Constants block because it sizes on MAX_PLAYERS.)
+
+// Entries scale on the hit buffer: shots strictly contain hits and the flush
+// cadence is shared, so their ratio is the only sizing question. Memory stays
+// below the hit buffer's because rows hold no authid strings — identity lives
+// once per firing player in the roster.
+#define FIRE_BUFFER_SIZE   (WEAPON_HIT_BUFFER_SIZE * 3)
+// One entry per identity that fired this interval; doubled over the slot count
+// so a mid-interval reconnect gets its own entry instead of evicting someone.
+#define FIRE_ROSTER_SIZE   (MAX_PLAYERS * 2)
+
+// Payload arithmetic as constants, so the buffer and the headroom guard cannot
+// drift apart the way the aim buffer's hand-computed literal once did.
+// One shot renders as [weapon,tsMs,firedAtUtc] plus separator, digits at their
+// practical maxima.
+#define FIRE_SHOT_BYTES    27
+// Row shell at worst: the authid plus the steamId/shots field literals.
+#define FIRE_ROW_BYTES     66
+// Opening shell at worst: 63-char matchId, 47-char server endpoint, literals.
+#define FIRE_HEADER_BYTES  160
+// Closing literal with both loss counters at full digit width.
+#define FIRE_TAIL_BYTES    56
+// Sized to hold the worst case the constants above describe, so headroom
+// truncation is the safety net for this arithmetic rather than a normal event.
+#define FIRE_JSON_BUF_SIZE (FIRE_HEADER_BYTES + FIRE_TAIL_BYTES + FIRE_ROSTER_SIZE * FIRE_ROW_BYTES + FIRE_BUFFER_SIZE * FIRE_SHOT_BYTES)
+
+new g_fireRosterIdx[FIRE_BUFFER_SIZE];        // roster index, never a live slot
+new g_fireWeaponId[FIRE_BUFFER_SIZE];
+new Float:g_fireTimestamp[FIRE_BUFFER_SIZE];  // the forward's gametime — capture time, not handler time
+new g_fireFiredAt[FIRE_BUFFER_SIZE];          // wall-clock unix seconds, same role as the timeline's firedAtUtc
+new g_fireCount = 0;
+new g_fireDropped = 0;                        // shots never buffered (ring or roster full)
+
+new g_fireRosterAuthid[FIRE_ROSTER_SIZE][32];
+new g_fireRosterSlot[FIRE_ROSTER_SIZE];       // slot at capture — flush-rotation fairness key only
+new g_fireRosterShots[FIRE_ROSTER_SIZE];      // per-entry count, feeds the exact headroom need
+new g_fireRosterCount = 0;
+new g_fireSlotCache[MAX_PLAYERS + 1];         // slot -> roster idx this interval; -1 = unmapped.
+                                              // Compile-time zero would alias every slot to roster
+                                              // entry 0, so plugin_init unmaps before any client exists.
+// Rotating start slot: JSON truncation must not always fall on the same player
+// (same fairness rule, and same monotonicity caveat, as the aim-geometry cursor).
+new g_fireFlushCursor = 1;
+new g_fireJsonBuf[FIRE_JSON_BUF_SIZE];        // preallocated, never on the stack
+
+// Full interval reset: buffers, loss counters, roster, and the slot cache.
+// The cache MUST clear with the roster or a stale index would alias the next
+// interval's shots onto whoever lands in that roster row first.
+stock fire_batch_reset() {
+    g_fireCount = 0;
+    g_fireDropped = 0;
+    g_fireRosterCount = 0;
+    for (new i = 0; i <= MAX_PLAYERS; i++) g_fireSlotCache[i] = -1;
+}
 
 // Unpause attribution
 new g_lastUnpauseBy[80];
@@ -2721,6 +2788,9 @@ stock send_ac_match_end(const matchId[]) {
     // (b) attribute the events to a different match if a new one started.
     // Order matters: drain → mark ended.
     send_ac_weapon_timeline_batch();
+    // Same reasoning for the shot ring: drain the tail of the deciding round
+    // while the match id can still be read.
+    send_ac_weapon_fire_batch();
 
     formatex(g_acEndPayload, charsmax(g_acEndPayload),
         "{^"matchId^":^"%s^",^"serverEndpoint^":^"%s^"}",
@@ -2978,6 +3048,111 @@ stock send_ac_aim_geometry_batch() {
     curl_easy_perform(curl, "ac_callback");
 }
 
+// =============== Weapon-fire batch flush (miss denominator) ===============
+// Drains the shot ring to the API on the shared cadence. Reset regardless of
+// HTTP outcome, matching the siblings. No synthetic-id fallback — same
+// reasoning as the aim geometry: a shot outside a match must not borrow or
+// invent a match id, because a wrong denominator deflates that match's
+// accuracy for real players. Discard, and clear the counters.
+//
+// The loss counters ride IN the payload, unlike the siblings' log-only
+// counters: an undercounted denominator with a fully-recorded hit stream
+// inflates accuracy — the accusing direction — so the API must be able to see
+// that an interval was lossy without reading game-server logs.
+stock send_ac_weapon_fire_batch() {
+    if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !g_acServerEndpoint[0]) return;
+    if (g_fireCount == 0) {
+        if (g_fireRosterCount || g_fireDropped) fire_batch_reset();
+        return;
+    }
+
+    new matchId[64];
+    dodx_get_match_id(matchId, charsmax(matchId));
+    if (!matchId[0]) {
+        fire_batch_reset();
+        return;
+    }
+
+    new pos = 0;
+    new buflen = sizeof(g_fireJsonBuf) - 1;
+    pos += formatex(g_fireJsonBuf[pos], buflen - pos,
+        "{^"matchId^":^"%s^",^"server^":^"%s^",^"players^":[", matchId, g_acServerEndpoint);
+
+    new emitted = 0, shotsEmitted = 0, truncPlayers = 0, truncShots = 0;
+
+    // Rotate the start slot so a full payload sheds a different player each
+    // interval. Rows group by the roster entry's capture slot; an entry whose
+    // player already disconnected still emits — its identity was captured at
+    // fire time, which is exactly why the roster exists.
+    for (new step = 0; step < MAX_PLAYERS; step++) {
+        new slot = 1 + ((g_fireFlushCursor - 1 + step) % MAX_PLAYERS);
+        for (new r = 0; r < g_fireRosterCount; r++) {
+            if (g_fireRosterSlot[r] != slot) continue;
+            if (g_fireRosterShots[r] == 0) continue;
+
+            // Exact headroom for THIS row plus the closing literal. Count what
+            // is shed rather than breaking silently; the shed path must not
+            // advance pos, or the cursor stops pointing at the first shed slot.
+            new need = FIRE_ROW_BYTES + g_fireRosterShots[r] * FIRE_SHOT_BYTES + FIRE_TAIL_BYTES;
+            if (pos > buflen - need) {
+                truncPlayers++;
+                truncShots += g_fireRosterShots[r];
+                continue;
+            }
+
+            if (emitted > 0) pos += formatex(g_fireJsonBuf[pos], buflen - pos, ",");
+            pos += formatex(g_fireJsonBuf[pos], buflen - pos,
+                "{^"steamId^":^"%s^",^"shots^":[", g_fireRosterAuthid[r]);
+
+            new sEmitted = 0;
+            for (new i = 0; i < g_fireCount; i++) {
+                if (g_fireRosterIdx[i] != r) continue;
+                if (sEmitted > 0) pos += formatex(g_fireJsonBuf[pos], buflen - pos, ",");
+                // weapon id, gametime ms, wall-clock seconds. Integers end to
+                // end, like the aim windows.
+                pos += formatex(g_fireJsonBuf[pos], buflen - pos, "[%d,%d,%d]",
+                    g_fireWeaponId[i], floatround(g_fireTimestamp[i] * 1000.0), g_fireFiredAt[i]);
+                sEmitted++;
+            }
+
+            pos += formatex(g_fireJsonBuf[pos], buflen - pos, "]}");
+            emitted++;
+            shotsEmitted += sEmitted;
+            g_fireFlushCursor = 1 + (slot % MAX_PLAYERS);
+        }
+    }
+
+    // Counters close the object rather than open it — they are only known
+    // after the rows are built, and JSON keys are unordered.
+    pos += formatex(g_fireJsonBuf[pos], buflen - pos,
+        "],^"dropped^":%d,^"truncatedShots^":%d}", g_fireDropped, truncShots);
+
+    new url[256];
+    formatex(url, charsmax(url), "%s/api/match/weapon-fire-batch", g_acApiBaseUrl);
+
+    new CURL:curl = curl_easy_init();
+    if (!curl) {
+        log_ktp("event=AC_ERROR reason='curl_init_failed' endpoint=weapon-fire-batch");
+        fire_batch_reset();
+        return;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_acCurlHeaders);
+    curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_fireJsonBuf);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
+
+    // trunc_/dropped_ sustained >0 during matches is the resize signal, same
+    // as the sibling batches.
+    log_ktp("event=AC_WEAPON_FIRE_SEND match_id=%s players=%d shots=%d shots_buf=%d trunc_players=%d trunc_shots=%d dropped=%d bytes=%d",
+        matchId, emitted, shotsEmitted, g_fireCount, truncPlayers, truncShots, g_fireDropped, pos);
+
+    curl_easy_perform(curl, "ac_callback");
+
+    fire_batch_reset();
+}
+
 #endif  // HAS_CURL
 
 // ================ 0.5.0 Weapon Timeline Forward Handlers ================
@@ -3111,6 +3286,49 @@ public dod_client_weaponswitch(id, wpnew, wpnold) {
     g_swCount++;
 }
 
+// Every weapon actuation, hit or miss. Gated on the real match context only —
+// no baseline-mode arm, because the flush refuses a synthetic match id
+// (aim-geometry reasoning) and shots buffered under baseline would only be
+// discarded there.
+public dod_client_weapon_fire(id, weapon, Float:gametime) {
+    if (!g_acApiBaseUrl[0]) return;
+    if (!g_acTimelineMatchActive) return;
+    if (weapon <= 0) return;
+    if (!is_user_alive(id)) return;
+    if (get_user_team(id) == 0) return;
+
+    if (g_fireCount >= FIRE_BUFFER_SIZE) {
+        g_fireDropped++;
+        return;
+    }
+
+    new authid[32];
+    get_user_authid(id, authid, charsmax(authid));
+
+    // Resolve the slot to a roster entry, verifying the identity rather than
+    // trusting the cache: the compare catches a recycled slot the reset hooks
+    // somehow missed AND an authid that resolved after the first shot.
+    new r = g_fireSlotCache[id];
+    if (r < 0 || r >= g_fireRosterCount || !equal(g_fireRosterAuthid[r], authid)) {
+        if (g_fireRosterCount >= FIRE_ROSTER_SIZE) {
+            g_fireDropped++;
+            return;
+        }
+        r = g_fireRosterCount++;
+        copy(g_fireRosterAuthid[r], charsmax(g_fireRosterAuthid[]), authid);
+        g_fireRosterSlot[r] = id;
+        g_fireRosterShots[r] = 0;
+        g_fireSlotCache[id] = r;
+    }
+
+    g_fireRosterIdx[g_fireCount] = r;
+    g_fireWeaponId[g_fireCount] = weapon;
+    g_fireTimestamp[g_fireCount] = gametime;   // capture-time clock, not handler-time
+    g_fireFiredAt[g_fireCount] = get_systime();
+    g_fireCount++;
+    g_fireRosterShots[r]++;
+}
+
 public client_damage(att, vic, dmg, wpn, hitplace, TA) {
     if (!g_acApiBaseUrl[0]) return;
     if (!is_user_alive(att) || !is_user_alive(vic)) return;
@@ -3143,6 +3361,7 @@ public task_flush_weapon_timeline() {
     // Same cadence, same task: a second timer would drift against this one and
     // make two payloads describing the same interval disagree about its bounds.
     send_ac_aim_geometry_batch();
+    send_ac_weapon_fire_batch();
 #endif
 }
 
@@ -4234,6 +4453,12 @@ public plugin_init() {
     #if defined HAS_DODX
     dodx_set_stats_paused(0);
     #endif
+
+    // Slots reshuffle across a map change while extension-mode globals persist,
+    // so the fire-batch slot cache must start every map unmapped. Deliberately
+    // NOT fire_batch_reset(): shots buffered before a halftime changelevel keep
+    // their captured identity and still owe the next flush.
+    for (new i = 0; i <= MAX_PLAYERS; i++) g_fireSlotCache[i] = -1;
 
     // Register forwards for external plugins (KTPHLTVRecorder, etc.)
     // ktp_match_start(matchId[], map[], matchType, half) - half: 1=1st, 2=2nd, 101+=OT round
@@ -5754,6 +5979,10 @@ stock on_client_left(id) {
     if (id >= 1 && id <= MAX_PLAYERS) {
         g_ready[id] = false;
 
+        // Unmap the fire-batch slot so the next occupant resolves a fresh
+        // roster entry instead of inheriting this player's shot attribution.
+        g_fireSlotCache[id] = -1;
+
         // Clear pending admin confirmations if the requesting admin disconnects
         if (id == g_forceResetPending) g_forceResetPending = 0;
         if (id == g_restartHalfPending) g_restartHalfPending = 0;
@@ -5838,6 +6067,10 @@ public client_disconnect(id) { on_client_left(id); }
 #endif
 
 public client_putinserver(id) {
+    // Any new occupant invalidates the fire-batch slot mapping — before the
+    // bot/HLTV skip, because the invalidation is about the slot, not the player.
+    if (id >= 1 && id <= MAX_PLAYERS) g_fireSlotCache[id] = -1;
+
     // Skip bots and HLTV
     if (is_user_bot(id) || is_user_hltv(id))
         return;
