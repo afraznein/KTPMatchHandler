@@ -187,6 +187,17 @@ naming the disabled command as the entry point. Now `.tech`.
   tables. **The refusal is also announced in chat now**: a silent abort repeats the exact failure
   mode — a half nobody noticed was unattributed.
 
+### Second review pass (`ktp-code-review`, 2026-08-10)
+- **Payload buffer re-derived for `KEEP_WINDOWS` 8 → 16** (16384 → 24576). The cost is a ~131-byte
+  per-player header plus `KEEP_WINDOWS × ~34` bytes at `MAX_PLAYERS`, so raising the module's
+  retention raises this linearly — re-derive it there, never guess from a roster size. The comment now
+  carries the arithmetic so the next change to `KEEP_WINDOWS` cannot silently reintroduce truncation.
+- **The rotation's load-bearing invariant is now named in the code.** The cursor is only correct
+  because truncation is *monotone* — once the headroom test trips it cannot untrip, since the shed
+  path does not advance `pos` — which is what makes "one past the last emitted" the same slot as "the
+  first one shed". Anything that gives a shed player bytes (a stub row, say) silently breaks the
+  fairness rotation without breaking anything visible.
+
 ## [0.10.156] - 2026-08-10
 
 ### Added

@@ -174,7 +174,12 @@ new g_weaponTimelineJsonBuf[14336];             // 14KB JSON payload scratch —
 // per-player cost (a header plus KEEP_WINDOWS bracketed quads) at the loop's own
 // MAX_PLAYERS bound rather than at an assumed roster size. Preallocated for the
 // same reason as the buffer above -- never on the stack.
-new g_aimGeometryJsonBuf[16384];
+//
+// Re-derive this whenever DODX's KEEP_WINDOWS changes: the cost is a ~131-byte
+// per-player header plus KEEP_WINDOWS x ~34 bytes, taken at MAX_PLAYERS. At
+// KEEP_WINDOWS 16 that is 32 x (131 + 544) + envelope = ~21.7KB, so 24576 clears
+// it with the 768-byte headroom guard still intact.
+new g_aimGeometryJsonBuf[24576];
 // Rotating start slot. Truncation must not always fall on the same player: a fixed
 // scan order turns "the payload was full" into "this one player is never measured".
 new g_aimFlushCursor = 1;
@@ -2833,6 +2838,13 @@ stock send_ac_aim_geometry_batch() {
 
     // Start where the last flush stopped, so a full payload sheds a different player
     // each interval instead of the same one forever.
+    //
+    // The cursor's correctness rests on truncation being MONOTONE: once the headroom
+    // test trips it can never untrip, because the shed path does not advance `pos`.
+    // That is what makes "one past the last emitted" the same slot as "the first one
+    // shed". If anything ever makes a shed player consume buffer -- emitting a stub
+    // row, say -- the cursor silently stops pointing at the first shed player and the
+    // rotation stops being fair.
     for (new step = 0; step < MAX_PLAYERS; step++) {
         new id = 1 + ((g_aimFlushCursor - 1 + step) % MAX_PLAYERS);
         if (!is_user_connected(id) || is_user_bot(id)) continue;
