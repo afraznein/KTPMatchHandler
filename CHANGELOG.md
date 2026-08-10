@@ -171,6 +171,22 @@ naming the disabled command as the entry point. Now `.tech`.
 
 ---
 
+### Review fixes (`ktp-code-review`, 2026-08-10 — these cuts were NOT-APPROVED on first pass)
+- **The payload buffer truncated at 11-12 players, silently, always dropping the same one.** 4 KB was
+  sized from an arithmetic error: a full 6v6 costs ~3.8 KB against a 3.3 KB break threshold, so the
+  highest-indexed player was shed every interval for the whole match while DODX's retained set
+  churned underneath him — one player per 6v6 permanently unmeasured. Buffer sized against the real
+  per-player cost at the loop's own `MAX_PLAYERS` bound, **the scan start now rotates** so a full
+  payload sheds a different player each time, and the shed count is logged
+  (`AC_AIM_GEOMETRY_TRUNCATED`) instead of `break`ing in silence.
+- **The empty-match-id refusal now covers the path that actually leaks.** 0.10.157 guarded the two
+  `KTP_MATCH_START` log emitters — but `task_deferred_discord_fwd` runs at **T+0.2 s, before both of
+  them**, and fires the `ktp_match_start` forward (KTPHLTVRecorder's demo-glob contract), the Discord
+  embed, and the half-1 context save that writes the id back to localinfo. Guarding only the log
+  sites left every one of those running with an empty id, which is how the phantom id reached 13
+  tables. **The refusal is also announced in chat now**: a silent abort repeats the exact failure
+  mode — a half nobody noticed was unattributed.
+
 ## [0.10.156] - 2026-08-10
 
 ### Added

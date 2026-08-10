@@ -167,11 +167,17 @@ new g_hitCount = 0;
 new g_hitDropped = 0;
 
 new g_weaponTimelineJsonBuf[14336];             // 14KB JSON payload scratch — preallocated, NEVER on stack
-// Aim-geometry payload. Smaller than the weapon timeline because it is bounded
-// by PLAYERS x KEEP_WINDOWS rather than by event rate: 12 players x 8 windows x
-// ~26 bytes plus per-player headers, so 4KB is ~2x the worst case. Preallocated
-// for the same reason as the buffer above -- never on the stack.
-new g_aimGeometryJsonBuf[4096];
+// Aim-geometry payload. Bounded by PLAYERS x KEEP_WINDOWS rather than by event
+// rate, but the previous 4KB was sized from an arithmetic error and truncated at
+// 11-12 players -- silently, and always dropping the highest-indexed one, so a
+// full 6v6 left one player permanently unsampled. Sized now against the real
+// per-player cost (a header plus KEEP_WINDOWS bracketed quads) at the loop's own
+// MAX_PLAYERS bound rather than at an assumed roster size. Preallocated for the
+// same reason as the buffer above -- never on the stack.
+new g_aimGeometryJsonBuf[16384];
+// Rotating start slot. Truncation must not always fall on the same player: a fixed
+// scan order turns "the payload was full" into "this one player is never measured".
+new g_aimFlushCursor = 1;
 
 // Baseline recording mode — when ktp_ac_baseline_mode is 1, weapon-timeline
 // batches upload under a synthetic match_id ("baseline-<host>-<unixts>")
@@ -2822,10 +2828,13 @@ stock send_ac_aim_geometry_batch() {
     pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos,
         "{^"matchId^":^"%s^",^"server^":^"%s^",^"players^":[", matchId, g_acServerEndpoint);
 
-    new stats[5], win[4], authid[40];
-    new emitted = 0, windowsEmitted = 0;
+    new stats[4], win[4], authid[40];
+    new emitted = 0, windowsEmitted = 0, truncated = 0;
 
-    for (new id = 1; id <= MAX_PLAYERS; id++) {
+    // Start where the last flush stopped, so a full payload sheds a different player
+    // each interval instead of the same one forever.
+    for (new step = 0; step < MAX_PLAYERS; step++) {
+        new id = 1 + ((g_aimFlushCursor - 1 + step) % MAX_PLAYERS);
         if (!is_user_connected(id) || is_user_bot(id)) continue;
         if (!dodx_get_aim_stats(id, stats)) continue;
 
@@ -2836,14 +2845,18 @@ stock send_ac_aim_geometry_batch() {
 
         get_user_authid(id, authid, charsmax(authid));
 
-        // Leave headroom for this player's windows plus the closing braces;
-        // 8 windows * ~64 bytes + the player header.
-        if (pos > buflen - 768) break;
+        // Headroom for this player's windows plus the closing braces. Count the
+        // shed players rather than breaking silently -- a bounded table that drops
+        // rows without saying so reads as "nothing to report".
+        if (pos > buflen - 768) {
+            truncated++;
+            continue;
+        }
 
         if (emitted > 0) pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos, ",");
         pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos,
-            "{^"steamId^":^"%s^",^"windows^":%d,^"groundTouches^":%d,^"shortContacts^":%d,^"maxConsecShort^":%d,^"w^":[",
-            authid, stats[0], stats[2], stats[3], stats[4]);
+            "{^"steamId^":^"%s^",^"windows^":%d,^"groundTouches^":%d,^"shortestGroundMs^":%d,^"w^":[",
+            authid, stats[0], stats[2], stats[3]);
 
         new wEmitted = 0;
         for (new slot = 0; slot < stats[1]; slot++) {
@@ -2861,6 +2874,7 @@ stock send_ac_aim_geometry_batch() {
         pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos, "]}");
         emitted++;
         dodx_reset_aim_stats(id);
+        g_aimFlushCursor = 1 + (id % MAX_PLAYERS);
     }
 
     pos += formatex(g_aimGeometryJsonBuf[pos], buflen - pos, "]}");
@@ -2882,8 +2896,14 @@ stock send_ac_aim_geometry_batch() {
     curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_aimGeometryJsonBuf);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
 
-    log_ktp("event=AC_AIM_GEOMETRY_SEND match_id=%s players=%d windows=%d bytes=%d",
-        matchId, emitted, windowsEmitted, pos);
+    // truncated>0 sustained is the signal to resize, the same way the weapon
+    // timeline's trunc_/dropped_ counters are.
+    log_ktp("event=AC_AIM_GEOMETRY_SEND match_id=%s players=%d windows=%d truncated=%d bytes=%d",
+        matchId, emitted, windowsEmitted, truncated, pos);
+    if (truncated > 0) {
+        log_ktp("event=AC_AIM_GEOMETRY_TRUNCATED players_shed=%d bytes=%d cap=%d",
+            truncated, pos, buflen);
+    }
 
     curl_easy_perform(curl, "ac_callback");
 }
@@ -9209,6 +9229,21 @@ public task_deferred_stats() {
 public task_deferred_discord_fwd() {
     // Guard: if match was reset in the 0.2s window, abort
     if (!g_matchLive) return;
+
+    // Refuse the whole downstream fan-out when the match has no id. This runs at
+    // T+0.2s -- BEFORE the KTP_MATCH_START emitters -- and it is where the empty id
+    // actually escapes: the ktp_match_start forward feeds KTPHLTVRecorder's demo-glob
+    // contract, the Discord embed announces the match, and the half-1 context save
+    // writes the id back into localinfo. Guarding only the log emitters left every one
+    // of those firing with an empty id, which is how Philly's phantom match id reached
+    // 13 tables. An empty id does not read as absent downstream -- it reads as a
+    // different, valid-looking id.
+    if (!g_matchId[0]) {
+        log_ktp("event=MATCH_START_REFUSED reason='empty_match_id' path=deferred_fwd map=%s",
+                g_currentMap);
+        announce_all("Match start aborted: no match id was assigned. Nothing was recorded — please re-run the start command.");
+        return;
+    }
 
     // One-shot guard for this match-start. ATL1 2026-05-08 fired this whole body
     // 5x within ~1s for `1.3-5885-ATL1`, duplicating ROSTER_SNAPSHOT, DISCORD,
