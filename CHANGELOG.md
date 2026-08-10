@@ -132,6 +132,51 @@ naming the disabled command as the entry point. Now `.tech`.
 
 ---
 
+## [0.10.158] - 2026-08-10
+
+### Fixed
+- **The game server was emitting every `weaponstats` line twice, putting ~21% duplicate rows into
+  `hlstats_Events_Statsme` — the table the PUBLIC stats site reads — and inflating kills by 35%.**
+
+  `dodx_flush_all_stats()` does not reset. It only fires the `dod_stats_flush` forward, and the
+  emitter reads through `get_user_wstats`, which is read-only (`reset_user_wstats` is a separate
+  native). So a second emission with no reset between re-logs byte-identical lines: same shots, hits,
+  damage, same second. Measured: 66,804 duplicated groups of 254,539, and in a single game log 58 of
+  145 `weaponstats` lines were exact duplicates.
+
+  **Two emitters make this reachable more often than the flush sites suggest.** `stats_logging.sma`
+  logs from the `dod_stats_flush` forward *and* from `client_disconnected`, so a match-end flush
+  followed by players leaving at map change re-emits everything a second time.
+
+  Two of the five flush sites already paired flush with a reset (`task_restarthalf_stats`,
+  `task_deferred_stats`); `handle_first_half_end` and `ktp_match_teardown_notify` did not. This
+  completes that convention rather than inventing one — which is also why the duplicate was
+  intermittent instead of universal.
+
+  ⚠️ **Uses `reset_user_wstats` per player, deliberately NOT `dodx_reset_all_stats()`.** Both clear
+  `weapons[]` identically, but the all-players native *also* zeroes `g_observedDeaths` for every slot —
+  and the score-persistence SAVE gate compares `dodx_get_observed_deaths` against pdata
+  `dodx_get_user_deaths` and refuses any **negative** drift. Zeroing only the observed side leaves
+  pdata holding real deaths, so every `on_client_left` between halftime and the next go-live
+  re-baseline would have its score refused and its slot cleared — breaking the mid-match-rejoin
+  feature that gate exists to protect, as a side effect of fixing an unrelated bug. Verified against
+  the gate at `save_player_score` before choosing the granularity.
+
+  **Warmup separation is unaffected and slightly improved.** Match start already ran flush → reset →
+  set-match-id, which is the boundary that keeps warmup out of `.ktp` match stats. After this change
+  the halftime and post-match emissions correctly carry only *new* activity, untagged, instead of
+  re-reporting the previous half's totals under a different tag.
+
+  📌 Historical rows are untouched. Anything reading that table still needs
+  `match_id IS NOT NULL` + `MIN(id)` per `(eventTime, serverId, playerId, weapon)` — validated against
+  `hlstats_Events_Frags` at ratio 0.9947 — until a cleanup runs.
+
+  📌 The trap remains armed for a future sixth caller: `flush` still sounds like drain-and-clear. A
+  `bool:reset` parameter on the native would encode the pairing in the API, but that costs a DODX
+  module wave — worth riding on one that is shipping anyway.
+
+---
+
 ## [0.10.157] - 2026-08-10
 
 ### Fixed

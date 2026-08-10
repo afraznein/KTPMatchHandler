@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.157"
+#define PLUGIN_VERSION "0.10.158"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -1114,6 +1114,37 @@ stock bool:process_ot_round_end_changelevel() {
     }
 }
 
+// KTP: clear the weapon accumulators every connected player's stats were just
+// emitted from. MUST follow every dodx_flush_all_stats().
+//
+// `flush` does NOT reset -- it only fires the dod_stats_flush forward, and the
+// emitter reads through get_user_wstats, which is read-only. So a second emission
+// with no reset between re-logs byte-identical weaponstats lines: same shots, hits,
+// damage, same second. That is 21% of hlstats_Events_Statsme (66,804 duplicated
+// groups), inflating kills on the PUBLIC stats site by 35%.
+//
+// TWO emitters make this reachable more often than the flush sites alone suggest:
+// stats_logging.sma logs from the dod_stats_flush forward AND from
+// client_disconnected, so a match-end flush followed by players leaving at map
+// change re-emits everything a second time.
+//
+// ⚠️ reset_user_wstats PER PLAYER, deliberately NOT dodx_reset_all_stats().
+// Both clear weapons[] identically, but the all-players native ALSO zeroes
+// g_observedDeaths for every slot -- and the score-persistence SAVE gate compares
+// dodx_get_observed_deaths against pdata dodx_get_user_deaths and refuses any
+// NEGATIVE drift. Zeroing only the observed side leaves pdata holding real deaths,
+// so every on_client_left between here and the next go-live re-baseline would be
+// refused and its slot cleared. That is the mid-match-rejoin feature this gate
+// exists to protect, broken by the fix for an unrelated bug.
+stock ktp_reset_all_wstats() {
+    new players[32], num, cleared = 0;
+    get_players(players, num, "ch");   // connected, skip bots
+    for (new i = 0; i < num; i++) {
+        if (reset_user_wstats(players[i])) cleared++;
+    }
+    return cleared;
+}
+
 // Handle first half end (save state, allow immediate changelevel)
 stock handle_first_half_end() {
     g_secondHalfPending = true;
@@ -1130,7 +1161,8 @@ stock handle_first_half_end() {
         dodx_set_stats_paused(0);
 
         new flushed = dodx_flush_all_stats();
-        log_ktp("event=STATS_FLUSH type=half1 players=%d match_id=%s", flushed, g_matchId);
+        new cleared = ktp_reset_all_wstats();
+        log_ktp("event=STATS_FLUSH type=half1 players=%d cleared=%d match_id=%s", flushed, cleared, g_matchId);
 
         // Clear match context BEFORE map change to prevent warmup kills on the new map
         // from being tagged with the match_id. It will be re-set when players .rdy for half 2.
@@ -3022,7 +3054,8 @@ stock ktp_match_teardown_notify(const matchId[], const map[], const flushType[],
     #if defined HAS_DODX
     if (g_hasDodxStatsNatives) {
         new flushed = dodx_flush_all_stats();
-        log_ktp("event=STATS_FLUSH type=%s players=%d match_id=%s", flushType, flushed, matchId);
+        new cleared = ktp_reset_all_wstats();
+        log_ktp("event=STATS_FLUSH type=%s players=%d cleared=%d match_id=%s", flushType, flushed, cleared, matchId);
     }
     #endif
 
@@ -10176,6 +10209,7 @@ public cmd_test_end_match(id) {
     // compile.
     #if defined HAS_DODX
     dodx_flush_all_stats();
+    ktp_reset_all_wstats();   // parity with the production sites; see the stock
     #endif
 
     // Production match-end (KTPMatchHandler.sma:785) also fires the AC
