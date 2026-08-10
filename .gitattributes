@@ -1,0 +1,4 @@
+# compile.sh runs under WSL/Linux. A CRLF checkout makes bash fail with
+# "$'': command not found" -- so pin LF regardless of core.autocrlf on the
+# clone. The blob is already LF; this stops a Windows working tree undoing it.
+*.sh text eol=lf
