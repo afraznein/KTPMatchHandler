@@ -23,8 +23,11 @@ Outputs to `compiled/test/KTPMatchHandler.amxx`, NOT staged to production. Adds 
 
 ## Project Structure
 - `KTPMatchHandler.sma` - Main plugin source
-- `compile.sh` - WSL compile script (use this, not compile.bat from Claude)
-- `compile.bat` - Windows batch compile (works interactively, output capture issues from Claude)
+- `compile.sh` - WSL compile script; the only supported build path. It generates
+  `build_info.inc`, which is what bakes the git SHA into the `.amxx` for
+  `amx_ktp_versions`. `compile.bat` was deleted 2026-08-11: it shelled out to WSL
+  anyway and skipped that step, and the include falls back to
+  `KTP_BUILD_SHA "unknown"` silently.
 - `compiled/` - Compiled .amxx output
 - `CHANGELOG.md` - Version history
 - `README.md` - Documentation
