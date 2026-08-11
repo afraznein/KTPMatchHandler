@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.159"
+#define PLUGIN_VERSION "0.10.160"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -439,26 +439,57 @@ const AUTO_CONFIRM_SECS = 60;
 // One shot renders as [weapon,tsMs,firedAtUtc] plus separator, digits at their
 // practical maxima.
 #define FIRE_SHOT_BYTES    27
+// A shot with geometry widens to 9 cells. Each geometry field's digit width at
+// its own bound, named so the sum below is checkable against the dodx contract
+// rather than hand-counted:
+#define FIRE_D_ERR       9    // err_udeg: an angle is <= 180 deg = 180,000,000 micro-deg
+#define FIRE_D_RANGE     5    // world units: coords are +/-16384, so no distance reaches 6 digits
+#define FIRE_D_ANGVEL    10   // tgt_angvel_mdps: module clamps at int32 headroom; "-1" fits inside
+#define FIRE_D_GAP       10   // sight_gap_ms: same clamp, same -1
+#define FIRE_D_HITGROUP  3    // studio hitgroup
+#define FIRE_D_STARTOFF  5    // trace_start_units: same coordinate bound as range
+// Six extra fields cost six separators plus their digits.
+#define FIRE_GEOM_EXTRA_BYTES (6 + FIRE_D_ERR + FIRE_D_RANGE + FIRE_D_ANGVEL + FIRE_D_GAP + FIRE_D_HITGROUP + FIRE_D_STARTOFF)
+#define FIRE_SHOT_GEOM_BYTES  (FIRE_SHOT_BYTES + FIRE_GEOM_EXTRA_BYTES)
+// Value ceilings the digit widths above imply (10^digits - 1), enforced by the
+// demote guard so a module regression overflows into a NULL row, not into a
+// formatex truncation that malforms the whole payload. The two 10-digit fields
+// need no ceiling — every int32 fits in 10 digits.
+#define FIRE_MAX_ERR       999999999
+#define FIRE_MAX_RANGE     99999
+#define FIRE_MAX_HITGROUP  999
+#define FIRE_MAX_STARTOFF  99999
 // Row shell at worst: the authid plus the steamId/shots field literals.
 #define FIRE_ROW_BYTES     66
 // Opening shell at worst: 63-char matchId, 47-char server endpoint, literals.
 #define FIRE_HEADER_BYTES  160
 // Closing literal with both loss counters at full digit width.
 #define FIRE_TAIL_BYTES    56
-// Sized to hold the worst case the constants above describe, so headroom
-// truncation is the safety net for this arithmetic rather than a normal event.
-#define FIRE_JSON_BUF_SIZE (FIRE_HEADER_BYTES + FIRE_TAIL_BYTES + FIRE_ROSTER_SIZE * FIRE_ROW_BYTES + FIRE_BUFFER_SIZE * FIRE_SHOT_BYTES)
+// Sized to hold the worst case the constants above describe — every shot at the
+// 9-wide width — so headroom truncation is the safety net for this arithmetic
+// rather than a normal event.
+#define FIRE_JSON_BUF_SIZE (FIRE_HEADER_BYTES + FIRE_TAIL_BYTES + FIRE_ROSTER_SIZE * FIRE_ROW_BYTES + FIRE_BUFFER_SIZE * FIRE_SHOT_GEOM_BYTES)
 
 new g_fireRosterIdx[FIRE_BUFFER_SIZE];        // roster index, never a live slot
 new g_fireWeaponId[FIRE_BUFFER_SIZE];
 new Float:g_fireTimestamp[FIRE_BUFFER_SIZE];  // the forward's gametime — capture time, not handler time
 new g_fireFiredAt[FIRE_BUFFER_SIZE];          // wall-clock unix seconds, same role as the timeline's firedAtUtc
+// Shot geometry (dodx_get_shot_geom). g_fireHasGeom is the ONLY thing that makes
+// a g_fireGeom row readable: it is assigned for every recorded shot, from this
+// shot's own read result and nothing else, so a slot recycled from a previous
+// interval can never leak a stale sample into a 9-wide row.
+new g_fireGeom[FIRE_BUFFER_SIZE][6];
+new bool:g_fireHasGeom[FIRE_BUFFER_SIZE];
 new g_fireCount = 0;
 new g_fireDropped = 0;                        // shots never buffered (ring or roster full)
+// Deliberately log-only, unlike dropped/truncatedShots: it does not distort the
+// denominator, and widening the payload envelope is an API-side change first.
+new g_fireGeomRejected = 0;                   // 1-returns demoted to NULL by the self-consistency check
 
 new g_fireRosterAuthid[FIRE_ROSTER_SIZE][32];
 new g_fireRosterSlot[FIRE_ROSTER_SIZE];       // slot at capture — flush-rotation fairness key only
 new g_fireRosterShots[FIRE_ROSTER_SIZE];      // per-entry count, feeds the exact headroom need
+new g_fireRosterGeomShots[FIRE_ROSTER_SIZE];  // how many of them are 9-wide — the headroom delta
 new g_fireRosterCount = 0;
 new g_fireSlotCache[MAX_PLAYERS + 1];         // slot -> roster idx this interval; -1 = unmapped.
                                               // Compile-time zero would alias every slot to roster
@@ -474,6 +505,7 @@ new g_fireJsonBuf[FIRE_JSON_BUF_SIZE];        // preallocated, never on the stac
 stock fire_batch_reset() {
     g_fireCount = 0;
     g_fireDropped = 0;
+    g_fireGeomRejected = 0;
     g_fireRosterCount = 0;
     for (new i = 0; i <= MAX_PLAYERS; i++) g_fireSlotCache[i] = -1;
 }
@@ -3078,7 +3110,7 @@ stock send_ac_weapon_fire_batch() {
     pos += formatex(g_fireJsonBuf[pos], buflen - pos,
         "{^"matchId^":^"%s^",^"server^":^"%s^",^"players^":[", matchId, g_acServerEndpoint);
 
-    new emitted = 0, shotsEmitted = 0, truncPlayers = 0, truncShots = 0;
+    new emitted = 0, shotsEmitted = 0, geomEmitted = 0, truncPlayers = 0, truncShots = 0;
 
     // Rotate the start slot so a full payload sheds a different player each
     // interval. Rows group by the roster entry's capture slot; an entry whose
@@ -3093,7 +3125,8 @@ stock send_ac_weapon_fire_batch() {
             // Exact headroom for THIS row plus the closing literal. Count what
             // is shed rather than breaking silently; the shed path must not
             // advance pos, or the cursor stops pointing at the first shed slot.
-            new need = FIRE_ROW_BYTES + g_fireRosterShots[r] * FIRE_SHOT_BYTES + FIRE_TAIL_BYTES;
+            new need = FIRE_ROW_BYTES + g_fireRosterShots[r] * FIRE_SHOT_BYTES
+                     + g_fireRosterGeomShots[r] * FIRE_GEOM_EXTRA_BYTES + FIRE_TAIL_BYTES;
             if (pos > buflen - need) {
                 truncPlayers++;
                 truncShots += g_fireRosterShots[r];
@@ -3108,10 +3141,23 @@ stock send_ac_weapon_fire_batch() {
             for (new i = 0; i < g_fireCount; i++) {
                 if (g_fireRosterIdx[i] != r) continue;
                 if (sEmitted > 0) pos += formatex(g_fireJsonBuf[pos], buflen - pos, ",");
-                // weapon id, gametime ms, wall-clock seconds. Integers end to
-                // end, like the aim windows.
-                pos += formatex(g_fireJsonBuf[pos], buflen - pos, "[%d,%d,%d]",
-                    g_fireWeaponId[i], floatround(g_fireTimestamp[i] * 1000.0), g_fireFiredAt[i]);
+                // 3-wide or 9-wide; the API accepts exactly those two shapes and
+                // asserts the 9-wide order on ingest. A shot whose read returned 0
+                // ships 3-wide — NULL geometry — and nothing may widen it later.
+                if (g_fireHasGeom[i]) {
+                    // [weaponId, tsMs, firedAtUtc, err_udeg, range_units,
+                    //  tgt_angvel_mdps, sight_gap_ms, hitgroup, trace_start_units]
+                    pos += formatex(g_fireJsonBuf[pos], buflen - pos, "[%d,%d,%d,%d,%d,%d,%d,%d,%d]",
+                        g_fireWeaponId[i], floatround(g_fireTimestamp[i] * 1000.0), g_fireFiredAt[i],
+                        g_fireGeom[i][0], g_fireGeom[i][1], g_fireGeom[i][2],
+                        g_fireGeom[i][3], g_fireGeom[i][4], g_fireGeom[i][5]);
+                    geomEmitted++;
+                } else {
+                    // weapon id, gametime ms, wall-clock seconds. Integers end to
+                    // end, like the aim windows.
+                    pos += formatex(g_fireJsonBuf[pos], buflen - pos, "[%d,%d,%d]",
+                        g_fireWeaponId[i], floatround(g_fireTimestamp[i] * 1000.0), g_fireFiredAt[i]);
+                }
                 sEmitted++;
             }
 
@@ -3144,9 +3190,11 @@ stock send_ac_weapon_fire_batch() {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
 
     // trunc_/dropped_ sustained >0 during matches is the resize signal, same
-    // as the sibling batches.
-    log_ktp("event=AC_WEAPON_FIRE_SEND match_id=%s players=%d shots=%d shots_buf=%d trunc_players=%d trunc_shots=%d dropped=%d bytes=%d",
-        matchId, emitted, shotsEmitted, g_fireCount, truncPlayers, truncShots, g_fireDropped, pos);
+    // as the sibling batches. geom_rejected>0 means the module returned a sample
+    // that contradicted its own contract — a module bug worth noticing, never a
+    // reason to ship the sample.
+    log_ktp("event=AC_WEAPON_FIRE_SEND match_id=%s players=%d shots=%d shots_geom=%d shots_buf=%d trunc_players=%d trunc_shots=%d dropped=%d geom_rejected=%d bytes=%d",
+        matchId, emitted, shotsEmitted, geomEmitted, g_fireCount, truncPlayers, truncShots, g_fireDropped, g_fireGeomRejected, pos);
 
     curl_easy_perform(curl, "ac_callback");
 
@@ -3286,6 +3334,24 @@ public dod_client_weaponswitch(id, wpnew, wpnold) {
     g_swCount++;
 }
 
+#if defined _dodx_included
+// The ids dodx_get_shot_geom may be queried for, per its contract: hitscan
+// firearms only. Grenades/rockets trace from the projectile, melee's geometry
+// rides the damage path, and custom weapon ids (above the stock enum) are
+// unknown types — none of those may be queried.
+stock bool:is_hitscan_firearm(weapon) {
+    switch (weapon) {
+        case DODW_COLT, DODW_LUGER, DODW_GARAND, DODW_SCOPED_KAR, DODW_THOMPSON,
+             DODW_STG44, DODW_SPRINGFIELD, DODW_KAR, DODW_BAR, DODW_MP40,
+             DODW_MG42, DODW_30_CAL, DODW_M1_CARBINE, DODW_MG34, DODW_GREASEGUN,
+             DODW_FG42, DODW_K43, DODW_ENFIELD, DODW_STEN, DODW_BREN, DODW_WEBLEY,
+             DODW_SCOPED_FG42, DODW_FOLDING_CARBINE, DODW_SCOPED_ENFIELD:
+            return true;
+    }
+    return false;
+}
+#endif
+
 // Every weapon actuation, hit or miss. Gated on the real match context only —
 // no baseline-mode arm, because the flush refuses a synthetic match id
 // (aim-geometry reasoning) and shots buffered under baseline would only be
@@ -3296,6 +3362,35 @@ public dod_client_weapon_fire(id, weapon, Float:gametime) {
     if (weapon <= 0) return;
     if (!is_user_alive(id)) return;
     if (get_user_team(id) == 0) return;
+
+    // Read the shot's geometry FIRST — this handler performs no traces, and the
+    // read must precede any it ever grows. The read is destructive and belongs
+    // to THIS dispatch, so it also precedes the capacity checks: if the shot is
+    // then dropped, its sample is consumed and lost (counted via dropped), which
+    // is the safe direction — the alternative leaves a stash a later dispatch
+    // could mispair with. hasGeom starts false and ONLY a 1-return, passing the
+    // contract's own consistency rules, may set it; a 0 stays NULL forever and
+    // no prior sample can stand in.
+    new bool:hasGeom = false;
+#if defined _dodx_included
+    new geom[6];
+    if (is_hitscan_firearm(weapon)) {
+        hasGeom = (dodx_get_shot_geom(id, weapon, geom) == 1);
+        // Contract self-consistency: [2] and [3] are -1 together or not at all,
+        // the four magnitudes cannot be negative, and each bounded field must fit
+        // the digit width the byte budget reserves for it. A sample violating any
+        // of that is a module bug — demote to NULL, never repair or ship it.
+        if (hasGeom && ((geom[2] == -1) != (geom[3] == -1)
+                || geom[0] < 0 || geom[0] > FIRE_MAX_ERR
+                || geom[1] < 0 || geom[1] > FIRE_MAX_RANGE
+                || geom[2] < -1 || geom[3] < -1
+                || geom[4] < 0 || geom[4] > FIRE_MAX_HITGROUP
+                || geom[5] < 0 || geom[5] > FIRE_MAX_STARTOFF)) {
+            hasGeom = false;
+            g_fireGeomRejected++;
+        }
+    }
+#endif
 
     if (g_fireCount >= FIRE_BUFFER_SIZE) {
         g_fireDropped++;
@@ -3318,6 +3413,7 @@ public dod_client_weapon_fire(id, weapon, Float:gametime) {
         copy(g_fireRosterAuthid[r], charsmax(g_fireRosterAuthid[]), authid);
         g_fireRosterSlot[r] = id;
         g_fireRosterShots[r] = 0;
+        g_fireRosterGeomShots[r] = 0;
         g_fireSlotCache[id] = r;
     }
 
@@ -3325,6 +3421,15 @@ public dod_client_weapon_fire(id, weapon, Float:gametime) {
     g_fireWeaponId[g_fireCount] = weapon;
     g_fireTimestamp[g_fireCount] = gametime;   // capture-time clock, not handler-time
     g_fireFiredAt[g_fireCount] = get_systime();
+    // Assigned unconditionally: this slot's flag must come from this shot's read,
+    // not from whatever a previous interval left in the ring.
+    g_fireHasGeom[g_fireCount] = hasGeom;
+#if defined _dodx_included
+    if (hasGeom) {
+        for (new c = 0; c < 6; c++) g_fireGeom[g_fireCount][c] = geom[c];
+        g_fireRosterGeomShots[r]++;
+    }
+#endif
     g_fireCount++;
     g_fireRosterShots[r]++;
 }

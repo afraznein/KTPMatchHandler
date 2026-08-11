@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.160] - UNRELEASED (tier2/weapon-fire-batch branch — UNBUILT, UNREVIEWED)
+
+### Added
+
+#### Shot geometry attached to the weapon-fire batch (tier 2.3 consumer)
+
+Joins the DODX `dodx_get_shot_geom` sensor to the 2.2 shot transport. Inside
+`dod_client_weapon_fire`, for hitscan firearm ids only, the handler reads the
+shot's captured geometry and — when the read returns 1 — widens that shot's row
+from 3 ints to 9: `[weaponId, tsMs, firedAtUtc, err_udeg, range_units,
+tgt_angvel_mdps, sight_gap_ms, hitgroup, trace_start_units]`. The API accepts
+exactly the two widths and asserts the order on ingest.
+
+Correctness properties, in priority order:
+
+- **A 0-return is NULL forever.** The per-shot `hasGeom` flag starts false, is
+  set only by this dispatch's own read, and is written into the ring
+  unconditionally — a recycled ring slot cannot leak a previous interval's
+  sample. Grenade/rocket/melee/custom ids are never queried at all.
+- **A sample violating its own contract is demoted, not repaired**: `[2]`/`[3]`
+  must be -1 together, the four magnitudes non-negative. Violations count in
+  `geom_rejected` (a module-bug tripwire), and the shot ships 3-wide.
+- **The read precedes the capacity checks** — it is destructive and belongs to
+  this dispatch; consuming it for a shot that is then dropped loses data
+  (counted) rather than leaving a stash a later dispatch could mispair with.
+- **Byte budget re-derived, not hand-counted**: per-field digit widths are named
+  constants (`FIRE_D_*`), summed into `FIRE_GEOM_EXTRA_BYTES`; the buffer sizes
+  on the all-9-wide worst case and the per-row headroom guard uses the same
+  constants plus the per-roster-entry geometry count, so guard and buffer cannot
+  drift apart.
+
+---
+
 ## [Unreleased]
 
 Repo hygiene only — no plugin code change, so no version bump and no new build.
