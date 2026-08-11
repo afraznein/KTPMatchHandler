@@ -6,15 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [0.10.160] - UNRELEASED (tier2/weapon-fire-batch branch — UNBUILT, UNREVIEWED)
+## [0.10.160] - 2026-08-11
 
 ### Added
 
 #### Shot geometry attached to the weapon-fire batch (tier 2.3 consumer)
 
-Joins the DODX `dodx_get_shot_geom` sensor to the 2.2 shot transport. Inside
-`dod_client_weapon_fire`, for hitscan firearm ids only, the handler reads the
-shot's captured geometry and — when the read returns 1 — widens that shot's row
+Joins the DODX `dodx_get_shot_geom` sensor to the 2.2 shot transport added in
+0.10.159 directly below — both cuts ship together, neither pre-dates the other.
+Inside `dod_client_weapon_fire`, for hitscan firearm ids only, the handler reads
+the shot's captured geometry and — when the read returns 1 — widens that shot's row
 from 3 ints to 9: `[weaponId, tsMs, firedAtUtc, err_udeg, range_units,
 tgt_angvel_mdps, sight_gap_ms, hitgroup, trace_start_units]`. The API accepts
 exactly the two widths and asserts the order on ingest.
@@ -38,6 +39,56 @@ Correctness properties, in priority order:
   drift apart.
 
 ---
+
+## [0.10.159] - 2026-08-11
+
+### Added
+
+#### Weapon-fire batch — the miss denominator (tier 2.2 transport)
+
+Buffers every `dod_client_weapon_fire` dispatch and POSTs it to
+`/api/match/weapon-fire-batch` on the weapon-timeline cadence. This is the
+denominator the hits stream never had: `client_damage` only ever sees shots that
+connected, so accuracy was not computable from it alone. Every actuation the
+forward reports is shipped, grenades and rockets included; the consumer filters
+by weapon id.
+
+**Transport only.** Same rule as the aim-geometry batch — this repo is public, so
+what the counts mean is decided in the private consumer. No threshold, no ratio.
+
+Correctness properties:
+
+- **Rows carry a roster index, never a slot.** A slot is not an identity, so the
+  authid is captured at fire time into a per-batch roster and the slot is never
+  read again. A mid-interval substitute gets a fresh roster entry and the previous
+  occupant's shots keep their own name. The cache is re-verified against the
+  authid on every shot rather than trusted, and is invalidated in
+  `client_putinserver` (before the bot/HLTV skip — the invalidation is about the
+  slot, not the player), in `on_client_left`, and at `plugin_init`.
+- **`plugin_init` unmaps the slot cache but deliberately does NOT reset the ring.**
+  Extension-mode globals persist across a map change, so a compile-time zero would
+  alias every slot to roster entry 0 — but shots buffered before a halftime
+  changelevel keep their captured identity and still owe the next flush.
+- **The loss counters ride IN the payload**, unlike the siblings' log-only
+  counters. An undercounted denominator against a fully-recorded hit stream
+  inflates accuracy — the accusing direction — so the API must be able to see that
+  an interval was lossy without reading game-server logs.
+- **No synthetic-id fallback.** A shot outside a match must not borrow or invent a
+  match id: a wrong denominator deflates that match's accuracy for real players.
+  Discard, and clear the counters.
+- **Truncation is fair and counted.** A rotating start cursor means a full payload
+  sheds a different player each interval rather than always the same one, and the
+  shed path counts what it dropped instead of breaking silently.
+- The ring is drained at match end before the id is cleared, so the tail of the
+  deciding round is not lost.
+
+**No module drain on this path.** Unlike the aim-geometry batch — which calls
+`dodx_reset_aim_stats` while building its payload, before the POST is issued — the
+shot ring lives entirely in the plugin. `fire_batch_reset()` runs after
+`curl_easy_perform`, and `CURLOPT_COPYPOSTFIELDS` copies the buffer immediately,
+so reusing it on the next flush cannot race an in-flight request. A failed or
+timed-out POST therefore loses exactly that one interval and cannot corrupt the
+next.
 
 ## [Unreleased]
 
