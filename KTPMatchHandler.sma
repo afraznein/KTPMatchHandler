@@ -75,8 +75,14 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.160"
+#define PLUGIN_VERSION "0.10.161"
 #define PLUGIN_AUTHOR  "Nein_"
+
+// Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
+// "no limit" — an OT half that never ends and no scoreboard event to end it.
+#define OT_TIMELIMIT_DEFAULT 10
+#define OT_TIMELIMIT_MIN     1
+#define OT_TIMELIMIT_MAX     60
 
 // ---------- CVARs ----------
 new g_cvarCfgBase;
@@ -95,6 +101,8 @@ new g_cvarUnreadyReminderSec; // unready reminder interval (ktp_unready_reminder
 new g_cvarUnpauseReminderSec; // unpause reminder interval (ktp_unpause_reminder_secs)
 new g_cvarLanMode;            // LAN event mode (ktp_lan_mode): cvar not ktp.ini so it can be
                               // flipped live over rcon without a restart; read live per call
+new g_cvarOtTimelimit;        // minutes per OT half (ktp_ot_timelimit); read live per call, never
+                              // cached — see ktp_ot_timelimit_mins()
 
 #if defined KTP_TEST_MODE
 new g_cvarTestSkipReadyCount; // test-mode: when 1, get_required_ready_count() returns 1 so
@@ -215,8 +223,8 @@ enum MatchType {
     MATCH_TYPE_SCRIM = 1,        // Scrim match (Discord disabled, scrim config) - always allowed
     MATCH_TYPE_12MAN = 2,        // 12-man match (Discord disabled, 12man config) - always allowed
     MATCH_TYPE_DRAFT = 3,        // Draft match (Discord disabled, competitive config) - always allowed
-    MATCH_TYPE_KTP_OT = 4,       // Explicit KTP overtime (requires password, 5-min rounds)
-    MATCH_TYPE_DRAFT_OT = 5      // Explicit Draft overtime (no password, 5-min rounds)
+    MATCH_TYPE_KTP_OT = 4,       // Explicit KTP overtime (requires password; ktp_ot_timelimit per half)
+    MATCH_TYPE_DRAFT_OT = 5      // Explicit Draft overtime (no password; ktp_ot_timelimit per half)
 };
 
 // ---------- State ----------
@@ -1921,6 +1929,22 @@ stock announce_tie_recovery_hint() {
             client_print(0, print_chat, "[KTP] Match tied. Type .draftOT to start draft overtime (no password).");
         }
     }
+}
+
+// Minutes for one OT half. Deliberately NOT cached in ktp_sync_config_from_cvars():
+// the value is consumed straight into mp_timelimit at the point of read, so unlike
+// the tech budget there is no seeded copy that a map config can leave stale — and so
+// no re-seed guard is needed here. Out-of-range falls back rather than propagating.
+// Set this at server-config level only: the go-live announce reads it BEFORE
+// exec_map_config() and the clock reads it after, so a map config setting it would
+// make the chat line and the actual clock disagree. §1.10 is one league-wide value.
+stock ktp_ot_timelimit_mins() {
+    new mins = g_cvarOtTimelimit ? get_pcvar_num(g_cvarOtTimelimit) : OT_TIMELIMIT_DEFAULT;
+    if (mins < OT_TIMELIMIT_MIN || mins > OT_TIMELIMIT_MAX) {
+        log_ktp("event=OT_TIMELIMIT_INVALID value=%d using=%d", mins, OT_TIMELIMIT_DEFAULT);
+        return OT_TIMELIMIT_DEFAULT;
+    }
+    return mins;
 }
 
 stock ktp_sync_config_from_cvars() {
@@ -4578,10 +4602,12 @@ public plugin_init() {
     new tmpCnt[8];
     new tmpPre[8];
     new tmpTech[8];
+    new tmpOtLimit[8];
 
     num_to_str(g_countdownSeconds, tmpCnt,  charsmax(tmpCnt));
     num_to_str(g_prePauseSeconds, tmpPre,    charsmax(tmpPre));
     num_to_str(g_techBudgetSecs,  tmpTech,   charsmax(tmpTech));
+    num_to_str(OT_TIMELIMIT_DEFAULT, tmpOtLimit, charsmax(tmpOtLimit));
 
     g_cvarCountdown       = register_cvar("ktp_pause_countdown",  tmpCnt);
     g_cvarPrePauseSec     = register_cvar("ktp_prepause_seconds", tmpPre);
@@ -4608,6 +4634,9 @@ public plugin_init() {
     // LAN event mode: tech pauses don't expire and don't charge the team budget.
     // Deliberately a cvar (not ktp.ini) so it can be flipped over rcon mid-event.
     g_cvarLanMode        = register_cvar("ktp_lan_mode", "0");
+    // Ruleset §1.10 OT half length. A cvar so a ruleset change is a config push
+    // rather than a 24-instance wave; the literal it replaced cost exactly that.
+    g_cvarOtTimelimit    = register_cvar("ktp_ot_timelimit", tmpOtLimit);
 
     // Match type indicator for other plugins (KTPCvarChecker uses this)
     // 1 = competitive (.ktp, .ktpOT), 0 = casual (12man, scrim, draft)
@@ -4679,7 +4708,7 @@ public plugin_init() {
     register_clcmd("say .draft",           "cmd_start_draft");
     register_clcmd("say_team .draft",      "cmd_start_draft");
 
-    // Explicit Overtime (requires password, 5-min rounds)
+    // Explicit Overtime (requires password; ktp_ot_timelimit per half)
     register_clcmd("say /ktpOT",           "cmd_start_ktp_ot");
     register_clcmd("say_team /ktpOT",      "cmd_start_ktp_ot");
     register_clcmd("say .ktpOT",           "cmd_start_ktp_ot");
@@ -7859,7 +7888,7 @@ public cmd_start_draft(id) {
     return PLUGIN_HANDLED;
 }
 
-// KTP Overtime - explicit OT for competitive matches, requires password, 5-min rounds
+// KTP Overtime - explicit OT for competitive matches, requires password
 public cmd_start_ktp_ot(id) {
     // Block if match already in progress
     if (g_matchLive || g_preStartPending || g_matchPending) {
@@ -7872,7 +7901,7 @@ public cmd_start_ktp_ot(id) {
     return PLUGIN_HANDLED;
 }
 
-// Draft Overtime - explicit OT for draft matches, requires password, 5-min rounds
+// Draft Overtime - explicit OT for draft matches, requires password
 public cmd_start_draft_ot(id) {
     // Block if match already in progress
     if (g_matchLive || g_preStartPending || g_matchPending) {
@@ -9208,7 +9237,7 @@ public cmd_ready(id) {
             } else {
                 announce_all("%s = Axis | %s = Allies", g_team1Name, g_team2Name);
             }
-            announce_all("5-minute overtime round - first to break the tie wins!");
+            announce_all("%d-minute overtime round - first to break the tie wins!", ktp_ot_timelimit_mins());
 
             // =============== Restore grand total scores to scoreboard ===============
             // Grand total = regulation + all previous OT rounds
@@ -9543,11 +9572,13 @@ public task_apply_match_config_and_start() {
         log_ktp("event=DRAFT_TIMELIMIT duration=15");
     }
 
-    // OT timelimit override - 5 minutes per OT round
+    // OT timelimit override - one OT round is one OT HALF (ruleset §1.10), not a
+    // two-half overtime; g_otRound counts halves and each gets this clock.
     // Must be set BEFORE restart round so the timelimit takes effect on the restarted round
     if (g_inOvertime) {
-        server_cmd("mp_timelimit 5");
-        log_ktp("event=OT_TIMELIMIT duration=5 round=%d", g_otRound);
+        new otMins = ktp_ot_timelimit_mins();
+        server_cmd("mp_timelimit %d", otMins);
+        log_ktp("event=OT_TIMELIMIT duration=%d round=%d", otMins, g_otRound);
     }
 
     // ALWAYS execute restart round - even if no map config was found

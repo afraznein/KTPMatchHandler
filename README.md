@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.160** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.161** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -16,7 +16,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **Season Control**: Password-protected season toggle - disable competitive matches off-season
 - **Match Password Protection**: Competitive matches require password entry
 - **Half Tracking**: Automatic 1st/2nd half detection with map rotation adjustment
-- **Overtime System**: Explicit OT via `.ktpOT`/`.draftOT` commands - 5-min rounds, password-protected
+- **Overtime System**: Explicit OT via `.ktpOT`/`.draftOT` commands - 10-min halves (`ktp_ot_timelimit`), password-protected
 - **Match Context Persistence**: Match ID, pause counts, tech budget, and OT state survive map changes via localinfo
 - **Unique Match IDs**: Format `{timestamp}-{shortHostname}` for stats correlation (e.g. `1768174986-ATL1`; 1.3 Community 12mans use `1.3-{queueId}-{shortHostname}`)
 - **Captain System**: Team confirmation before ready-up phase
@@ -145,6 +145,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
    // Match System
    // (ready count is fixed per match type: 6 for .ktp/.ktpOT, 5 for others)
    ktp_tech_budget_seconds "300"         // 5-min tech budget per team
+   ktp_ot_timelimit "10"                 // Minutes per OT half (ruleset 1.10); 1-60
    ktp_unready_reminder_secs "30"        // Unready reminder interval
    ktp_unpause_reminder_secs "15"        // Unpause reminder interval
 
@@ -528,6 +529,11 @@ ktp_unpause_reminder_secs "15"        // Reminder interval for unpause confirmat
 // ===== Match System =====
 // (ready count is fixed per match type: 6 for .ktp/.ktpOT, 5 for scrim/12man/draft — the 12man 5/team is deliberate)
 ktp_tech_budget_seconds "300"         // Technical pause budget per team (5 min)
+ktp_ot_timelimit "10"                 // Minutes per OT HALF (ruleset 1.10), range 1-60.
+                                      // OT total = 2 x this. Read live at each OT
+                                      // go-live, never cached. Set at server-config
+                                      // level only — a map config setting it makes the
+                                      // chat announcement and the actual clock disagree
 ktp_lan_mode "0"                      // 1 = LAN event mode: tech pauses never expire
                                       // and don't charge the budget. Read live —
                                       // flip over rcon any time, no restart needed
@@ -1186,7 +1192,7 @@ For support and questions, please open an issue on GitHub.
 
 ## Status
 
-- **Current Version**: v0.10.160
+- **Current Version**: v0.10.161
 - **Status**: Production (fleet-wide on KTP-ReHLDS extension mode; score persistence in live verification)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + KTPAMXX 2.7.x (extension mode, no Metamod)
 - **Last Updated**: August 2026
@@ -1198,7 +1204,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.160                    ║
+║             KTP MATCH HANDLER v0.10.161                    ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1236,4 +1242,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.160** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.161** - Making competitive Day of Defeat matches better, one pause at a time.

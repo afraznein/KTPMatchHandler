@@ -6,6 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.161] - 2026-08-13
+
+### Changed
+
+#### Overtime half length is now `ktp_ot_timelimit`, default 10 minutes (was a hardcoded 5)
+
+Ruleset §1.10 moves OT halves from 5 to 10 minutes (S10 ballot item 3). The old value
+appeared eight times — three executable, five in comments — and the non-clock copies
+are the ones that would have rotted silently:
+
+| Site | Was | Now |
+|---|---|---|
+| `mp_timelimit` in `task_apply_match_config_and_start` | `5` | `ktp_ot_timelimit_mins()` |
+| `log_ktp("event=OT_TIMELIMIT duration=…")` | hardcoded `5` | the value actually applied |
+| `announce_all("5-minute overtime round …")` | hardcoded `5` | the value actually applied |
+| 5 comments reading "5-min rounds" | `5` | named the cvar, per half |
+
+Had only the `mp_timelimit` literal been changed, the log would have reported
+`duration=5` for every OT half while the clock ran 10, and the announce would have told
+both teams "5-minute" mid-match, on screen, while the server ran 10. The five comments
+are the copies a grep for the *new* symbol never finds.
+
+**Why a cvar and not a new literal.** Changing OT length is otherwise a version bump,
+a review, a 24-instance wave and a nightly restart to activate. As a cvar it is a
+`dodserver.cfg` line, which matters here because the balloted value was ambiguous
+enough to need operator disambiguation — the next such change should not cost a wave.
+
+**Why it is not cached in `ktp_sync_config_from_cvars()`.** `ktp_tech_budget_seconds`
+needs its re-seed guard because it seeds `g_techBudget[]`, a consumable copy made
+*before* the map config runs — so a map config changing the cvar leaves the seed stale,
+and refilling it mid-match is itself a bug. OT length has neither property: it is read
+and consumed straight into `mp_timelimit` at the point of use, holds no derived state,
+and is not consumable. Caching it would manufacture exactly the hazard the guard exists
+to undo. Bounds are `1..60`; out-of-range logs `OT_TIMELIMIT_INVALID` and falls back to
+10, because `mp_timelimit 0` means *no limit* — an OT half that never ends.
+
+**Set it at server-config level only.** The go-live announce reads the cvar ~0.05s
+before `exec_map_config()` and the clock reads it after, so a *map* config setting
+`ktp_ot_timelimit` would make the chat line and the real clock disagree. §1.10 is one
+league-wide value, so per-map OT length is a misconfiguration rather than a feature;
+resolving it once pre-config was rejected because that reintroduces the read-before-
+map-config shape the tech-budget re-seed guard exists to repair.
+
+Terminology tightened while here: one `g_otRound` is one OT **half**, not a two-half
+overtime. §1.10 is "two additional halves of N minutes each", so this clock is per half
+and OT total is 2 × `ktp_ot_timelimit`. The announce does not fire on an explicit
+`.ktpOT`/`.draftOT` round 1 (pre-existing: that path falls through to the first-half
+branch), so it covers OT rounds 2+ and the tie-continuation path, not every OT half.
+
+Tech-pause budget deliberately unchanged — one variable per ruleset change.
+
+---
+
 ## [0.10.160] - 2026-08-11
 
 ### Added
@@ -90,9 +143,13 @@ so reusing it on the next flush cannot race an in-flight request. A failed or
 timed-out POST therefore loses exactly that one interval and cannot corrupt the
 next.
 
-## [Unreleased]
+## [Unreleased — partially shipped, see note]
 
-Repo hygiene only — no plugin code change, so no version bump and no new build.
+Repo hygiene only — no plugin code change, so this carried no version bump of its
+own. It is filed below released sections because it is not wholly unreleased: the
+build-script commits are ancestors of the 0.10.159/0.10.160 cut and therefore shipped
+inside it, while the `compile.bat` removal and its doc line live only on `main` and
+have never been in a fleet build. Reconcile when `main` and the shipped line merge.
 
 ### Removed
 
