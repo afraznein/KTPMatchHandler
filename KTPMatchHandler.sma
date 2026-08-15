@@ -433,11 +433,13 @@ const AUTO_CONFIRM_SECS = 60;
 // previous occupant's shots keep their own name.
 // (This section sits below the Constants block because it sizes on MAX_PLAYERS.)
 
-// Entries scale on the hit buffer: shots strictly contain hits and the flush
-// cadence is shared, so their ratio is the only sizing question. Memory stays
-// below the hit buffer's because rows hold no authid strings — identity lives
-// once per firing player in the roster.
-#define FIRE_BUFFER_SIZE   (WEAPON_HIT_BUFFER_SIZE * 3)
+// Sized independently of the hit buffer. It used to be WEAPON_HIT_BUFFER_SIZE*3
+// on the reasoning that shots contain hits, but that made the SHOT DENOMINATOR a
+// side effect of the hit buffer: resizing hits silently rescales this buffer and
+// FIRE_JSON_BUF_SIZE with it, which is an accuracy bug wearing a memory-tuning
+// hat. The two streams have different peak rates and different loss costs, so
+// they get their own constants and their own evidence.
+#define FIRE_BUFFER_SIZE   384
 // One entry per identity that fired this interval; doubled over the slot count
 // so a mid-interval reconnect gets its own entry instead of evicting someone.
 #define FIRE_ROSTER_SIZE   (MAX_PLAYERS * 2)
