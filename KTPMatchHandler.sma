@@ -133,22 +133,60 @@ new curl_slist: g_acCurlHeaders = SList_Empty;  // persistent headers slist (nev
 // ---------- 0.5.0 Weapon Timeline Enrichment ----------
 // Ring buffers for the dod_client_weaponswitch + client_damage forwards.
 // Flushed every WEAPON_FLUSH_INTERVAL seconds via amxxcurl POST to
-// /api/match/weapon-timeline-batch. On overflow the NEW event is dropped
-// (the buffer keeps the oldest) and the dropped-counter bumps; the JSON
-// headroom guard can additionally truncate buffered entries at build time.
-// Both losses are surfaced on AC_WEAPON_TIMELINE_SEND (dropped_*/trunc_*) —
-// read those before resizing the buffers; peak engagement windows are the
-// exact frames the AC recoil detector needs.
+// /api/match/weapon-timeline-batch. Two independent losses exist and they are
+// not interchangeable: ring overflow (never buffered) and the JSON headroom
+// guard (buffered, not emitted). Both are surfaced on AC_WEAPON_TIMELINE_SEND
+// as dropped_* / trunc_*, and that log line is the only live evidence of either.
 //
-// Sized for ~30s window of a 12-player match: typical switches ~5-10/min/player
-// = 30-60 in 30s across the fleet, peak hits during a heavy engagement
-// ~5-10/sec aggregate = up to ~300 in 30s. Buffers accordingly. JSON payload
-// fits in ~14KB (well under the 16KB COPYPOSTFIELDS reasonable ceiling).
+// SIZED FROM FLEET MEASUREMENT, NOT FROM A PER-PLAYER ESTIMATE. The estimate
+// this block used to carry — switches at a few per player per minute — was off
+// by multiples in the direction that loses data, and the switch ring ran pinned
+// at its cap for weeks: every saturated flush reported a sent count exactly
+// equal to the buffer size, which is the tell that a cap, not the game, set the
+// number. Re-derive the same way before changing any size here: sum sw/dropped_sw
+// per flush off AC_WEAPON_TIMELINE_SEND across the fleet and size above the
+// observed worst, not above the mean. Switches are by far the highest-rate of
+// the three streams; hits are the lowest and have never overflowed.
+//
+// The ring sizes and the payload buffer are ONE decision, not two — a ring the
+// payload cannot carry converts dropped_* into trunc_* and changes nothing else.
+// TL_JSON_BUF_SIZE below is therefore derived from these constants rather than
+// written as a literal, so the two cannot drift apart.
 //
 // Design doc: KTPAntiCheat/docs/WEAPON_ID_ENRICHMENT_DESIGN.md
 #define WEAPON_FLUSH_INTERVAL 30.0
-#define WEAPON_SW_BUFFER_SIZE 64
-#define WEAPON_HIT_BUFFER_SIZE 128
+#define WEAPON_SW_BUFFER_SIZE 512
+#define WEAPON_HIT_BUFFER_SIZE 48
+
+// Payload arithmetic as constants, same rule as the aim-geometry and weapon-fire
+// batches below: every hand-computed literal in this plugin has been wrong at
+// least once. Widths are the storage bounds the code actually enforces, not the
+// values seen in practice — the enforced bound is the only one that holds.
+#define TL_AUTHID_BYTES     31   // g_swSteamId / g_hitAttSteamId capacity, less the terminator
+#define TL_WEAPON_BYTES      3   // DODW_* id
+#define TL_TSMS_BYTES       10   // gametime ms since boot, at int32 width
+#define TL_FIREDAT_BYTES    10   // unix seconds, at int32 width
+#define TL_DAMAGE_BYTES      6
+#define TL_HITPLACE_BYTES    3
+#define TL_TEAMATK_BYTES     3
+// Literal bytes of one rendered row, its leading separator included.
+#define TL_SW_LITERAL_BYTES   49
+#define TL_HIT_LITERAL_BYTES 104
+#define TL_SW_ROW_MAX  (TL_SW_LITERAL_BYTES + TL_AUTHID_BYTES + TL_WEAPON_BYTES + TL_TSMS_BYTES + TL_FIREDAT_BYTES)
+#define TL_HIT_ROW_MAX (TL_HIT_LITERAL_BYTES + 2 * TL_AUTHID_BYTES + TL_WEAPON_BYTES + TL_TSMS_BYTES + TL_DAMAGE_BYTES + TL_HITPLACE_BYTES + TL_TEAMATK_BYTES + TL_FIREDAT_BYTES)
+// Opening shell at worst: a 63-char matchId plus its literals.
+#define TL_HEADER_BYTES 96
+// The literal between the two arrays.
+#define TL_MID_BYTES    10
+// The closing literal.
+#define TL_TAIL_BYTES    8
+// What the headroom guard must leave free. It tests pos < headroom BEFORE
+// writing a row, so the buffer has to absorb a whole row after that test and
+// still close the JSON. Reserve too little and the tail is cut MID-TOKEN: the
+// API rejects the payload for every player and the log still reports nothing
+// shed. Identical trap to AIM_ROW_MAX and FIRE_TAIL_BYTES.
+#define TL_END_RESERVE (TL_HIT_ROW_MAX + TL_MID_BYTES + TL_TAIL_BYTES)
+#define TL_JSON_BUF_SIZE (TL_HEADER_BYTES + WEAPON_SW_BUFFER_SIZE * TL_SW_ROW_MAX + TL_MID_BYTES + WEAPON_HIT_BUFFER_SIZE * TL_HIT_ROW_MAX + TL_TAIL_BYTES + TL_END_RESERVE)
 
 // Parallel-array storage (Pawn has no structs). steam_id stored as authid string
 // because that's the canonical AC ID; weapon_id maps to DODW_* enum from dodconst.inc.
@@ -174,7 +212,7 @@ new g_hitTeamAttack[WEAPON_HIT_BUFFER_SIZE];
 new g_hitCount = 0;
 new g_hitDropped = 0;
 
-new g_weaponTimelineJsonBuf[14336];             // 14KB JSON payload scratch — preallocated, NEVER on stack
+new g_weaponTimelineJsonBuf[TL_JSON_BUF_SIZE];  // JSON payload scratch — preallocated, NEVER on stack
 // Aim-geometry payload. Bounded by PLAYERS x KEEP_WINDOWS rather than by event
 // rate, but the previous 4KB was sized from an arithmetic error and truncated at
 // 11-12 players -- silently, and always dropping the highest-indexed one, so a
@@ -2878,13 +2916,12 @@ stock send_ac_weapon_timeline_batch() {
     }
 
     // Build JSON. formatex returns the bytes written; we accumulate the cursor
-    // manually so we can chain efficiently. The pre-allocated buffer is
-    // 14336 bytes; each switch is ~70 bytes max, each hit is ~180 bytes max.
-    // Buffer guards (g_weaponTimelineJsonBuf - 256) leave headroom for the
-    // closing braces.
+    // manually so we can chain efficiently. Both the buffer and the reserve come
+    // from the TL_* arithmetic beside the ring declarations — never re-derive
+    // either here, or the two drift and the tail gets cut mid-token.
     new pos = 0;
     new buflen = sizeof(g_weaponTimelineJsonBuf) - 1;
-    new headroom = buflen - 256;
+    new headroom = buflen - TL_END_RESERVE;
 
     pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos,
         "{^"matchId^":^"%s^",^"switches^":[", matchId);
