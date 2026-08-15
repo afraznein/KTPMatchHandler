@@ -101,7 +101,8 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
    output. A separate `KTP_TEST_MODE=1 bash compile.sh` variant exists for
    integration testing; it is not for fleet deploy.
 
-   Test builds also expose `.testmatch` and `amx_ktp_testmatch [bots-per-team]`.
+   Test builds also expose `.testmatch` and `amx_ktp_testmatch`, which always
+   run a tournament-sized 6v6 bot match on a 12-slot ephemeral server.
    They remain disabled until `ktp_testmatch_enabled 1` is set and refuse to run
    unless `sv_lan 1`, the server is idle, and no human client is connected.
    `.testmatch` uses bots to execute the normal `.ktp` / `.confirm` / `.ready`

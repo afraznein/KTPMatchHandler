@@ -10,6 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+#### 0.10.160 - direct 6v6 `.testmatch` production-path driving
+
+- Drive the production `.ktp`, `.confirm`, and `.ready` handlers directly for
+  fake clients.  Lane B's ReHLDS topology does not route fake-client
+  `engclient_cmd("say")` calls through the registered chat handlers.
+- Fix the contained test shape at 6v6; `.testmatch` now creates exactly 12 bots.
+
 #### 0.10.159 - bot-backed `.testmatch` for Lane B
 
 - A `KTP_TEST_MODE`-only `.testmatch` / `amx_ktp_testmatch` entry point fills a
