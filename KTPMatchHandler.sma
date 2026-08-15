@@ -3510,6 +3510,10 @@ public client_damage(att, vic, dmg, wpn, hitplace, TA) {
     if (!ac_timeline_should_record()) return;
     if (wpn <= 0) return;
 
+    // Discards the incoming hit, deliberately unlike the switch ring above. A hit
+    // is a self-contained event, so losing one costs exactly itself and no policy
+    // recovers it; a switch is a state transition whose loss propagates forward.
+    // Do not "fix" this asymmetry — it is the difference between the two streams.
     if (g_hitCount >= WEAPON_HIT_BUFFER_SIZE) {
         g_hitDropped++;
         return;
