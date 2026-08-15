@@ -1276,7 +1276,7 @@ stock bool:process_ot_round_end_changelevel() {
 
         // Save OT state for next map - this persists to localinfo
         // Next map load will detect OT context and restore the ready phase
-        save_ot_state_for_next_round();
+        save_ot_state_to_localinfo();
 
         log_ktp("event=OT_NEXT_ROUND_PREPARED next_round=%d forcing_same_map=true", g_otRound);
         return true;  // Still tied - caller should force changelevel to same map
@@ -1453,15 +1453,18 @@ public task_general_changelevel_watchdog() {
     server_exec();
 }
 
-// Everything an OT round save must persist regardless of which round it is.
-// Splitting it per-round is what lost the Discord message/channel IDs on every
-// OT round past the first (0.10.143): the embed could no longer be edited for
-// the rest of the OT. A key added here reaches every OT save; a key added to
-// only one of the callers below reaches only that round. Not to be confused with
-// the older, dead save_ot_context() — this does not feed it.
-stock save_ot_localinfo_shared() {
+// The ONE OT save. Splitting it per-round is what lost the Discord message and
+// channel IDs on every OT round past the first (0.10.143): the embed could no
+// longer be edited for the rest of the OT. Every key an OT round needs belongs
+// here. Not to be confused with the older, dead save_ot_context().
+//
+// Persists the context for round g_otRound — the round about to be played.
+// Called at OT go-live and again when a tied round hands over to the next one;
+// both want the same picture.
+stock save_ot_state_to_localinfo() {
     new buf[128];
 
+    set_localinfo(LOCALINFO_MODE, fmt("ot%d", g_otRound));
     set_localinfo(LOCALINFO_MATCH_TYPE, fmt("%d", _:g_matchType));
     set_localinfo(LOCALINFO_MATCH_ID, g_matchId);
     set_localinfo(LOCALINFO_MATCH_MAP, g_matchMap);
@@ -1484,12 +1487,6 @@ stock save_ot_localinfo_shared() {
     formatex(captainsBuf, charsmax(captainsBuf), "%s|%s|%s|%s",
         safeCap1, g_captain1_sid, safeCap2, g_captain2_sid);
     set_localinfo(LOCALINFO_CAPTAINS, captainsBuf);
-}
-
-// Save OT state to localinfo for next round
-stock save_ot_state_for_next_round() {
-    set_localinfo(LOCALINFO_MODE, fmt("ot%d", g_otRound));
-    save_ot_localinfo_shared();
 
     // Save all OT round scores. The engine REJECTS localinfo values of
     // MAX_KV_LEN(127) chars or more outright (info.cpp) — max storable is
@@ -1512,30 +1509,6 @@ stock save_ot_state_for_next_round() {
 
     log_ktp("event=OT_STATE_SAVED round=%d tech=%d,%d starting_side=%d reg=%d-%d",
             g_otRound, g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs,
-            g_regulationScore[1], g_regulationScore[2]);
-}
-
-// Save OT state for first overtime round (after regulation tie)
-// Same context as save_ot_state_for_next_round, plus the round-1 specifics
-stock save_ot_state_for_first_round() {
-    new buf[128];
-
-    set_localinfo(LOCALINFO_MODE, "ot1");
-    save_ot_localinfo_shared();
-
-    // 1st half scores, needed for the full score display
-    format_scores(buf, charsmax(buf), g_firstHalfScore[1], g_firstHalfScore[2]);
-    set_localinfo(LOCALINFO_H1_SCORES, buf);
-
-    // Clear OT scores (none yet for round 1)
-    set_localinfo(LOCALINFO_OT_SCORES, "");
-
-    // Save pause state (OT uses fresh tech budgets, pause counts reset)
-    format_state(buf, charsmax(buf), g_pauseCountTeam[1], g_pauseCountTeam[2], g_otTechBudget[1], g_otTechBudget[2]);
-    set_localinfo(LOCALINFO_STATE, buf);
-
-    log_ktp("event=OT_FIRST_ROUND_STATE_SAVED match_id=%s map=%s tech=%d,%d starting_side=%d reg=%d-%d",
-            g_matchId, g_matchMap, g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs,
             g_regulationScore[1], g_regulationScore[2]);
 }
 
@@ -9798,8 +9771,14 @@ public task_deferred_discord_fwd() {
         #endif
     }
 
-    // Proactive context save for 1st half
-    if (g_currentHalf == 1) {
+    // Proactive context save, so an abandoned period restores as what it was.
+    // OT gets the OT shape: this used to run save_match_context_for_second_half()
+    // for OT too, stamping _ktp_mode="h2" over the round's own "otN" — an OT round
+    // abandoned mid-round then came back as a 2nd half.
+    if (g_inOvertime) {
+        save_ot_state_to_localinfo();
+        log_ktp("event=PROACTIVE_CONTEXT_SAVE match_id=%s map=%s half=ot%d", g_matchId, g_matchMap, g_otRound);
+    } else if (g_currentHalf == 1) {
         save_match_context_for_second_half();
         log_ktp("event=PROACTIVE_CONTEXT_SAVE match_id=%s map=%s half=1", g_matchId, g_matchMap);
     }
