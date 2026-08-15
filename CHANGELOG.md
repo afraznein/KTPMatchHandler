@@ -15,9 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 `g_currentHalf` carried three meanings in two values: `1` meant "regulation
 first half" *and* "any OT round". Every site that needed to tell them apart had
 to remember `g_inOvertime` as well, and the ones that forgot wrote
-regulation-shaped state while an OT round was live. Four of the original six
-were still open; they share one cause, so they are fixed as one change rather
-than four guards.
+regulation-shaped state while an OT round was live. The remaining sites share
+one cause, so they are fixed by removing the overload rather than by adding a
+guard to each — grep `g_currentHalf ==` to see that no bare `== 1` can now mean
+an OT round.
 
 **OT round N is now `OT_HALF_BASE + N`** — the encoding `ktp_match_start`
 already publishes to KTPHLTVRecorder and the tier-2 witness contract already
@@ -71,12 +72,31 @@ content is the same either way.
   tie now points at rather than triggering.
 - `ktp_match_start`'s `half` argument reads `g_currentHalf` directly instead of
   re-deriving `100 + g_otRound`. Same values on the wire.
+- `.forcereset` reports the period through one OT-aware formatter, so an OT
+  round shows as `ot2` rather than the raw code. The log token keeps its
+  `live_` prefix and stays greppable.
+- `end_match_cleanup()` now clears the in-memory Discord message/channel IDs
+  alongside their localinfo keys. They are Pawn globals, so they outlived the
+  map change: a later match edited the finished match's embed, and the OT save
+  would have persisted that dead id under the new match's context.
 
 ### Known limitations
 
+Found while fixing the above, left deliberately — none is a regression, and each
+wants its own verification:
+
 - A tech pause spent mid-OT-round updates `g_otTechBudget[]` but does not
   re-persist `_ktp_otst` until the round ends, so an abandoned round restores
-  the budget it started with. Pre-existing and unchanged here.
+  the budget it started with.
+- A fresh `.ktpOT` / `.draftOT` never runs `send_match_embed_create()`, so
+  round 1 has no embed to edit. The abandoned-OT teardown, forward and log line
+  now all fire correctly for it; only the Discord embed cannot.
+- `capture_roster_snapshot()` keys on `g_currentHalf == 2` rather than
+  `team1_current_side()`, so it inverts team identity on OT rounds where team 1
+  starts as Axis. Same defect class, a `== 2` site rather than a `== 1` one.
+- `.restarthalf`'s OT-specific refusal is unreachable — the `!= 2` half check
+  short-circuits first, so a live OT round gets the generic "2nd half only"
+  message. Cosmetic; the command is refused either way.
 
 ---
 

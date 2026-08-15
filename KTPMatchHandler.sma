@@ -1453,14 +1453,9 @@ public task_general_changelevel_watchdog() {
     server_exec();
 }
 
-// The ONE OT save. Splitting it per-round is what lost the Discord message and
-// channel IDs on every OT round past the first (0.10.143): the embed could no
-// longer be edited for the rest of the OT. Every key an OT round needs belongs
-// here. Not to be confused with the older, dead save_ot_context().
-//
-// Persists the context for round g_otRound — the round about to be played.
-// Called at OT go-live and again when a tied round hands over to the next one;
-// both want the same picture.
+// The ONE OT save — every key an OT round needs, for the round about to be
+// played; called at go-live and at the tied-round handover. Splitting it
+// per-round lost the Discord IDs on every round past the first (0.10.143).
 stock save_ot_state_to_localinfo() {
     new buf[128];
 
@@ -5612,6 +5607,12 @@ stock end_match_cleanup() {
     // Clear persisted match context (match is over)
     clear_localinfo_match_context();
 
+    // The localinfo keys go above, but these are Pawn globals and outlive the
+    // map change — a later match would edit this match's embed, and the OT save
+    // would then persist the dead id under the new match's context.
+    g_discordMatchMsgId[0] = EOS;
+    g_discordMatchChannelId[0] = EOS;
+
     // Reset hostname to base (no match suffix)
     update_server_hostname();
 
@@ -6326,6 +6327,16 @@ stock team1_current_side() {
     if (g_inOvertime) return g_otTeam1StartsAs;
     if (g_secondHalfPending || g_currentHalf == 2) return 2;
     return 1;
+}
+
+// The current period for admin-facing output — a bare "%d" prints an OT round
+// as its raw code, right before an admin confirms a destructive command.
+// `prefix` keeps the log token greppable ("live_h1" / "live_ot2").
+stock format_current_half(out[], maxlen, const prefix[]) {
+    if (g_currentHalf > OT_HALF_BASE) {
+        return formatex(out, maxlen, "%sot%d", prefix, g_currentHalf - OT_HALF_BASE);
+    }
+    return formatex(out, maxlen, "%sh%d", prefix, g_currentHalf);
 }
 
 stock get_ready_counts(&alliesPlayers, &axisPlayers, &alliesReady, &axisReady) {
@@ -8345,7 +8356,9 @@ public cmd_forcereset(id) {
 
     new stateDesc[128];
     if (g_matchLive) {
-        formatex(stateDesc, charsmax(stateDesc), "LIVE match (half %d)", g_currentHalf);
+        new halfDesc[16];
+        format_current_half(halfDesc, charsmax(halfDesc), "");
+        formatex(stateDesc, charsmax(stateDesc), "LIVE match (%s)", halfDesc);
     } else if (g_matchPending) {
         copy(stateDesc, charsmax(stateDesc), "PENDING match");
     } else if (g_preStartPending) {
@@ -8366,7 +8379,7 @@ public cmd_forcereset(id) {
 stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     #pragma unused id
     new stateDesc[64];
-    if (g_matchLive) formatex(stateDesc, charsmax(stateDesc), "live_h%d", g_currentHalf);
+    if (g_matchLive) format_current_half(stateDesc, charsmax(stateDesc), "live_");
     else if (g_matchPending) copy(stateDesc, charsmax(stateDesc), "pending");
     else if (g_preStartPending) copy(stateDesc, charsmax(stateDesc), "prestart");
     else if (g_secondHalfPending) copy(stateDesc, charsmax(stateDesc), "h2pending");
@@ -9771,10 +9784,9 @@ public task_deferred_discord_fwd() {
         #endif
     }
 
-    // Proactive context save, so an abandoned period restores as what it was.
-    // OT gets the OT shape: this used to run save_match_context_for_second_half()
-    // for OT too, stamping _ktp_mode="h2" over the round's own "otN" — an OT round
-    // abandoned mid-round then came back as a 2nd half.
+    // Proactive context save, so an abandoned period restores as what it was. OT
+    // used to get save_match_context_for_second_half() too, stamping _ktp_mode="h2"
+    // over its own "otN" — an abandoned OT round then came back as a 2nd half.
     if (g_inOvertime) {
         save_ot_state_to_localinfo();
         log_ktp("event=PROACTIVE_CONTEXT_SAVE match_id=%s map=%s half=ot%d", g_matchId, g_matchMap, g_otRound);
