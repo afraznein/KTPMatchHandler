@@ -199,6 +199,10 @@ new Float:g_swTimestamp[WEAPON_SW_BUFFER_SIZE];
 // recoil detector a per-event anchor accurate to the second vs ingested_at's ~30s lag.
 new g_swFiredAt[WEAPON_SW_BUFFER_SIZE];
 new g_swCount = 0;
+// Index of the oldest retained switch. The ring drops the OLDEST on overflow, so
+// entries are only contiguous from here — read them as (g_swHead + n) % SIZE and
+// never as [0..g_swCount).
+new g_swHead = 0;
 new g_swDropped = 0;                            // observability for buffer-overflow events
 
 new g_hitAttSteamId[WEAPON_HIT_BUFFER_SIZE][32];
@@ -211,6 +215,15 @@ new g_hitHitplace[WEAPON_HIT_BUFFER_SIZE];
 new g_hitTeamAttack[WEAPON_HIT_BUFFER_SIZE];
 new g_hitCount = 0;
 new g_hitDropped = 0;
+
+// Drop the retained window. Deliberately leaves the loss counters alone: a drain
+// is not a report, and every caller below either has just logged them or never
+// will, so zeroing here would erase drops the SEND line never printed.
+stock timeline_buffers_drain() {
+    g_swCount = 0;
+    g_swHead  = 0;
+    g_hitCount = 0;
+}
 
 new g_weaponTimelineJsonBuf[TL_JSON_BUF_SIZE];  // JSON payload scratch — preallocated, NEVER on stack
 // Aim-geometry payload. Bounded by PLAYERS x KEEP_WINDOWS rather than by event
@@ -2909,8 +2922,7 @@ stock send_ac_weapon_timeline_batch() {
             copy(matchId, charsmax(matchId), g_baselineMatchId);
         } else {
             g_baselineMatchId[0] = EOS;     // session boundary — next enable gets fresh id
-            g_swCount = 0;
-            g_hitCount = 0;
+            timeline_buffers_drain();
             return;
         }
     }
@@ -2926,8 +2938,14 @@ stock send_ac_weapon_timeline_batch() {
     pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos,
         "{^"matchId^":^"%s^",^"switches^":[", matchId);
 
+    // Oldest-first, so the payload stays chronological. The headroom guard would
+    // therefore cut the NEWEST switches — the opposite of the ring's own policy —
+    // which is tolerable only because TL_JSON_BUF_SIZE is derived to hold a full
+    // ring, making the cut unreachable. Break that derivation and truncation
+    // silently starts discarding newest again.
     new emitted = 0;
-    for (new i = 0; i < g_swCount && pos < headroom; i++) {
+    for (new n = 0; n < g_swCount && pos < headroom; n++) {
+        new i = (g_swHead + n) % WEAPON_SW_BUFFER_SIZE;
         new ts_ms = floatround(g_swTimestamp[i] * 1000.0);
         pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos,
             "%s{^"steamId^":^"%s^",^"weaponId^":%d,^"tsMs^":%d,^"firedAtUtc^":%d}",
@@ -2960,8 +2978,7 @@ stock send_ac_weapon_timeline_batch() {
     if (!curl) {
         log_ktp("event=AC_ERROR reason='curl_init_failed' endpoint=weapon-timeline-batch");
         // Still clear buffers — retry would just keep failing and balloon memory.
-        g_swCount = 0;
-        g_hitCount = 0;
+        timeline_buffers_drain();
         return;
     }
 
@@ -2981,8 +2998,8 @@ stock send_ac_weapon_timeline_batch() {
 
     curl_easy_perform(curl, "ac_callback");
 
-    g_swCount = 0;
-    g_hitCount = 0;
+    timeline_buffers_drain();
+    // Counters may be zeroed only here — the SEND line above just reported them.
     g_swDropped = 0;
     g_hitDropped = 0;
 }
@@ -3355,18 +3372,27 @@ public dod_client_weaponswitch(id, wpnew, wpnold) {
     // wants "what was equipped at time T", so wpnew gives us the answer.
     if (wpnew <= 0) return;
 
-    if (g_swCount >= WEAPON_SW_BUFFER_SIZE) {
+    // On overflow the OLDEST switch is discarded, not this one. A switch is a
+    // state transition, so a gap corrupts forward in time: dropping the newest
+    // left the consumer resolving the equipped weapon to a stale switch for the
+    // rest of the interval and on into the next, while dropping the oldest keeps
+    // the most recent transitions — the ones that decide what is equipped now.
+    new idx;
+    if (g_swCount < WEAPON_SW_BUFFER_SIZE) {
+        idx = (g_swHead + g_swCount) % WEAPON_SW_BUFFER_SIZE;
+        g_swCount++;
+    } else {
+        idx = g_swHead;
+        g_swHead = (g_swHead + 1) % WEAPON_SW_BUFFER_SIZE;
         g_swDropped++;
-        return;
     }
 
     new steam_id[32];
     get_user_authid(id, steam_id, charsmax(steam_id));
-    copy(g_swSteamId[g_swCount], charsmax(g_swSteamId[]), steam_id);
-    g_swWeaponId[g_swCount] = wpnew;
-    g_swTimestamp[g_swCount] = get_gametime();
-    g_swFiredAt[g_swCount] = get_systime();   // v2 firedAtUtc — wall-clock at record time
-    g_swCount++;
+    copy(g_swSteamId[idx], charsmax(g_swSteamId[]), steam_id);
+    g_swWeaponId[idx] = wpnew;
+    g_swTimestamp[idx] = get_gametime();
+    g_swFiredAt[idx] = get_systime();   // v2 firedAtUtc — wall-clock at record time
 }
 
 #if defined _dodx_included
