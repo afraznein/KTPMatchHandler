@@ -48,7 +48,11 @@ expire inside it, so the arming site's intermission check is not enough: on expi
 the tick logged `AUTO_TECH_PAUSE`, armed the tech-pause fields and posted the
 Discord embed, then called an `execute_pause()` that now refuses — a live
 man-advantage window carrying a paused record, with the disconnect state left armed
-and no retry. The countdown now aborts during intermission and clears that state.
+and no retry. Both countdowns now abort during intermission through `clear_pause_session_state()`
+rather than dropping their own few fields — `cmd_tech_pause` arms the tech-pause
+flags and the budget clock *before* its pre-pause countdown, so an inline abort
+would leave a tech pause armed with nothing behind it. That stock deliberately does
+not touch `g_techBudget` or `g_pauseCountTeam`, so nothing is charged or refunded.
 
 #### The owner-timeout auto-unpause request is removed
 
@@ -71,8 +75,10 @@ dead match's players readable.
 
 #### `clear_pause_session_state()` owns `g_pauseStartTime`
 
-It was zeroed at one call site only. Every reader is `g_isPaused`-gated so nothing
-misbehaved; there is now one owner instead of two.
+It was zeroed at one call site only. Nothing misbehaved — the readers are reached
+only while the engine is genuinely paused, most via a `g_isPaused` test and
+`show_pending_hud_during_pause()` by being callable only from the
+`OnPausedHUDUpdate` ReAPI hook — but there is now one owner instead of two.
 
 #### The map-load restore's empty and unknown-mode exits reset in-memory state
 
@@ -92,10 +98,11 @@ OT check now runs first.
 
 **MH-03 (weapon-timeline flush task duplicates on every map change) does not
 reproduce.** In extension mode `KTPAMX_ReloadPlugins()` calls `g_tasksMngr.clear()`
-before it fires `FF_PluginInit`, so no task survives a map change and the re-arm in
-`plugin_init()` is what keeps the flush alive rather than what duplicates it. The
-finding assumed Metamod-mode semantics. The idle-hint task in `plugin_init()` is
-unpaired for the same reason and is equally correct.
+before it fires `FF_PluginInit` (`KTPAMXX/amxmodx/meta_api.cpp`, clear then the
+forward), so no task survives a map change and the re-arm in `plugin_init()` is what
+keeps the flush alive rather than what duplicates it. The finding assumed
+Metamod-mode semantics. The idle-hint task in `plugin_init()` is unpaired for the
+same reason and is equally correct.
 
 ---
 

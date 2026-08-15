@@ -3773,12 +3773,14 @@ public prepause_countdown_tick() {
     }
 
     // A .tech typed seconds before timelimit expiry lands its countdown inside
-    // the changelevel window; pausing there freezes the map load itself.
+    // the changelevel window; pausing there freezes the map load itself. Route
+    // the abort through the session clear rather than just dropping the
+    // countdown: cmd_tech_pause arms g_isTechPause and the budget clock BEFORE
+    // this countdown, so the three inline lines would leave a tech pause armed
+    // with nothing behind it.
     if (is_in_intermission()) {
-        remove_task(g_taskPrePauseId);
-        g_prePauseCountdown = false;
-        g_prePauseLeft = 0;
         log_ktp("event=PREPAUSE_ABORTED reason=intermission initiator='%s'", g_prePauseInitiator);
+        clear_pause_session_state();
         announce_all("Pause cancelled - map is changing.");
         return;
     }
@@ -3943,16 +3945,13 @@ public disconnect_countdown_tick() {
     // timelimit can expire inside it. execute_pause() refuses during a
     // changelevel, so finishing the countdown would log AUTO_TECH_PAUSE, arm the
     // tech-pause fields and post the Discord embed for a pause that never
-    // happens — a live man-advantage window with a paused record. Drop it, and
-    // drop the disconnect state with it so nothing stays armed.
+    // happens — a live man-advantage window carrying a paused record. The
+    // session clear takes the disconnect state with it; it deliberately leaves
+    // g_techBudget and g_pauseCountTeam alone, so nothing is charged or refunded.
     if (is_in_intermission()) {
-        remove_task(g_taskDisconnectCountdownId);
-        g_disconnectCountdown = 0;
         log_ktp("event=AUTO_TECH_PAUSE_ABORTED reason=intermission player='%s' team=%d",
                 g_disconnectedPlayerName, g_disconnectedPlayerTeam);
-        g_disconnectedPlayerName[0] = EOS;
-        g_disconnectedPlayerTeam = 0;
-        g_disconnectedPlayerSteamId[0] = EOS;
+        clear_pause_session_state();
         return;
     }
 
