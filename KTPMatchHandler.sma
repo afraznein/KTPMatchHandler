@@ -3939,6 +3939,23 @@ public disconnect_countdown_tick() {
         return;
     }
 
+    // The arming site checks intermission, but the grace window is 30s long and
+    // timelimit can expire inside it. execute_pause() refuses during a
+    // changelevel, so finishing the countdown would log AUTO_TECH_PAUSE, arm the
+    // tech-pause fields and post the Discord embed for a pause that never
+    // happens — a live man-advantage window with a paused record. Drop it, and
+    // drop the disconnect state with it so nothing stays armed.
+    if (is_in_intermission()) {
+        remove_task(g_taskDisconnectCountdownId);
+        g_disconnectCountdown = 0;
+        log_ktp("event=AUTO_TECH_PAUSE_ABORTED reason=intermission player='%s' team=%d",
+                g_disconnectedPlayerName, g_disconnectedPlayerTeam);
+        g_disconnectedPlayerName[0] = EOS;
+        g_disconnectedPlayerTeam = 0;
+        g_disconnectedPlayerSteamId[0] = EOS;
+        return;
+    }
+
     g_disconnectCountdown--;
 
     new teamName[16];
@@ -4581,6 +4598,15 @@ public plugin_init() {
     g_isPaused = false;
     g_prePauseCountdown = false;
     g_prePauseLeft = 0;
+    // cmd_tech_pause arms these BEFORE its pre-pause countdown, so an aborted
+    // countdown leaves them set with no pause behind them. Per-pause session
+    // fields only — g_techBudget is match state and the continuation restore in
+    // plugin_cfg owns it.
+    g_isTechPause = false;
+    g_pauseOwnerTeam = 0;
+    g_pauseStartTime = 0;
+    g_techPauseStartTime = 0;
+    g_techPauseFrozenTime = 0;
 
     // OT per-round score base — same reason: a stale base would under-report the
     // first OT round of the next match on this process.

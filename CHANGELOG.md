@@ -35,7 +35,20 @@ countdown reaches it by the same route.
 `g_isPaused` is also cleared in `plugin_init()` now. The engine unpauses on every
 map load (`SV_SpawnServer`), but the Pawn flag is a plugin global and outlived the
 map change, so it could latch `true` into the next map and make `.tech` refuse
-"already paused" on a server that was not.
+"already paused" on a server that was not. The per-pause session fields
+`cmd_tech_pause` arms *before* its countdown — `g_isTechPause`, `g_pauseOwnerTeam`,
+`g_pauseStartTime`, `g_techPauseStartTime`, `g_techPauseFrozenTime` — are cleared
+with it, since an aborted countdown leaves them set with no pause behind them.
+`g_techBudget` is deliberately not in that list: it is match state, restored from
+localinfo on the continuation path.
+
+The auto-DC countdown had to be taught the same thing rather than left to discover
+it at `execute_pause()`. Its grace window is 30 seconds long and timelimit can
+expire inside it, so the arming site's intermission check is not enough: on expiry
+the tick logged `AUTO_TECH_PAUSE`, armed the tech-pause fields and posted the
+Discord embed, then called an `execute_pause()` that now refuses — a live
+man-advantage window carrying a paused record, with the disconnect state left armed
+and no retry. The countdown now aborts during intermission and clears that state.
 
 #### The owner-timeout auto-unpause request is removed
 
