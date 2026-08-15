@@ -6,6 +6,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.163] - 2026-08-14
+
+### Fixed
+
+#### The weapon-switch ring lost half of everything it was given
+
+Measured across the fleet from the plugin's own `AC_WEAPON_TIMELINE_SEND`
+counters (24,627 flush lines): of 3,171,557 switches offered, **1,609,957 —
+50.8% — were never buffered.** The ring held 64 entries against an offering that
+averaged ~129 per 30s flush and peaked near 394, so it ran pinned at its cap:
+20,479 of 20,946 switch flushes (97.8%) reported exactly 64 sent, mean 63.36, and
+no flush ever exceeded 64. That had been true since at least 2026-07-16.
+
+The sizing comment claimed switches ran "30-60 in 30s". That estimate is where
+the 64 came from, and measurement puts it off by 2-6x.
+
+This is not uniform thinning. A weapon switch is a *state transition*, so the
+consumer resolves the equipped weapon to the most recent switch it can see; every
+lost switch leaves that answer stale until the next retained one. The loss
+corrupts weapon **attribution**, not accuracy — no accuracy figure is computed
+from this stream.
+
+**Sizes, from the measured distribution rather than from an estimate:**
+
+| ring | was | now | basis |
+|---|---|---|---|
+| switches | 64 | **512** | ~1.3x the observed worst case (~394) |
+| hits | 128 | **48** | >2x the observed peak (22), a true max over 24,627 flushes with **zero** drops ever recorded |
+| fires | 384 | 384 | unchanged — 0 of 65,410 dropped, peak 155 |
+
+Hits are the donor for the switch growth, and could only become the donor after
+the decoupling below. Data segment 790,764 → 1,027,004 bytes.
+
+#### `FIRE_BUFFER_SIZE` no longer derives from the hit buffer
+
+It was `WEAPON_HIT_BUFFER_SIZE * 3`, which made the **shot denominator** a side
+effect of hit-buffer tuning: harvesting memory from the over-provisioned hit
+buffer would have silently rescaled the fire ring and `FIRE_JSON_BUF_SIZE` with
+it, inflating accuracy on the consumer side with nothing in the diff to show for
+it. Now an independent constant at the same value, so the change is
+behaviour-neutral and exists only to make the resize above safe.
+
+#### Overflow now discards the oldest switch, not the newest
+
+The ring kept the oldest 64 and threw away each arriving event — the worst
+available policy for attribution, because the resulting gap propagates *forward*:
+the consumer stays on a stale weapon for the rest of the interval and into the
+next one. Dropping the oldest instead confines the loss to events already behind
+the gap and preserves the most recent transitions, which are the ones that decide
+what is equipped now.
+
+Implemented as a true ring (head index + count), so the overflow path stays O(1)
+inside a per-event game forward. All three buffer-reset sites now route through
+one `timeline_buffers_drain()` stock; resetting the count without the head would
+have read the next interval from a stale offset.
+
+#### Switch loss is now visible outside the game-server log
+
+`dropped_sw` existed only in the `AC_WEAPON_TIMELINE_SEND` line, so a stored
+interval that lost half its switches was indistinguishable downstream from one
+where nobody switched. The batch now carries `droppedSwitches`,
+`truncatedSwitches`, `droppedHits` and `truncatedHits`, matching what the
+weapon-fire batch already reports. Unknown members are ignored by the ingest, so
+this ships safely ahead of the column that stores it.
+
+### Changed
+
+#### The timeline payload buffer is derived, not a literal
+
+Ring size and payload size are one decision — a ring the JSON cannot carry merely
+converts `dropped_*` into `trunc_*`. `TL_JSON_BUF_SIZE` and the headroom reserve
+are now computed from the ring sizes and per-row widths (`TL_*` constants),
+replacing a 14336 literal and a hand-picked 256-byte reserve. Row widths use the
+storage bounds the code enforces rather than values seen in practice, and were
+checked against the emitted format strings.
+
+The reserve mattered more than it looks: the guard tests `pos < headroom` *before*
+writing a row, so the buffer must absorb a whole row after that test **and** still
+close the JSON. Widening the tail against an unchanged reserve would have cut the
+closing brace mid-token — which the ingest rejects for every player in the batch,
+while the log still reports nothing shed. Same trap already documented for
+`AIM_ROW_MAX` and `FIRE_TAIL_BYTES`.
+
+Batch size stays two orders of magnitude inside the API's 5000-entry cap.
+
+---
+
 ## [0.10.162] - 2026-08-14
 
 ### Fixed
