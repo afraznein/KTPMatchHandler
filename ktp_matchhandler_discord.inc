@@ -9,6 +9,17 @@
 
 // ================= Discord Notifications =================
 #if defined HAS_CURL
+// The ops channel for non-match events. Unlike the per-type channels this one
+// DOES fall back to the competitive channel, so an operator who never set
+// discord_channel_id_default still gets the notice somewhere.
+stock get_discord_default_channel_id(channelId[], maxlen) {
+    if (g_discordChannelIdDefault[0]) {
+        copy(channelId, maxlen, g_discordChannelIdDefault);
+    } else {
+        copy(channelId, maxlen, g_discordChannelId);
+    }
+}
+
 stock get_discord_channel_id(channelId[], maxlen) {
     // Get the appropriate Discord channel ID based on match type
     // 12man/draft/scrim do NOT fall back to default - they require explicit channel config
@@ -39,12 +50,7 @@ stock get_discord_channel_id(channelId[], maxlen) {
         }
         default: {
             // Non-match context (forcereset, cancellations, etc.)
-            // Use dedicated default channel, fall back to competitive if not configured
-            if (g_discordChannelIdDefault[0]) {
-                copy(channelId, maxlen, g_discordChannelIdDefault);
-            } else {
-                copy(channelId, maxlen, g_discordChannelId);
-            }
+            get_discord_default_channel_id(channelId, maxlen);
         }
     }
 
@@ -124,12 +130,11 @@ new g_simpleEmbedPayload[1024];
 new g_simpleEmbedTitle[128];
 new g_simpleEmbedDesc[512];
 
-// Send a simple Discord embed (for one-off events like cancel/reset)
-stock send_discord_simple_embed(const title[], const description[], color) {
+// Send a simple Discord embed (for one-off events like cancel/reset).
+stock send_discord_simple_embed_to(const channelId[], const title[], const description[], color) {
 #if defined HAS_CURL
     if (g_disableDiscord) return;
-    get_discord_channel_id(g_discordChannelIdBuf, charsmax(g_discordChannelIdBuf));
-    if (!g_discordRelayUrl[0] || !g_discordChannelIdBuf[0] || !g_discordAuthSecret[0]) return;
+    if (!g_discordRelayUrl[0] || !channelId[0] || !g_discordAuthSecret[0]) return;
 
     // Escape title and description
     escape_for_json(title, g_simpleEmbedTitle, charsmax(g_simpleEmbedTitle));
@@ -143,7 +148,7 @@ stock send_discord_simple_embed(const title[], const description[], color) {
     // {"channelId":"...","embeds":[{"title":"...","description":"...","color":...,"footer":{"text":"server - map"}}]}
     formatex(g_simpleEmbedPayload, charsmax(g_simpleEmbedPayload),
         "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"description^":^"%s^",^"color^":%d,^"footer^":{^"text^":^"%s - %s^"}}]}",
-        g_discordChannelIdBuf, g_simpleEmbedTitle, g_simpleEmbedDesc, color, hostnameEscaped, g_currentMap);
+        channelId, g_simpleEmbedTitle, g_simpleEmbedDesc, color, hostnameEscaped, g_currentMap);
 
     // Send via curl
     new CURL:curl = curl_easy_init();
@@ -157,6 +162,28 @@ stock send_discord_simple_embed(const title[], const description[], color) {
         log_ktp("event=DISCORD_EMBED_SIMPLE_SEND title='%s'", title);
         curl_easy_perform(curl, "discord_callback");
     }
+#endif
+}
+
+// Route by the current match type.
+stock send_discord_simple_embed(const title[], const description[], color) {
+#if defined HAS_CURL
+    get_discord_channel_id(g_discordChannelIdBuf, charsmax(g_discordChannelIdBuf));
+    send_discord_simple_embed_to(g_discordChannelIdBuf, title, description, color);
+#endif
+}
+
+// Admin/ops notices (.forcereset, cancellations, 2nd-half restart) go to the ops
+// channel by force, never by match type: .forcereset resets g_matchType to
+// COMPETITIVE while clearing state and only then sends, so type-based routing put
+// every one of them in the .ktp match channel. Resolving the channel earlier is
+// not the fix either — it would route a 12man or draft forcereset into that
+// match's channel.
+stock send_discord_admin_embed(const title[], const description[], color) {
+#if defined HAS_CURL
+    new channelId[64];
+    get_discord_default_channel_id(channelId, charsmax(channelId));
+    send_discord_simple_embed_to(channelId, title, description, color);
 #endif
 }
 

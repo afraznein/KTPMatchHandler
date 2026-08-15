@@ -6,6 +6,97 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.162] - 2026-08-14
+
+### Fixed
+
+#### The map-load restore exits now share one post-finalize reset
+
+`finalize_abandoned_match`, `finalize_completed_second_half` and the
+`h2_pending_abandoned` branch each close a match **without** running
+`end_match_cleanup`, and each carried its own partial reset. They now route through
+one stock, `reset_match_state_after_finalize()`.
+
+Two leaks came out of that:
+
+- `ktp_match_competitive` is an **engine** cvar, so it survives a changelevel.
+  `finalize_completed_second_half` was the exit that did not clear the in-memory
+  state to go with it, so a completed match could leave the plugin holding half
+  state that the next go-live on the next map reads as a continuation.
+- The `h2_pending_abandoned` reset cleared `g_firstHalfScore[0]` and `[1]`. The
+  array is indexed **[1] = team 1, [2] = team 2** — index 0 is unused — so team 2's
+  first-half score survived a reset that was meant to clear it. Latent rather than
+  field-visible: every reader of `g_firstHalfScore[2]` is preceded by a write (the
+  h2 restore re-parses it from localinfo, and every fresh go-live passes through
+  `reset_match_scores()`). Fixed because the next reader added need not be.
+
+#### A continuation half with no match id is refused instead of played
+
+`abandoned_pending` clears `g_matchId` but the half state is plugin-global, and
+extension mode never reloads plugins across a changelevel. Returning to the match
+map re-entered the 2nd-half go-live with an empty id, and every log line for that
+half carried `match_id=` empty. `hlstats.pl`'s `getProperties` reads straight past an
+empty quoted field into the next one, so the phantom id `") (map "dod_harrington`
+spread across 13 tables / 721 rows from a single Philly LAN half.
+
+The shared reset above closes the state half. The go-live now also refuses the
+continuation outright when `g_matchId` is empty (`CONTINUATION_REFUSED`), announces
+it, clears the dead match's localinfo score keys, and starts a fresh match — the half
+still gets played, under an id that exists. The score keys matter because the
+deferred Phase-2 save rewrites match *identity* but not scores, so without the clear
+an abandon of the fresh match would report the dead one's half-1 score under the new
+id.
+
+#### Discord embed descriptions rendered a literal `\n`
+
+Pawn's control character is `^`, so the four multi-line admin embed descriptions
+carried a backslash and an `n`, which the JSON escaper then escaped as `\\n` and
+Discord rendered verbatim. They are the only `\n` sequences in the plugin; every
+other multi-line string already used `^n`.
+
+#### `.forcereset` and the cancellation notices go to the ops Discord channel
+
+`execute_force_reset` sets `g_matchType = MATCH_TYPE_COMPETITIVE` while clearing
+state and only *then* sends its embed, so channel routing by match type put every
+force reset in the `.ktp` match channel. Moving the send earlier is not the fix — it
+would route a 12man or draft force reset into *that* match's channel.
+
+New `send_discord_admin_embed()` forces `discord_channel_id_default`, which the
+config loader already parses and which falls back to the competitive channel when
+unset. Applied to **Server Force Reset**, **Match Cancelled**, **Match Setup
+Cancelled** and **2nd Half Restarted**. `Match State Set` still routes by match type
+— `.setstate` happens inside a live match.
+
+Operators who want these separated must set `discord_channel_id_default` in each
+server's `discord.ini`; without it the behaviour is unchanged.
+
+#### Dead `<:ktp:…>` emoji replaced
+
+Four admin embeds carried an emoji ID that no longer resolves. All four now use
+`<:KTP:1002382703020212245>`.
+
+### Changed
+
+#### `save_ot_state_for_first_round` / `_for_next_round` share their common half
+
+The two saves were ~80% identical, and the copy that drifted is what lost the Discord
+message and channel IDs on every OT round past the first (0.10.143) — the embed could
+not be edited for the rest of the OT. Every key both saves have in common now lives
+in `save_ot_localinfo_shared()`, so a key added there reaches every OT round; each
+caller keeps only its own specifics (round mode, the OT-scores string vs. the
+1st-half scores). `MATCH_TYPE` was missing from the first-round save — the restore
+reads it — and is now covered by the shared stock.
+
+#### `say` and `say_team` share one handler
+
+`cmd_say_team_hook` was a ~73-line verbatim copy of `cmd_say_hook` differing only in
+the pause-relay `teamOnly` flag. That copy is what dropped lowercase `.ktpot` on CHI2
+(2026-04-26): the prefix check was added to one hook and not the other, so the
+`TIE_DETECTED` recovery path was unreachable from team chat. Both publics now call
+`handle_say_command(id, bool:teamOnly)`.
+
+---
+
 ## [0.10.161] - 2026-08-13
 
 ### Changed

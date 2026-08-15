@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.161"
+#define PLUGIN_VERSION "0.10.162"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -1391,35 +1391,43 @@ public task_general_changelevel_watchdog() {
     server_exec();
 }
 
-// Save OT state to localinfo for next round
-stock save_ot_state_for_next_round() {
+// Everything an OT round save must persist regardless of which round it is.
+// Splitting it per-round is what lost the Discord message/channel IDs on every
+// OT round past the first (0.10.143): the embed could no longer be edited for
+// the rest of the OT. A key added here reaches every OT save; a key added to
+// only one of the callers below reaches only that round. Not to be confused with
+// the older, dead save_ot_context() — this does not feed it.
+stock save_ot_localinfo_shared() {
     new buf[128];
 
-    // Save core OT context
-    set_localinfo(LOCALINFO_MODE, fmt("ot%d", g_otRound));
     set_localinfo(LOCALINFO_MATCH_TYPE, fmt("%d", _:g_matchType));
-
-    // Explicitly re-save match identity and team names (defense in depth —
-    // these persist from earlier saves, but future code that partially resets
-    // localinfo between OT rounds would silently break restoration without this)
     set_localinfo(LOCALINFO_MATCH_ID, g_matchId);
     set_localinfo(LOCALINFO_MATCH_MAP, g_matchMap);
     set_localinfo(LOCALINFO_TEAMNAME1, g_team1Name);
     set_localinfo(LOCALINFO_TEAMNAME2, g_team2Name);
-
-    // Discord message/channel IDs — the first-round save persists these, but
-    // without re-saving here the OT round 2+ map change loses them and the
-    // match embed can no longer be edited for the rest of the OT.
     set_localinfo(LOCALINFO_DISCORD_MSG, g_discordMatchMsgId);
     set_localinfo(LOCALINFO_DISCORD_CHAN, g_discordMatchChannelId);
 
-    // Save OT state: techBudget1,techBudget2,startingSide
+    // OT state: techBudget1,techBudget2,startingSide
     formatex(buf, charsmax(buf), "%d,%d,%d", g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs);
     set_localinfo(LOCALINFO_OT_STATE, buf);
 
-    // Save regulation scores
     format_scores(buf, charsmax(buf), g_regulationScore[1], g_regulationScore[2]);
     set_localinfo(LOCALINFO_REG_SCORES, buf);
+
+    // Original captains, preserved across all OT rounds
+    new captainsBuf[256], safeCap1[64], safeCap2[64];
+    sanitize_name_for_localinfo(g_captain1_name, safeCap1, charsmax(safeCap1));
+    sanitize_name_for_localinfo(g_captain2_name, safeCap2, charsmax(safeCap2));
+    formatex(captainsBuf, charsmax(captainsBuf), "%s|%s|%s|%s",
+        safeCap1, g_captain1_sid, safeCap2, g_captain2_sid);
+    set_localinfo(LOCALINFO_CAPTAINS, captainsBuf);
+}
+
+// Save OT state to localinfo for next round
+stock save_ot_state_for_next_round() {
+    set_localinfo(LOCALINFO_MODE, fmt("ot%d", g_otRound));
+    save_ot_localinfo_shared();
 
     // Save all OT round scores. The engine REJECTS localinfo values of
     // MAX_KV_LEN(127) chars or more outright (info.cpp) — max storable is
@@ -1440,58 +1448,22 @@ stock save_ot_state_for_next_round() {
     }
     set_localinfo(LOCALINFO_OT_SCORES, ot_scores);
 
-    // Save original captains (preserved across all OT rounds)
-    new captainsBuf[256], safeCap1[64], safeCap2[64];
-    sanitize_name_for_localinfo(g_captain1_name, safeCap1, charsmax(safeCap1));
-    sanitize_name_for_localinfo(g_captain2_name, safeCap2, charsmax(safeCap2));
-    formatex(captainsBuf, charsmax(captainsBuf), "%s|%s|%s|%s",
-        safeCap1, g_captain1_sid, safeCap2, g_captain2_sid);
-    set_localinfo(LOCALINFO_CAPTAINS, captainsBuf);
-
     log_ktp("event=OT_STATE_SAVED round=%d tech=%d,%d starting_side=%d reg=%d-%d",
             g_otRound, g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs,
             g_regulationScore[1], g_regulationScore[2]);
 }
 
 // Save OT state for first overtime round (after regulation tie)
-// Similar to save_ot_state_for_next_round but called at initial OT trigger
+// Same context as save_ot_state_for_next_round, plus the round-1 specifics
 stock save_ot_state_for_first_round() {
     new buf[128];
 
-    // Save core OT context - mode='ot1' for first OT round
     set_localinfo(LOCALINFO_MODE, "ot1");
+    save_ot_localinfo_shared();
 
-    // Save match identifiers
-    set_localinfo(LOCALINFO_MATCH_ID, g_matchId);
-    set_localinfo(LOCALINFO_MATCH_MAP, g_matchMap);
-
-    // Save OT state: techBudget1,techBudget2,startingSide
-    formatex(buf, charsmax(buf), "%d,%d,%d", g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs);
-    set_localinfo(LOCALINFO_OT_STATE, buf);
-
-    // Save regulation scores
-    format_scores(buf, charsmax(buf), g_regulationScore[1], g_regulationScore[2]);
-    set_localinfo(LOCALINFO_REG_SCORES, buf);
-
-    // Save 1st half scores (needed for full score display)
+    // 1st half scores, needed for the full score display
     format_scores(buf, charsmax(buf), g_firstHalfScore[1], g_firstHalfScore[2]);
     set_localinfo(LOCALINFO_H1_SCORES, buf);
-
-    // Save team names
-    set_localinfo(LOCALINFO_TEAMNAME1, g_team1Name);
-    set_localinfo(LOCALINFO_TEAMNAME2, g_team2Name);
-
-    // Save Discord message ID for updates
-    set_localinfo(LOCALINFO_DISCORD_MSG, g_discordMatchMsgId);
-    set_localinfo(LOCALINFO_DISCORD_CHAN, g_discordMatchChannelId);
-
-    // Save original captains
-    new captainsBuf[256], safeCap1[64], safeCap2[64];
-    sanitize_name_for_localinfo(g_captain1_name, safeCap1, charsmax(safeCap1));
-    sanitize_name_for_localinfo(g_captain2_name, safeCap2, charsmax(safeCap2));
-    formatex(captainsBuf, charsmax(captainsBuf), "%s|%s|%s|%s",
-        safeCap1, g_captain1_sid, safeCap2, g_captain2_sid);
-    set_localinfo(LOCALINFO_CAPTAINS, captainsBuf);
 
     // Clear OT scores (none yet for round 1)
     set_localinfo(LOCALINFO_OT_SCORES, "");
@@ -5160,24 +5132,17 @@ stock restore_match_context_from_localinfo() {
             }
             log_ktp("event=MATCH_CONTEXT_ABANDONED saved_map=%s current_map=%s match_id=%s reason=not_live",
                     savedMatchMap, g_currentMap, g_matchId);
+            // Keeps the accurate reason in the log; the shared reset's own
+            // disarm below is a no-op once this has run.
             disarm_ready_override("context_abandoned");
         }
         clear_localinfo_match_context();
         reset_team_names();
-        clear_competitive_match_flags("h2_pending_abandoned");
         g_matchId[0] = EOS;
         // The localinfo side is symmetric -- clear_localinfo_match_context() drops
-        // LOCALINFO_H1_SCORES with the rest. What survived was the IN-MEMORY half
-        // state, and extension mode never reloads plugins across a changelevel, so
-        // returning to the match map re-entered the 2nd-half go-live branch with a
-        // match id we had just cleared. Philly 2026-08-02 ran a real half that way:
-        // every line carried match_id= empty, and hlstats' getProperties slurped past
-        // the empty quote pair into the next one, spreading a phantom id across 13
-        // tables / 721 rows. Mirrors finalize_abandoned_match's reset block.
-        g_secondHalfPending = false;
-        g_firstHalfScore[0] = 0;
-        g_firstHalfScore[1] = 0;
-        g_matchMap[0] = EOS;
+        // LOCALINFO_H1_SCORES with the rest. What survives a changelevel is the
+        // IN-MEMORY half state, which is what the shared reset owns.
+        reset_match_state_after_finalize("h2_pending_abandoned");
         return;
     }
 
@@ -5201,10 +5166,9 @@ stock restore_match_context_from_localinfo() {
             log_ktp("event=SECOND_HALF_ENDED_DETECTED match_id=%s map=%s h2_scores=%s", g_matchId, savedMatchMap, h2ScoresBuf);
             finalize_completed_second_half();
 
-
-            // Match ended normally, clear state (OT continuation already
-            // returned above, so the override correctly persists into OT)
-            disarm_ready_override("completed_h2_finalize");
+            // The state flags, the competitive cvar and the ready override are
+            // reset inside finalize_completed_second_half. An OT continuation
+            // returned above, so the override still correctly persists into OT.
             clear_localinfo_match_context();
             reset_team_names();
             g_matchId[0] = EOS;
@@ -5605,6 +5569,31 @@ stock clear_competitive_match_flags(const reason[]) {
     // is the part that outlives the match.
 }
 
+// The one post-finalize reset for the map-load restore family — the exits that
+// close a match WITHOUT running end_match_cleanup. Plugin globals live for the
+// whole server process, so anything left set here is read by the next go-live on
+// the next map, not discarded. Philly 2026-08-02 ran a real 2nd half that way:
+// the exit cleared g_matchId but left g_secondHalfPending/g_matchMap, so the
+// go-live re-entered the 2nd-half branch and every log line carried an empty
+// match_id — which hlstats' getProperties then read past, inventing a phantom id
+// that spread across 13 tables.
+stock reset_match_state_after_finalize(const reason[]) {
+    g_matchLive = false;
+    g_matchPending = false;
+    g_preStartPending = false;
+    g_secondHalfPending = false;
+    g_inOvertime = false;
+    g_otRound = 0;
+    g_currentHalf = 0;
+    g_firstHalfScore[1] = 0;
+    g_firstHalfScore[2] = 0;
+    g_regulationScore[1] = 0;
+    g_regulationScore[2] = 0;
+    g_matchMap[0] = EOS;
+    clear_competitive_match_flags(reason);
+    disarm_ready_override(reason);
+}
+
 // Close a match abandoned without plugin_end -- detected on the next map load,
 // when the saved mode is set but the map does not match and the match was live.
 stock finalize_abandoned_match(const mode[], const savedMap[]) {
@@ -5691,17 +5680,9 @@ stock finalize_abandoned_match(const mode[], const savedMap[]) {
         ExecuteForward(g_fwdMatchEnd, ret, g_matchId, savedMap, _:g_matchType, regScore1, regScore2);
     }
 
-    // Reset all match state variables to ensure clean state after abandoned match
-    // This is critical because ktp_is_match_active() checks these flags
-    g_matchLive = false;
-    g_matchPending = false;
-    g_preStartPending = false;
-    g_secondHalfPending = false;
-    g_inOvertime = false;
-    g_otRound = 0;
-    g_currentHalf = 0;
-    clear_competitive_match_flags("abandoned");
-    disarm_ready_override("abandon");
+    // ktp_is_match_active() reads these flags, so a stale one keeps the finished
+    // match "live" for every consumer of it.
+    reset_match_state_after_finalize("abandoned");
 }
 
 // Finalize a completed 2nd half (detected when map cycled back to same map with _ktp_live="1")
@@ -5809,7 +5790,7 @@ stock finalize_completed_second_half() {
     // caller sits inside the isSecondHalf branch. So the guard could only ever
     // fire on a STALE flag, suppressing exactly the cvar-leak clear this exists
     // to perform.
-    clear_competitive_match_flags("second_half_complete");
+    reset_match_state_after_finalize("second_half_complete");
 
     // Note: Caller will clear localinfo after this returns.
 }
@@ -7254,7 +7235,20 @@ public auto_unpause_request() {
 // Hook for say commands with arguments (register_clcmd("say /cmd") only matches exact "/cmd", not "/cmd arg")
 // Also handles pause chat relay — must be in same handler because KTPAMXX dedup
 // prevents the same plugin from registering two handlers for the same command string.
+//
+// say and say_team share ONE body: they differed only in the relay's teamOnly
+// flag, and keeping two copies is what dropped lowercase `.ktpot` on CHI2 —
+// the prefix check was added to one and not the other, so the TIE_DETECTED
+// recovery path was unreachable from team chat.
 public cmd_say_hook(id) {
+    return handle_say_command(id, false);
+}
+
+public cmd_say_team_hook(id) {
+    return handle_say_command(id, true);
+}
+
+stock handle_say_command(id, bool:teamOnly) {
     // Fast path: check if this could be a KTP command or 1.3 input before doing string work.
     // All KTP commands start with '.' or '/', and read_args returns `"text"` (with leading quote).
     // Skip string processing for ordinary chat (~99% of say messages).
@@ -7265,7 +7259,7 @@ public cmd_say_hook(id) {
         if (raw[1] != '.' && raw[1] != '/') {
             // Not a command — relay chat during pause, otherwise pass through
             if (g_isPaused)
-                return relay_pause_chat(id, false);
+                return relay_pause_chat(id, teamOnly);
             return PLUGIN_CONTINUE;
         }
     }
@@ -7343,79 +7337,6 @@ public cmd_say_hook(id) {
     }
 
     // .setstate takes arguments, so it must route through here (see .ktpOT comment)
-    if (equali(args, "/setstate", 9) || equali(args, ".setstate", 9)) {
-        if (strlen(args) == 9 || args[9] == ' ') {
-            return cmd_setstate(id);
-        }
-    }
-
-    return PLUGIN_CONTINUE;
-}
-
-// say_team variant — identical to cmd_say_hook but relays team chat during pause
-public cmd_say_team_hook(id) {
-    if (g_13InputState == 0 || id != g_13CaptainId) {
-        new raw[4];
-        read_args(raw, charsmax(raw));
-        if (raw[1] != '.' && raw[1] != '/') {
-            if (g_isPaused)
-                return relay_pause_chat(id, true);
-            return PLUGIN_CONTINUE;
-        }
-    }
-
-    new args[128];
-    read_args(args, charsmax(args));
-    remove_quotes(args);
-    trim(args);
-
-    if (g_13InputState > 0 && id == g_13CaptainId && args[0]) {
-        return handle_13_queue_id_input(id, args);
-    }
-
-    // Mirror cmd_say_hook OT routing — see comment block there for rationale.
-    if (equali(args, "/ktpot", 6) || equali(args, ".ktpot", 6)) {
-        if (strlen(args) == 6 || args[6] == ' ') {
-            if (!g_matchLive && !g_preStartPending && !g_matchPending) {
-                g_matchType = MATCH_TYPE_KTP_OT;
-                g_disableDiscord = false;
-            }
-            return cmd_match_start(id);
-        }
-    }
-
-    if (equali(args, "/draftot", 8) || equali(args, ".draftot", 8)) {
-        if (strlen(args) == 8 || args[8] == ' ') {
-            if (!g_matchLive && !g_preStartPending && !g_matchPending) {
-                g_matchType = MATCH_TYPE_DRAFT_OT;
-                g_disableDiscord = false;
-            }
-            return cmd_match_start(id);
-        }
-    }
-
-    if (equali(args, "/ktp", 4) || equali(args, ".ktp", 4)) {
-        if (strlen(args) == 4 || args[4] == ' ') {
-            if (!g_matchLive && !g_preStartPending && !g_matchPending) {
-                g_matchType = MATCH_TYPE_COMPETITIVE;
-                g_disableDiscord = false;
-            }
-            return cmd_match_start(id);
-        }
-    }
-
-    if (equali(args, "/setallies", 10) || equali(args, ".setallies", 10)) {
-        if (strlen(args) == 10 || args[10] == ' ') {
-            return cmd_setteamallies(id);
-        }
-    }
-
-    if (equali(args, "/setaxis", 8) || equali(args, ".setaxis", 8)) {
-        if (strlen(args) == 8 || args[8] == ' ') {
-            return cmd_setteamaxis(id);
-        }
-    }
-
     if (equali(args, "/setstate", 9) || equali(args, ".setstate", 9)) {
         if (strlen(args) == 9 || args[9] == ' ') {
             return cmd_setstate(id);
@@ -8189,13 +8110,12 @@ public cmd_cancel(id) {
         // into casual play.
         clear_competitive_match_flags("cancel_after_h1");
 
-        // Send Discord BEFORE resetting match type (routing depends on g_matchType)
         if (g_discordRelayUrl[0]) {
             new discordDesc[256];
             formatex(discordDesc, charsmax(discordDesc),
-                "**%s** cancelled the match after first half.\n\n**First Half Score:** %d - %d",
+                "**%s** cancelled the match after first half.^n^n**First Half Score:** %d - %d",
                 name, h1Team1Score, h1Team2Score);
-            send_discord_simple_embed("<:ktp:1105490705188659272> Match Cancelled", discordDesc, DISCORD_COLOR_RED);
+            send_discord_admin_embed("<:KTP:1002382703020212245> Match Cancelled", discordDesc, DISCORD_COLOR_RED);
         }
 
         // Clear all match state
@@ -8275,13 +8195,12 @@ public cmd_cancel(id) {
     new name2[32], sid2[44], ip2[32], team2[16];
     get_identity(id, name2, charsmax(name2), sid2, charsmax(sid2), ip2, charsmax(ip2), team2, charsmax(team2));
 
-    // Send Discord BEFORE resetting match type (routing depends on g_matchType)
     if (g_discordRelayUrl[0]) {
         new discordDesc[256];
         formatex(discordDesc, charsmax(discordDesc),
             "**%s** cancelled match setup before it started.",
             name2);
-        send_discord_simple_embed("<:ktp:1105490705188659272> Match Setup Cancelled", discordDesc, DISCORD_COLOR_ORANGE);
+        send_discord_admin_embed("<:KTP:1002382703020212245> Match Setup Cancelled", discordDesc, DISCORD_COLOR_ORANGE);
     }
 
     g_matchPending = false;
@@ -8562,9 +8481,9 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     if (g_discordRelayUrl[0]) {
         new discordDesc[256];
         formatex(discordDesc, charsmax(discordDesc),
-            "**%s** executed a force reset.\n\nAll match state has been cleared.",
+            "**%s** executed a force reset.^n^nAll match state has been cleared.",
             name);
-        send_discord_simple_embed("<:ktp:1105490705188659272> Server Force Reset", discordDesc, DISCORD_COLOR_ORANGE);
+        send_discord_admin_embed("<:KTP:1002382703020212245> Server Force Reset", discordDesc, DISCORD_COLOR_ORANGE);
     }
 }
 
@@ -8725,9 +8644,9 @@ public task_restarthalf_discord() {
     if (g_discordRelayUrl[0] && !g_disableDiscord) {
         new discordDesc[256];
         formatex(discordDesc, charsmax(discordDesc),
-            "**%s** restarted the 2nd half.\n\n**1st Half Score:** %s %d - %d %s\n**2nd Half:** Reset to 0-0",
+            "**%s** restarted the 2nd half.^n^n**1st Half Score:** %s %d - %d %s^n**2nd Half:** Reset to 0-0",
             g_restartHalfByName, g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
-        send_discord_simple_embed("<:ktp:1105490705188659272> 2nd Half Restarted", discordDesc, DISCORD_COLOR_ORANGE);
+        send_discord_admin_embed("<:KTP:1002382703020212245> 2nd Half Restarted", discordDesc, DISCORD_COLOR_ORANGE);
     }
 }
 
@@ -9021,9 +8940,11 @@ public task_setstate_discord() {
     if (g_discordRelayUrl[0] && !g_disableDiscord) {
         new discordDesc[256];
         formatex(discordDesc, charsmax(discordDesc),
-            "**%s** manually set match state.\n\n**Half:** %d\n**Scoreboard:** Allies %d - %d Axis\n**1st Half:** %s %d - %d %s",
+            "**%s** manually set match state.^n^n**Half:** %d^n**Scoreboard:** Allies %d - %d Axis^n**1st Half:** %s %d - %d %s",
             g_setStateByName, g_currentHalf, g_matchScore[1], g_matchScore[2],
             g_team1Name, g_firstHalfScore[1], g_firstHalfScore[2], g_team2Name);
+        // Match-type routing on purpose, unlike the other admin embeds: .setstate
+        // corrects a LIVE match, so it belongs in that match's channel.
         send_discord_simple_embed("<:KTP:1002382703020212245> Match State Set", discordDesc, DISCORD_COLOR_ORANGE);
     }
 }
@@ -9206,6 +9127,32 @@ public cmd_ready(id) {
         new c1t = g_captain1_team, c2t = g_captain2_team;
         copy(c1n, charsmax(c1n), g_captain1_name[0] ? g_captain1_name : "-");
         copy(c2n, charsmax(c2n), g_captain2_name[0] ? g_captain2_name : "-");
+
+        // A continuation half with no match id is unrecoverable, not merely
+        // untidy: every log line would carry `match_id=` empty, and hlstats'
+        // getProperties reads past an empty quoted field into the next one and
+        // invents an id from it. Refuse the continuation and start a fresh
+        // match instead — the half still gets played, under an id that exists.
+        if (g_secondHalfPending && !g_matchId[0]) {
+            log_ktp("event=CONTINUATION_REFUSED reason=empty_match_id map=%s overtime=%d",
+                    g_currentMap, g_inOvertime ? 1 : 0);
+            announce_all("Previous match context was lost - starting a NEW match.");
+            g_secondHalfPending = false;
+            // Clearing g_inOvertime is load-bearing, not tidiness: the fresh-match
+            // branch below gates reset_match_scores() + clear_match_roster() on
+            // !g_inOvertime, so leaving it set starts the new match on the dead
+            // one's scores and roster.
+            g_inOvertime = false;
+            g_otRound = 0;
+            // The dead match's SCORE keys outlive it — the deferred Phase-2 save
+            // rewrites identity but not these, so abandoning the fresh match would
+            // report the dead one's half-1 scores under the new id.
+            set_localinfo(LOCALINFO_H1_SCORES, "");
+            set_localinfo(LOCALINFO_H2_SCORES, "");
+            set_localinfo(LOCALINFO_REG_SCORES, "");
+            set_localinfo(LOCALINFO_OT_SCORES, "");
+            set_localinfo(LOCALINFO_OT_STATE, "");
+        }
 
         // Half tracking: Determine if this is 1st half, 2nd half, or OT round
         new halfText[16];
@@ -9546,7 +9493,9 @@ public task_enter_pending_phase() {
 // work that doesn't need to happen before the response.
 //
 // This task reads g_matchType, g_12manDuration, g_scrimDuration, g_inOvertime,
-// and g_otRound — all set BEFORE this task is scheduled by the caller.
+// and g_otRound — all settled before this task RUNS, not before it is scheduled:
+// the caller still mutates g_inOvertime/g_otRound after the set_task (a refused
+// continuation clears both), and reading the post-guard values is what we want.
 public task_apply_match_config_and_start() {
     // Guard: if match was reset/aborted in the 0.05s window, abort
     if (!g_matchLive) return;
