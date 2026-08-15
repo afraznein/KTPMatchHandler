@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.159"
+#define PLUGIN_VERSION "0.10.160"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -101,8 +101,9 @@ new g_cvarTestSkipReadyCount; // test-mode: when 1, get_required_ready_count() r
                               // a single fake client can drive match-start (ktp_test_skip_ready_count)
 new g_cvarTestMatchEnabled;
 new bool:g_testMatchActive = false;
-new g_testMatchTargetPerTeam = 8;
+new g_testMatchTargetPerTeam = 6;
 new g_testMatchPolls = 0;
+new g_testMatchError[64];
 new g_taskTestMatchFillId = 55671;
 new g_taskTestMatchReadyId = 55672;
 new g_taskTestMatchLiveId = 55673;
@@ -4635,7 +4636,9 @@ public plugin_init() {
     register_clcmd("say .testmatch",      "cmd_testmatch_chat", ADMIN_RCON);
     register_clcmd("say_team .testmatch", "cmd_testmatch_chat", ADMIN_RCON);
     register_concmd("amx_ktp_testmatch", "cmd_testmatch_rcon", ADMIN_RCON,
-        "[TEST-MODE] [bots-per-team] - fill with bots and drive real .ktp/.confirm/.ready flow");
+        "[TEST-MODE] - fill a 6v6 bot server and drive real .ktp/.confirm/.ready flow");
+    register_concmd("amx_ktp_testmatch_status", "cmd_testmatch_status", ADMIN_RCON,
+        "[TEST-MODE] - report asynchronous .testmatch progress or failure");
 
     register_concmd("amx_ktp_test_setup_match",   "cmd_test_setup_match",   ADMIN_RCON,
         "[TEST-MODE] <matchType> [<map>] — set up PRESTART with synthetic captains; matchType 0..5");
@@ -7119,7 +7122,19 @@ public cmd_say_team_hook(id) {
 }
 
 // ===== Start / Pre-Start =====
+// Keep every entry point on one production state-machine implementation.  The
+// public command wrapper owns AMXX argument collection; test mode supplies the
+// same parsed command text directly because fake-client engclient_cmd("say")
+// does not traverse the registered chat handler in the Lane B topology.
 public cmd_match_start(id) {
+    new args[64];
+    read_args(args, charsmax(args));
+    remove_quotes(args);
+    trim(args);
+    return match_start_with_args(id, args);
+}
+
+stock match_start_with_args(id, const suppliedArgs[]) {
     // Block starting a new match if one is already in progress
     // Note: 2nd half and OT are allowed because g_matchLive=false between halves
     if (g_matchLive) {
@@ -7158,9 +7173,7 @@ public cmd_match_start(id) {
     // predicate in lockstep.
     if (is_official_match_type(g_matchType)) {
         new args[64], password[64];
-        read_args(args, charsmax(args));
-        remove_quotes(args);
-        trim(args);
+        copy(args, charsmax(args), suppliedArgs);
 
         // Parse out password - skip the command prefix (/ktp or .ktp)
         // read_args returns full text: "/ktp password"
@@ -9701,6 +9714,7 @@ stock testmatch_fail(const reason[]) {
     remove_task(g_taskTestMatchLiveId);
     log_ktp("event=TESTMATCH_FAILED reason='%s'", reason);
     console_print(0, "KTP_TESTMATCH: ERROR reason=%s", reason);
+    copy(g_testMatchError, charsmax(g_testMatchError), reason);
     if (g_matchLive || g_matchPending || g_preStartPending || g_matchId[0])
         execute_force_reset(0, "testmatch_guard", "TEST", "127.0.0.1");
     g_testMatchActive = false;
@@ -9730,10 +9744,12 @@ stock begin_testmatch(id, targetPerTeam) {
         }
     }
 
-    if (targetPerTeam < 6) targetPerTeam = 6;
-    if (targetPerTeam > 8) targetPerTeam = 8;
+    // Lane B is deliberately the tournament-sized 6v6 shape.  Do not let an
+    // RCON argument silently turn the contained test server into a larger one.
+    targetPerTeam = 6;
     g_testMatchTargetPerTeam = targetPerTeam;
     g_testMatchPolls = 0;
+    g_testMatchError[0] = EOS;
     g_testMatchActive = true;
     g_disableDiscord = true;
     g_matchType = MATCH_TYPE_COMPETITIVE;
@@ -9758,14 +9774,25 @@ stock begin_testmatch(id, targetPerTeam) {
 
 public cmd_testmatch_chat(id) {
     if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
-    return begin_testmatch(id, 8);
+    return begin_testmatch(id, 6);
 }
 
 public cmd_testmatch_rcon(id) {
     if (id != 0 && !(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
-    new arg[8];
-    read_argv(1, arg, charsmax(arg));
-    return begin_testmatch(id, arg[0] ? str_to_num(arg) : 8);
+    return begin_testmatch(id, 6);
+}
+
+public cmd_testmatch_status(id) {
+    if (id != 0 && !(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+    if (g_testMatchError[0])
+        console_print(id, "KTP_TESTMATCH: ERROR reason=%s", g_testMatchError);
+    else if (g_matchLive && g_testMatchActive)
+        console_print(id, "KTP_TESTMATCH: LIVE match_id=%s bots_per_team=%d", g_matchId, g_testMatchTargetPerTeam);
+    else if (g_testMatchActive)
+        console_print(id, "KTP_TESTMATCH: ACTIVE");
+    else
+        console_print(id, "KTP_TESTMATCH: IDLE");
+    return PLUGIN_HANDLED;
 }
 
 public task_testmatch_fill() {
@@ -9789,14 +9816,14 @@ public task_testmatch_fill() {
     remove_task(g_taskTestMatchFillId);
     new startCommand[96];
     formatex(startCommand, charsmax(startCommand), ".ktp %s", g_ktpMatchPassword);
-    engclient_cmd(captainAllies, "say", startCommand);
+    match_start_with_args(captainAllies, startCommand);
     g_disableDiscord = true;
     if (!g_preStartPending) {
         testmatch_fail("production_ktp_start_rejected");
         return;
     }
-    engclient_cmd(captainAllies, "say", ".confirm");
-    engclient_cmd(captainAxis, "say", ".confirm");
+    cmd_pre_confirm(captainAllies);
+    cmd_pre_confirm(captainAxis);
     log_ktp("event=TESTMATCH_PRESTART_DRIVEN allies=%d axis=%d", allies, axis);
     console_print(0, "KTP_TESTMATCH: PRESTART allies=%d axis=%d", allies, axis);
     g_testMatchPolls = 0;
@@ -9816,7 +9843,7 @@ public task_testmatch_ready() {
     for (new i = 0; i < num; i++) {
         new id = players[i];
         if (is_user_bot(id) && (get_user_team(id) == 1 || get_user_team(id) == 2))
-            engclient_cmd(id, "say", ".ready");
+            cmd_ready(id);
     }
     g_testMatchPolls = 0;
     set_task(0.25, "task_testmatch_live", g_taskTestMatchLiveId, _, _, "b");
