@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.164"
+#define PLUGIN_VERSION "0.10.165"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -87,7 +87,6 @@ new bool:g_hasDodxStatsNatives = false;
 // ---------- CVARs ----------
 new g_cvarCfgBase;
 new g_cvarMapsFile;
-new g_cvarAutoReqSec;
 new g_cvarCountdown;          // unpause countdown seconds (ktp_pause_countdown)
 new g_cvarPrePauseSec;        // pre-pause chat countdown for live matches (ktp_prepause_seconds)
 new g_cvarPreMatchPauseSec;   // pre-pause countdown for pre-match pauses (ktp_prematch_pause_seconds)
@@ -399,8 +398,8 @@ new g_halfCaptain2_sid[44];
 new g_taskCountdownId = 55601;
 new g_taskPendingHudId = 55602;
 new g_taskPrestartHudId = 55603;
-new g_taskAutoUnpauseReqId = 55604;
-new g_taskAutoReqCountdownId = 55606;
+// 55604 / 55606 retired with the owner-timeout auto-unpause request (0.10.165) —
+// tasks never run while the server is paused, so neither could ever fire.
 new g_taskUnreadyReminderId = 55607;  // Periodic reminder of unready players
 // g_taskUnpauseReminderId removed — reminder handled by OnPausedHUDUpdate real-time check
 
@@ -457,7 +456,6 @@ new g_countdownLeft = 0;
 // ---------- OPTIMIZED: Cached CVAR values (Phase 2 optimization) ----------
 new g_pauseExtensionSec = 120;     // cached from g_cvarPauseExtension
 new g_pauseMaxExtensions = 2;      // cached from g_cvarMaxExtensions
-new g_autoRequestSecs = 300;       // cached from g_cvarAutoReqSec
 new g_serverHostname[64];          // cached from "hostname" cvar
 new g_baseHostname[64];            // base hostname (without match state suffixes) for match ID and dynamic updates
 new Float:g_unreadyReminderSecs = 30.0;  // cached from g_cvarUnreadyReminderSec
@@ -466,9 +464,6 @@ new Float:g_unpauseReminderSecs = 15.0;  // cached from g_cvarUnpauseReminderSec
 // ---------- Constants ----------
 #define IDLE_HINT_INTERVAL 120.0  // seconds between command hints when no match active
 #define MAX_PLAYERS 32
-const AUTO_REQUEST_MIN_SECS = 60;
-const AUTO_REQUEST_DEFAULT_SECS = 300;
-const AUTO_REQUEST_MAX_SECS = 3600; // 1 hour maximum
 // Auto-DC grace window length. Hard-coded (no cvar) by design — see comments at
 // cmd_tech_pause and disconnect_countdown_tick for the budget-clock
 // asymmetry between this 30s grace and the 5s `.tech` pre-pause. Auto-DC pauses
@@ -662,7 +657,6 @@ new g_pauseOwnerTeam = 0;                   // 0 none, 1 allies, 2 axis (live-ma
 new bool: g_unpauseRequested = false;       // owner (or auto) has requested unpause
 new bool: g_unpauseConfirmedOther = false;  // other team has confirmed
 new g_pauseCountTeam[3];                    // index by teamId (1..2). Tactical pause count. Reset at new half or when PRE-START begins
-new g_autoReqLeft = 0;                      // seconds left for auto-request countdown (HUD)
 new bool: g_isTechPause = false;            // true if current pause is technical, false if tactical
 new g_techPauseStartTime = 0;               // systime when tech pause started (for budget tracking)
 new g_techPauseFrozenTime = 0;              // systime when owner did /resume (freezes budget at this point)
@@ -1964,13 +1958,6 @@ stock ktp_sync_config_from_cvars() {
     if (g_cvarPauseExtension)    { new v6 = get_pcvar_num(g_cvarPauseExtension);    if (v6 > 0) g_pauseExtensionSec = v6; }
     if (g_cvarMaxExtensions)     { new v7 = get_pcvar_num(g_cvarMaxExtensions);     if (v7 >= 0) g_pauseMaxExtensions = v7; }
 
-    // OPTIMIZED: Cache auto-request timeout (Phase 2 optimization)
-    if (g_cvarAutoReqSec) {
-        new v8 = get_pcvar_num(g_cvarAutoReqSec);
-        if (v8 >= AUTO_REQUEST_MIN_SECS && v8 <= AUTO_REQUEST_MAX_SECS)
-            g_autoRequestSecs = v8;
-    }
-
     // OPTIMIZED: Cache server hostname (Phase 2 optimization)
     get_cvar_string("hostname", g_serverHostname, charsmax(g_serverHostname));
 
@@ -2182,6 +2169,7 @@ stock bool:is_lan_mode() {
 // OnPausedHUDUpdate / forcereset keep their historical inline copies.
 stock clear_pause_session_state() {
     g_pauseOwnerTeam = 0;
+    g_pauseStartTime = 0;
     g_unpauseRequested = false;
     g_unpauseConfirmedOther = false;
     g_isTechPause = false;
@@ -2203,8 +2191,6 @@ stock clear_pause_session_state() {
     remove_task(g_taskPrePauseId);
     remove_task(g_taskCountdownId);
     remove_task(g_taskAutoConfirmId);
-    remove_task(g_taskAutoUnpauseReqId);
-    remove_task(g_taskAutoReqCountdownId);
 }
 
 // ---------- Localinfo State Helpers (consolidated format) ----------
@@ -2620,18 +2606,6 @@ stock show_pause_hud_message(const pauseType[]) {
         remainStr,
         g_pauseExtensions, cachedMaxExt,
         statusLine);
-}
-
-stock setup_auto_unpause_request() {
-    new secs = g_autoRequestSecs;
-    if (secs < AUTO_REQUEST_MIN_SECS || secs > AUTO_REQUEST_MAX_SECS) secs = AUTO_REQUEST_DEFAULT_SECS;
-    remove_task(g_taskAutoUnpauseReqId);
-    set_task(float(secs), "auto_unpause_request", g_taskAutoUnpauseReqId);
-    g_autoReqLeft = secs;
-
-    // Start countdown ticker for HUD display
-    remove_task(g_taskAutoReqCountdownId);
-    set_task(1.0, "auto_req_countdown_tick", g_taskAutoReqCountdownId, _, _, "b");
 }
 
 stock get_user_team_id(id) {
@@ -3798,6 +3772,17 @@ public prepause_countdown_tick() {
         return;
     }
 
+    // A .tech typed seconds before timelimit expiry lands its countdown inside
+    // the changelevel window; pausing there freezes the map load itself.
+    if (is_in_intermission()) {
+        remove_task(g_taskPrePauseId);
+        g_prePauseCountdown = false;
+        g_prePauseLeft = 0;
+        log_ktp("event=PREPAUSE_ABORTED reason=intermission initiator='%s'", g_prePauseInitiator);
+        announce_all("Pause cancelled - map is changing.");
+        return;
+    }
+
     if (g_prePauseLeft <= 0) {
         // Actually pause now
         remove_task(g_taskPrePauseId);
@@ -3816,6 +3801,14 @@ public prepause_countdown_tick() {
 
 stock execute_pause(const who[], const reason[]) {
     if (g_isPaused) return;
+
+    // Freezing physics inside the changelevel window stalls the map load. Both
+    // countdowns that reach here (.tech pre-pause, auto-DC) can be armed before
+    // timelimit expiry and tick into it, so the refusal belongs here.
+    if (is_in_intermission()) {
+        log_ktp("event=PAUSE_REFUSED reason=intermission initiator='%s' pause_reason='%s'", who, reason);
+        return;
+    }
 
     // Store pause info (name and ID for dynamic lookup)
     copy(g_lastPauseBy, charsmax(g_lastPauseBy), who);
@@ -3931,23 +3924,8 @@ public countdown_tick() {
     g_disconnectedPlayerSteamId[0] = EOS;
     g_disconnectCountdown = 0;
     g_autoConfirmLeft = 0;
-    remove_task(g_taskAutoUnpauseReqId);
-    remove_task(g_taskAutoReqCountdownId);
 
     remove_task(g_taskAutoConfirmId);
-}
-
-public auto_req_countdown_tick() {
-    // Decrement auto-request countdown
-    if (!g_isPaused || g_unpauseRequested) {
-        // Stop if unpaused or request already made
-        remove_task(g_taskAutoReqCountdownId);
-        return;
-    }
-
-    if (g_autoReqLeft > 0) {
-        g_autoReqLeft--;
-    }
 }
 
 // Tech budget is tracked by pause start/end times, not real-time countdown
@@ -3985,9 +3963,6 @@ public disconnect_countdown_tick() {
         g_unpauseRequested = false;
         g_unpauseConfirmedOther = false;
         g_isTechPause = true;
-
-        // Schedule auto-unpause request
-        setup_auto_unpause_request();
 
         // Record tech pause start time AFTER the 30s grace window has finished.
         //
@@ -4252,8 +4227,6 @@ public OnPausedHUDUpdate() {
             g_autoConfirmLeft = 0;
             remove_task(g_taskCountdownId);
             remove_task(g_taskAutoConfirmId);
-            remove_task(g_taskAutoUnpauseReqId);
-            remove_task(g_taskAutoReqCountdownId);
             return HC_CONTINUE;
         }
     }
@@ -4590,12 +4563,24 @@ public plugin_init() {
     g_inIntermission = false;  // "changelevel in flight on THIS map" — inherently per-map; H1-end sets it
                                // and no pre-0.10.148 path cleared it before the next go-live
 
-    // .setstate confirm window — extension-mode globals persist across maps,
-    // and gametime resets per map (a stale pending + reset clock could satisfy
-    // the 10s window check on the new map)
+    // Admin confirm windows — extension-mode globals persist across maps, and
+    // gametime resets per map, so a latch armed on map A satisfies its 10s
+    // window on map B and executes with no second command typed.
     g_setStatePending = 0;
     g_setStatePendingSid[0] = EOS;
     g_setStateTime = 0.0;
+    g_forceResetPending = 0;
+    g_forceResetTime = 0.0;
+    g_restartHalfPending = 0;
+    g_restartHalfTime = 0.0;
+
+    // Pause latches. The engine unpauses across a changelevel while these Pawn
+    // flags do not, so a stale g_isPaused makes .tech refuse "already paused"
+    // and a stale countdown flag refuses "already in progress" — on a server
+    // that is neither. The tasks themselves are cleared by KTPAMXX per map.
+    g_isPaused = false;
+    g_prePauseCountdown = false;
+    g_prePauseLeft = 0;
 
     // OT per-round score base — same reason: a stale base would under-report the
     // first OT round of the next match on this process.
@@ -4656,7 +4641,6 @@ public plugin_init() {
     formatex(mapsFilePath, charsmax(mapsFilePath), "%s/ktp_maps.ini", configsDir);
     formatex(discordIniPath, charsmax(discordIniPath), "%s/discord.ini", configsDir);
     g_cvarMapsFile       = register_cvar("ktp_maps_file", mapsFilePath);
-    g_cvarAutoReqSec     = register_cvar("ktp_unpause_autorequest_secs", "300");
     g_cvarDiscordIniPath = register_cvar("ktp_discord_ini", discordIniPath);
     g_cvarPauseDuration  = register_cvar("ktp_pause_duration", "300");       // 5 minutes
     g_cvarPauseExtension = register_cvar("ktp_pause_extension", "120");      // 2 minutes per extension
@@ -5134,7 +5118,10 @@ stock restore_match_context_from_localinfo() {
 
     // Check if we have a pending mode
     if (!mode[0]) {
-        // No pending continuation - reset team names to defaults
+        // No pending continuation. Pawn globals outlive the map change, so
+        // anything a lost match left set is read by the next go-live rather
+        // than discarded -- same door as the h2_pending exit below.
+        reset_match_state_after_finalize("no_pending_mode");
         reset_team_names();
         log_ktp("event=TEAM_NAMES_RESET reason=no_pending_mode");
         return;
@@ -5148,6 +5135,7 @@ stock restore_match_context_from_localinfo() {
         // Unknown mode
         log_ktp("event=UNKNOWN_MODE mode=%s", mode);
         clear_localinfo_match_context();
+        reset_match_state_after_finalize("unknown_mode");
         reset_team_names();
         return;
     }
@@ -5433,8 +5421,6 @@ public plugin_end() {
     remove_task(g_taskCountdownId);
     remove_task(g_taskPendingHudId);
     remove_task(g_taskPrestartHudId);
-    remove_task(g_taskAutoUnpauseReqId);
-    remove_task(g_taskAutoReqCountdownId);
     remove_task(g_taskDisconnectCountdownId);
 
     remove_task(g_taskPrePauseId);
@@ -5881,6 +5867,12 @@ stock clear_localinfo_match_context() {
     set_localinfo(LOCALINFO_REG_SCORES, "");
     set_localinfo(LOCALINFO_OT_SCORES, "");
     set_localinfo(LOCALINFO_OT_STATE, "");
+
+    // Roster + captains belong to the same match context. Inert while every
+    // halftime save rewrites all 24 roster keys including the empties, but a
+    // partial save would otherwise leave a dead match's players readable.
+    clear_roster_localinfo();
+    set_localinfo(LOCALINFO_CAPTAINS, "");
 }
 
 // Save match context to localinfo for 2nd half restoration
@@ -6476,20 +6468,11 @@ stock handle_countdown_cancel(id) {
     log_ktp("event=UNPAUSE_CANCEL player='%s' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
     announce_all("Unpause countdown cancelled by %s. Staying paused.", name);
 
-    // Re-arm auto-request and reset flags; HUD keeps running
+    // Reset the request flags; the pause HUD keeps running
     g_unpauseRequested = false;
     g_unpauseConfirmedOther = false;
     g_autoConfirmLeft = 0;
     remove_task(g_taskAutoConfirmId);
-    new secs = g_autoRequestSecs;
-    if (secs < AUTO_REQUEST_MIN_SECS || secs > AUTO_REQUEST_MAX_SECS) secs = AUTO_REQUEST_DEFAULT_SECS;
-    g_autoReqLeft = secs;
-    remove_task(g_taskAutoUnpauseReqId);
-    set_task(float(secs), "auto_unpause_request", g_taskAutoUnpauseReqId);
-
-    // Restart countdown ticker
-    remove_task(g_taskAutoReqCountdownId);
-    set_task(1.0, "auto_req_countdown_tick", g_taskAutoReqCountdownId, _, _, "b");
 
     return PLUGIN_HANDLED;
 }
@@ -6561,7 +6544,6 @@ stock handle_resume_request(id, const name[], const sid[], const team[], teamId)
 
     // Owner requests unpause (store both name and ID for dynamic lookup)
     g_unpauseRequested = true;
-    g_autoReqLeft = 0; // stop HUD timer
     copy(g_lastUnpauseBy, charsmax(g_lastUnpauseBy), name);
 
     // If this is a tech pause, freeze the budget now (stop deducting time)
@@ -6722,11 +6704,11 @@ public cmd_confirm_unpause(id) {
     remove_task(g_taskAutoConfirmId);
     g_autoConfirmLeft = 0;
 
-    // If owner already requested (or auto-request fired), we can start countdown
+    // If the owner already requested, we can start the countdown
     if (g_unpauseRequested) {
         start_unpause_countdown(g_lastUnpauseBy[0] ? g_lastUnpauseBy : team);
     } else {
-        client_print(id, print_chat, "[KTP] Waiting for the pause-owning team to .resume (or auto-request).");
+        client_print(id, print_chat, "[KTP] Waiting for the pause-owning team to .resume.");
         // Reminder for owner team handled by OnPausedHUDUpdate real-time check
     }
     return PLUGIN_HANDLED;
@@ -7028,9 +7010,6 @@ public cmd_tech_pause(id) {
         g_pauseDurationSec = 300;
     }
 
-    // Schedule auto-unpause request
-    setup_auto_unpause_request();
-
     // Record pause start time (wall clock) for budget tracking.
     //
     // INTENTIONAL: clock starts NOW, BEFORE the 5-second pre-pause countdown
@@ -7294,24 +7273,6 @@ public cmd_commands(id) {
     return PLUGIN_HANDLED;
 }
 
-// Auto-request unpause after timeout if owner doesn't /resume
-public auto_unpause_request() {
-    if (!g_isPaused || !g_matchLive) return;
-    if (g_unpauseRequested) return; // owner already did it
-
-    g_unpauseRequested = true;
-    g_autoReqLeft = 0;
-    copy(g_lastUnpauseBy, charsmax(g_lastUnpauseBy), "auto");
-    log_ktp("event=UNPAUSE_REQUEST_AUTO team=%d", g_pauseOwnerTeam);
-    announce_all("Auto-requesting unpause (owner timeout). Waiting for the other team to .go.");
-
-    // If other team already confirmed, start countdown now
-    if (g_unpauseConfirmedOther) {
-        start_unpause_countdown("auto");
-    } else {
-        // Reminder for other team handled by OnPausedHUDUpdate real-time check
-    }
-}
 
 // ========== MATCH START (PRE-START) COMMANDS ==========
 
@@ -8246,8 +8207,6 @@ public cmd_cancel(id) {
 
         // Clear all localinfo persistence
         clear_localinfo_match_context();
-        clear_roster_localinfo();
-        set_localinfo(LOCALINFO_CAPTAINS, "");
 
         // Reset match type
         g_matchType = MATCH_TYPE_COMPETITIVE;
@@ -8299,10 +8258,9 @@ public cmd_cancel(id) {
 
     // Reset tech budgets and the whole pause session (owner/tech flags, pre-pause
     // countdown, session tasks) — the old inline list missed g_isTechPause and
-    // the countdown/auto-unpause tasks
+    // the countdown tasks
     g_techBudget[1] = 0;
     g_techBudget[2] = 0;
-    g_pauseStartTime = 0;
     clear_pause_session_state();
 
     // OPTIMIZED: Use cached map name instead of get_mapname()
@@ -8344,9 +8302,12 @@ public cmd_forcereset(id) {
         return PLUGIN_HANDLED;
     }
 
-    // Check for confirmation (must be within 10 seconds and same player)
+    // Check for confirmation (must be within 10 seconds and same player).
+    // The `now >= g_forceResetTime` lower bound is what makes the window a
+    // window: gametime restarts at ~1.0 each map, so without it a latch armed
+    // late on the previous map satisfies the check on this one.
     new Float:now = get_gametime();
-    if (g_forceResetPending == id && (now - g_forceResetTime) < 10.0) {
+    if (g_forceResetPending == id && now >= g_forceResetTime && (now - g_forceResetTime) < 10.0) {
         // Confirmed - execute full reset
         execute_force_reset(id, name, sid, ip);
         g_forceResetPending = 0;
@@ -8548,8 +8509,6 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
 
     // Clear all localinfo keys
     clear_localinfo_match_context();
-    clear_roster_localinfo();
-    set_localinfo(LOCALINFO_CAPTAINS, "");
 
     // Reset hostname
     update_server_hostname();
@@ -8595,19 +8554,21 @@ public cmd_restarthalf(id) {
         return PLUGIN_HANDLED;
     }
 
-    if (g_currentHalf != 2) {
-        client_print(id, print_chat, "[KTP] This command only works during the 2nd half.");
-        return PLUGIN_HANDLED;
-    }
-
+    // OT first: an OT round carries g_currentHalf = OT_HALF_BASE + round, so the
+    // generic != 2 refusal would answer for it and this message never showed.
     if (g_inOvertime) {
         client_print(id, print_chat, "[KTP] Cannot restart half during overtime. Use .forcereset if needed.");
         return PLUGIN_HANDLED;
     }
 
-    // Check for confirmation (must be within 10 seconds and same player)
+    if (g_currentHalf != 2) {
+        client_print(id, print_chat, "[KTP] This command only works during the 2nd half.");
+        return PLUGIN_HANDLED;
+    }
+
+    // Same stale-window guard as .forcereset — gametime restarts each map.
     new Float:now = get_gametime();
-    if (g_restartHalfPending == id && (now - g_restartHalfTime) < 10.0) {
+    if (g_restartHalfPending == id && now >= g_restartHalfTime && (now - g_restartHalfTime) < 10.0) {
         // Confirmed - execute restart
         execute_restart_half(id, name, sid, ip);
         g_restartHalfPending = 0;
@@ -9455,8 +9416,6 @@ public cmd_ready(id) {
             clear_match_roster();
         }
         // Roster capture deferred to Phase 2 (task_deferred_discord_fwd) to reduce Phase 0 stall
-        remove_task(g_taskAutoUnpauseReqId);
-    
 
         // =============== Deferred match start (3-phase) ===============
         // Heavy work is spread across multiple frames to avoid stalling the

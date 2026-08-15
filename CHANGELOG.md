@@ -6,6 +6,86 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.165] - 2026-08-15
+
+P3 cleanup cut. No new behaviour; every item removes a way the plugin could act
+on state that no longer describes the server it is running on.
+
+### Fixed
+
+#### Admin confirm latches could execute on the next map without a confirmation
+
+`.forcereset` and `.restarthalf` both take a second command inside a 10-second
+window. The window was `(now - armedAt) < 10.0` with no lower bound, and neither
+latch was cleared in `plugin_init()`. Gametime restarts at ~1.0 on every map
+(`SV_SpawnServer` sets `g_psv.time = 1.0`), so a latch armed late on map A left
+`now - armedAt` deeply negative on map B — which passes `< 10.0`. One `.forcereset`
+typed after the map change would then wipe match state with the confirmation step
+skipped entirely. Both latches now carry `now >= armedAt` and are cleared in
+`plugin_init()`, matching the guards `.setstate` already had.
+
+#### `.tech` could freeze the server inside the changelevel window
+
+A `.tech` typed a few seconds before timelimit expiry ran its pre-pause countdown
+straight into the map change and called `execute_pause()` there. `execute_pause()`
+now refuses during intermission, and the pre-pause countdown aborts with a chat
+line instead of pausing. The refusal lives in `execute_pause()` because the auto-DC
+countdown reaches it by the same route.
+
+`g_isPaused` is also cleared in `plugin_init()` now. The engine unpauses on every
+map load (`SV_SpawnServer`), but the Pawn flag is a plugin global and outlived the
+map change, so it could latch `true` into the next map and make `.tech` refuse
+"already paused" on a server that was not.
+
+#### The owner-timeout auto-unpause request is removed
+
+`setup_auto_unpause_request()` armed `set_task` for 300s at the start of every tech
+pause — and tasks do not run while the server is paused, so it never fired once.
+Its HUD ticker decremented a counter no HUD read. The behaviour it advertised has
+always come from budget expiry instead. Removed rather than ported into
+`OnPausedHUDUpdate`: reviving it would auto-request an unpause after 5 minutes in
+LAN mode, where expiry is deliberately disabled. `ktp_unpause_autorequest_secs` is
+gone with it.
+
+#### Match-context teardown owns the roster and captain keys
+
+`clear_localinfo_match_context()` left `_ktp_caps` and the chunked
+`_ktp_r1_N`/`_ktp_r2_N` roster keys behind; only `.cancel` and `.forcereset` cleared
+them, each with its own two-line copy. Folded into the one stock, so the map-load
+teardown exits clear them too. Inert today — every halftime save rewrites the whole
+roster key range including the empty slots — but a partial save would have left a
+dead match's players readable.
+
+#### `clear_pause_session_state()` owns `g_pauseStartTime`
+
+It was zeroed at one call site only. Every reader is `g_isPaused`-gated so nothing
+misbehaved; there is now one owner instead of two.
+
+#### The map-load restore's empty and unknown-mode exits reset in-memory state
+
+Both returned without touching the Pawn globals, so a match that lost its localinfo
+context left `g_matchLive` / `g_secondHalfPending` / `g_matchMap` / the half scores
+set for the next go-live to read. Same defect class as the `h2_pending_abandoned`
+exit fixed in 0.10.162, reached through a different door; both exits now route
+through `reset_match_state_after_finalize()`.
+
+#### `.restarthalf`'s overtime refusal is reachable again
+
+Since OT rounds carry `g_currentHalf = OT_HALF_BASE + round`, the generic
+"2nd half only" check answered first and the OT-specific message never showed. The
+OT check now runs first.
+
+### Verified, not changed
+
+**MH-03 (weapon-timeline flush task duplicates on every map change) does not
+reproduce.** In extension mode `KTPAMX_ReloadPlugins()` calls `g_tasksMngr.clear()`
+before it fires `FF_PluginInit`, so no task survives a map change and the re-arm in
+`plugin_init()` is what keeps the flush alive rather than what duplicates it. The
+finding assumed Metamod-mode semantics. The idle-hint task in `plugin_init()` is
+unpaired for the same reason and is equally correct.
+
+---
+
 ## [0.10.164] - 2026-08-15
 
 ### Fixed
