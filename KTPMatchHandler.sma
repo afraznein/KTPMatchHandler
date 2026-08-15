@@ -178,8 +178,8 @@ new curl_slist: g_acCurlHeaders = SList_Empty;  // persistent headers slist (nev
 #define TL_HEADER_BYTES 96
 // The literal between the two arrays.
 #define TL_MID_BYTES    10
-// The closing literal.
-#define TL_TAIL_BYTES    8
+// The closing literal, with all four loss counters at full digit width.
+#define TL_TAIL_BYTES  120
 // What the headroom guard must leave free. It tests pos < headroom BEFORE
 // writing a row, so the buffer has to absorb a whole row after that test and
 // still close the JSON. Reserve too little and the tail is cut MID-TOKEN: the
@@ -2969,7 +2969,15 @@ stock send_ac_weapon_timeline_batch() {
     }
     new hitEmitted = emitted;
 
-    pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos, "]}");
+    // Both losses ride with the batch, as the weapon-fire batch already does.
+    // Switch loss previously existed only in the game-server log line, so a
+    // consumer reading the stored rows could not tell a complete interval from a
+    // half-empty one — absence of switches looked exactly like nobody switching.
+    // Unknown members are ignored by the ingest, so this is safe to ship ahead of
+    // the column that stores it; TL_TAIL_BYTES is what keeps it from being cut.
+    pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos,
+        "],^"droppedSwitches^":%d,^"truncatedSwitches^":%d,^"droppedHits^":%d,^"truncatedHits^":%d}",
+        g_swDropped, g_swCount - swEmitted, g_hitDropped, g_hitCount - hitEmitted);
 
     new url[256];
     formatex(url, charsmax(url), "%s/api/match/weapon-timeline-batch", g_acApiBaseUrl);
