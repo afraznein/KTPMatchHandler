@@ -779,6 +779,7 @@ public msg_TeamScore() {
     // This makes the scoreboard show grand totals instead of just 2nd half scores
     // Teams swap sides: Team1 was Allies (1st) -> now Axis, Team2 was Axis (1st) -> now Allies
     // SKIP if g_skipTeamScoreAdjust is set (our direct broadcasts already have correct totals)
+    // !g_inOvertime is belt-and-braces here and above — OT carries its own half code now.
     if (g_currentHalf == 2 && !g_inOvertime && !g_skipTeamScoreAdjust) {
         new baseScore = 0;
         if (teamId == 1) {
@@ -1624,10 +1625,9 @@ stock do_periodic_score_save() {
     if (scoresChanged) {
         new buf[16];
         format_scores(buf, charsmax(buf), g_matchScore[1], g_matchScore[2]);
-        // Regulation halves only. An OT round has no key of its own here on
-        // purpose — an abandoned OT reports regulation totals from _ktp_reg, and
-        // routing the running OT score into _ktp_h1 is what used to overwrite the
-        // real half-1 record.
+        // Regulation halves only — an abandoned OT reports regulation totals from
+        // _ktp_reg, so it needs no key here, and routing the running OT score into
+        // _ktp_h1 is what used to overwrite the real half-1 record.
         if (g_currentHalf == 1) {
             set_localinfo(LOCALINFO_H1_SCORES, buf);
         } else if (g_currentHalf == 2) {
@@ -4211,12 +4211,9 @@ public OnPausedHUDUpdate() {
                             g_otTechBudget[teamId] = g_techBudget[teamId];
                         }
 
-                        // Persist tech budget to localinfo unconditionally (v0.10.118).
-                        // Previously gated on g_currentHalf == 1, which left 2nd-half + OT
-                        // tech-budget deductions in-memory only. A server crash between
-                        // .resume and the actual unpause-end returned spent tech budget
-                        // to the team — competitive integrity issue in OT where budgets
-                        // are tight. save_state_to_localinfo is cheap (single set_localinfo).
+                        // Persist unconditionally: a crash between .resume and the
+                        // unpause-end used to hand spent tech budget back to the team,
+                        // which matters most in OT where budgets are tight.
                         save_state_to_localinfo();
 
                         // Announce tech pause duration and remaining budget
@@ -5922,8 +5919,15 @@ stock save_match_context_for_second_half() {
     // Note: Scores are saved via save_first_half_scores() when half actually ends
 }
 
-// Save state to localinfo (called when budget/pause changes during 1st half)
+// Persist a budget/pause change. In OT the budget a restore actually reads
+// lives in _ktp_otst, not _ktp_state — writing only the latter is why a crash
+// mid-OT handed back tech time the team had already spent.
 stock save_state_to_localinfo() {
+    if (g_inOvertime) {
+        save_ot_state_to_localinfo();
+        return;
+    }
+
     new buf[32];
     format_state(buf, charsmax(buf),
         g_pauseCountTeam[1], g_pauseCountTeam[2],

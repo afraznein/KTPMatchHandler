@@ -75,6 +75,13 @@ content is the same either way.
 - `.forcereset` reports the period through one OT-aware formatter, so an OT
   round shows as `ot2` rather than the raw code. The log token keeps its
   `live_` prefix and stays greppable.
+- **A tech pause spent in OT now survives a crash.** `save_state_to_localinfo()`
+  wrote `_ktp_state`, but the OT restore takes its budgets from `_ktp_otst` and
+  ignores `_ktp_state` entirely — so an OT deduction was persisted to a key
+  nothing read, and a crash handed the team back time it had already spent. The
+  comment at the deduct site had claimed this was covered since 0.10.118. Both
+  deduct paths call the one function, so the branch lives there rather than at
+  each call site; it is cheap only because this cut created a single OT save.
 - `end_match_cleanup()` now clears the in-memory Discord message/channel IDs
   alongside their localinfo keys. They are Pawn globals, so they outlived the
   map change: a later match edited the finished match's embed, and the OT save
@@ -85,9 +92,6 @@ content is the same either way.
 Found while fixing the above, left deliberately — none is a regression, and each
 wants its own verification:
 
-- A tech pause spent mid-OT-round updates `g_otTechBudget[]` but does not
-  re-persist `_ktp_otst` until the round ends, so an abandoned round restores
-  the budget it started with.
 - A fresh `.ktpOT` / `.draftOT` never runs `send_match_embed_create()`, so
   round 1 has no embed to edit. The abandoned-OT teardown, forward and log line
   now all fire correctly for it; only the Discord embed cannot.
