@@ -345,7 +345,11 @@ new g_setStateArgs[5];                          // Pending values: half, allies,
 new g_techBudget[3] = {0, 0, 0}; // [1]=Allies, [2]=Axis; set once at match start, carried across the half swap
 
 // ---------- Half Tracking ----------
-new g_currentHalf = 0;          // 0 = no match, 1 = first half, 2 = second half
+// An OT round is a period in its own right (ruleset §1.10: one OT round is one
+// OT half), so it gets its own code rather than borrowing 1. Sharing 1 is what
+// made a live OT round write regulation-shaped persistence.
+const OT_HALF_BASE = 100;       // OT round N is OT_HALF_BASE + N — the same encoding the ktp_match_start forward publishes
+new g_currentHalf = 0;          // 0 = no match, 1 = first half, 2 = second half, 100+N = OT round N
 new g_matchMap[32];             // Map name for the current match (to detect if we're on same map for 2nd half)
 new bool: g_secondHalfPending = false; // True after 1st half completes, waiting for 2nd half to start
 
@@ -791,7 +795,8 @@ public msg_TeamScore() {
     }
     // ===========================================================
 
-    // If 1st half is live, persist scores to localinfo for 2nd half restoration
+    // If the regulation 1st half is live, persist scores for 2nd half restoration.
+    // OT rounds carry their own half code and deliberately do not land here.
     if (g_currentHalf == 1) {
         new buf[16];
         format_scores(buf, charsmax(buf), g_matchScore[1], g_matchScore[2]);
@@ -1651,6 +1656,10 @@ stock do_periodic_score_save() {
     if (scoresChanged) {
         new buf[16];
         format_scores(buf, charsmax(buf), g_matchScore[1], g_matchScore[2]);
+        // Regulation halves only. An OT round has no key of its own here on
+        // purpose — an abandoned OT reports regulation totals from _ktp_reg, and
+        // routing the running OT score into _ktp_h1 is what used to overwrite the
+        // real half-1 record.
         if (g_currentHalf == 1) {
             set_localinfo(LOCALINFO_H1_SCORES, buf);
         } else if (g_currentHalf == 2) {
@@ -9245,7 +9254,7 @@ public cmd_ready(id) {
         if (g_inOvertime && g_secondHalfPending && equali(g_matchMap, g_currentMap)) {
             // OVERTIME ROUND
             g_secondHalfPending = false;
-            g_currentHalf = 1;  // Use half=1 for OT round detection in handle_map_change
+            g_currentHalf = OT_HALF_BASE + g_otRound;
             g_otScoreBase[1] = 0;  // stays 0 unless the restore below actually runs
             g_otScoreBase[2] = 0;
             formatex(halfText, charsmax(halfText), "OT%d", g_otRound);
@@ -9383,11 +9392,19 @@ public cmd_ready(id) {
             }
             // ===============================================================
 
-            g_currentHalf = 1;
+            // EXPLICIT_OT_INIT clears g_secondHalfPending, so a fresh .ktpOT /
+            // .draftOT reaches this branch with g_inOvertime already set — it is
+            // a new match whose first period is OT round 1, not a first half.
             g_secondHalfPending = false;
             copy(g_matchMap, charsmax(g_matchMap), g_currentMap);
             generate_match_id();
-            copy(halfText, charsmax(halfText), "1st half");
+            if (g_inOvertime) {
+                g_currentHalf = OT_HALF_BASE + g_otRound;
+                formatex(halfText, charsmax(halfText), "OT%d", g_otRound);
+            } else {
+                g_currentHalf = 1;
+                copy(halfText, charsmax(halfText), "1st half");
+            }
         }
 
         // Half captains for logging (first .ready per team this half)
@@ -9435,10 +9452,10 @@ public cmd_ready(id) {
 
         // Reset tech budgets only for NEW matches (1st half), not 2nd half continuation
         // Tech budget persists across halves (per-match budget, not per-half).
-        // !g_inOvertime is load-bearing: an OT round sets g_currentHalf = 1 for
-        // handle_map_change's benefit, which otherwise re-enters this block every
-        // round -- refilling the budget it just restored, and re-deriving the team
-        // names from current sides so round 3+ announces the wrong winner.
+        // An OT round must never re-enter this block: it would refill the budget the
+        // restore just brought back, and re-derive the team names from current sides
+        // so round 3+ announces the wrong winner. OT carries its own half code, and
+        // !g_inOvertime keeps that true even if something else forces the code to 1.
         if (g_currentHalf == 1 && !g_inOvertime) {
             g_techBudget[1]   = g_techBudgetSecs;
             g_techBudget[2]   = g_techBudgetSecs;
@@ -9632,17 +9649,17 @@ public task_apply_match_config_and_start() {
     // map config just changed ktp_tech_budget_seconds, re-seed — but only a
     // fresh match with untouched budgets (budget is per-match; a consumed
     // budget must never be refilled).
-    // An OT round also runs with g_currentHalf == 1, but only round 1 has a
-    // fresh budget: rounds 2+ restore theirs from _ktp_otst, so a reseed there
-    // is a refill. Round 1's was seeded by EXPLICIT_OT_INIT from the same
-    // pre-config cache, which is exactly what this block exists to correct.
-    new bool:freshBudget = (!g_inOvertime || g_otRound <= 1);
-    if (g_currentHalf == 1 && freshBudget && g_techBudgetSecs != prevBudgetSecs
+    // In OT only round 1 has a fresh budget: rounds 2+ restore theirs from
+    // _ktp_otst, so a reseed there is a refill. Round 1's was seeded by
+    // EXPLICIT_OT_INIT from the same pre-config cache, which is exactly what
+    // this block exists to correct.
+    new bool:freshBudget = g_inOvertime ? (g_otRound <= 1) : (g_currentHalf == 1);
+    if (freshBudget && g_techBudgetSecs != prevBudgetSecs
         && g_techBudget[1] == prevBudgetSecs && g_techBudget[2] == prevBudgetSecs) {
         g_techBudget[1] = g_techBudgetSecs;
         g_techBudget[2] = g_techBudgetSecs;
         if (g_inOvertime) {
-            // save_ot_state_for_next_round() persists g_otTechBudget[], not
+            // save_ot_state_to_localinfo() persists g_otTechBudget[], not
             // g_techBudget[] -- without this, round 2 inherits the pre-config
             // value. (Not save_ot_context(): that is dead code, reachable only
             // through the never-armed OT-break subsystem.)
@@ -9766,10 +9783,11 @@ public task_deferred_discord_fwd() {
     #endif
 
     // Fire ktp_match_start forward for ALL half/OT starts (KTPHLTVRecorder, etc.)
-    // half parameter: 1=1st half, 2=2nd half, 101+=OT round (101, 102, 103...)
+    // half parameter: 1=1st half, 2=2nd half, 101+=OT round — the encoding
+    // g_currentHalf itself now carries, so no OT re-derivation here.
     {
         new ret;
-        new half = g_inOvertime ? (100 + g_otRound) : g_currentHalf;
+        new half = g_currentHalf;
         ExecuteForward(g_fwdMatchStart, ret, g_matchId, g_currentMap, g_matchType, half);
         log_ktp("event=FWD_MATCH_START match_id=%s map=%s type=%d half=%d", g_matchId, g_currentMap, g_matchType, half);
 
@@ -10383,8 +10401,8 @@ public cmd_test_fire_match_start_log(id) {
         copy(halfText, charsmax(halfText), "1st");
     } else if (g_currentHalf == 2) {
         copy(halfText, charsmax(halfText), "2nd");
-    } else if (g_currentHalf >= 100) {
-        formatex(halfText, charsmax(halfText), "OT%d", g_currentHalf - 100);
+    } else if (g_currentHalf > OT_HALF_BASE) {
+        formatex(halfText, charsmax(halfText), "OT%d", g_currentHalf - OT_HALF_BASE);
     } else {
         formatex(halfText, charsmax(halfText), "%d", g_currentHalf);
     }
