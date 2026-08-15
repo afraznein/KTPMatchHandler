@@ -6,6 +6,80 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.164] - 2026-08-15
+
+### Fixed
+
+#### An OT round is no longer a first half
+
+`g_currentHalf` carried three meanings in two values: `1` meant "regulation
+first half" *and* "any OT round". Every site that needed to tell them apart had
+to remember `g_inOvertime` as well, and the ones that forgot wrote
+regulation-shaped state while an OT round was live. Four of the original six
+were still open; they share one cause, so they are fixed as one change rather
+than four guards.
+
+**OT round N is now `OT_HALF_BASE + N`** — the encoding `ktp_match_start`
+already publishes to KTPHLTVRecorder and the tier-2 witness contract already
+documents. Both writers move:
+
+- the OT continuation branch, which set `1` "for OT round detection in
+  `handle_map_change`" — a function deleted two cuts ago;
+- the fresh-match branch, which a `.ktpOT` / `.draftOT` reaches with
+  `g_inOvertime` already set (EXPLICIT_OT_INIT clears `g_secondHalfPending`
+  first), and which labelled OT round 1 "1st half".
+
+What that fixes at the reader sites:
+
+| site | was | now |
+|---|---|---|
+| `msg_TeamScore` | every OT flag cap overwrote `_ktp_h1` with the OT scoreboard | regulation halves only |
+| periodic score save | same, every 120s | same |
+| proactive context save | ran the 2nd-half save during OT | runs the OT save |
+
+`_ktp_h1` is the regulation half-1 record: `finalize_abandoned_match` reports it
+in the "MATCH ENDED (2nd half)" embed and the 2nd-half restore seeds the
+scoreboard from it. Nothing read it for OT — an abandoned OT reports `_ktp_reg`
+— so OT deliberately persists no running score of its own.
+
+The map-config tech-budget reseed *depended* on the overload to reach OT round
+1, so it now branches on `g_inOvertime` explicitly. Behaviour unchanged: fresh
+budgets reseed, restored ones never refill.
+
+#### An OT round abandoned mid-round restored as a 2nd half
+
+At every OT go-live the proactive save ran
+`save_match_context_for_second_half()`, stamping `_ktp_mode = "h2"` over the
+round's own `"otN"`. The next map load then read "h2": wrong finalize branch,
+"MATCH ENDED (2nd half)" instead of "MATCH ENDED (OTn)", and regulation totals
+reported as half-1 scores. A fresh `.ktpOT` had no OT context persisted at all
+until its first round ended — so an abandoned round 1 was unrecoverable as OT.
+
+OT go-live now writes the OT shape. `save_ot_state_for_next_round()` is
+`save_ot_state_to_localinfo()`, called from go-live as well as the round
+handover; both persist the context for the round *about to be played*, so the
+content is the same either way.
+
+### Changed
+
+- `save_ot_localinfo_shared()` folded into `save_ot_state_to_localinfo()`. With
+  one caller the split can only reintroduce the half-updated OT save that lost
+  the Discord message/channel IDs on every round past the first in 0.10.143.
+- `save_ot_state_for_first_round()` **deleted** (dead since it was written). It
+  hardcoded `"ot1"` and wrote regulation half-1 scores; the tied-regulation-to-OT
+  path it was built for was replaced by explicit `.ktpOT` / `.draftOT`, which a
+  tie now points at rather than triggering.
+- `ktp_match_start`'s `half` argument reads `g_currentHalf` directly instead of
+  re-deriving `100 + g_otRound`. Same values on the wire.
+
+### Known limitations
+
+- A tech pause spent mid-OT-round updates `g_otTechBudget[]` but does not
+  re-persist `_ktp_otst` until the round ends, so an abandoned round restores
+  the budget it started with. Pre-existing and unchanged here.
+
+---
+
 ## [0.10.163] - 2026-08-14
 
 ### Fixed
