@@ -364,7 +364,7 @@ stock clear_match_roster() {
 // Call this at match start to get initial roster
 stock capture_roster_snapshot() {
     new players[MAX_PLAYERS], pnum;
-    get_players(players, pnum, "ch"); // connected, not HLTV
+    get_match_participants(players, pnum);
 
     for (new i = 0; i < pnum; i++) {
         new id = players[i];
