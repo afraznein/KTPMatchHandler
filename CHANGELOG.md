@@ -89,7 +89,8 @@ closing brace mid-token — which the ingest rejects for every player in the bat
 while the log still reports nothing shed. Same trap already documented for
 `AIM_ROW_MAX` and `FIRE_TAIL_BYTES`.
 
-Batch size stays two orders of magnitude inside the API's 5000-entry cap.
+A worst-case batch is a full ring of each stream, which stays inside the API's
+5000-entry cap with room to spare.
 
 ---
 

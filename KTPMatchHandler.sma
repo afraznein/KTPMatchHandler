@@ -219,6 +219,10 @@ new g_hitDropped = 0;
 // Drop the retained window. Deliberately leaves the loss counters alone: a drain
 // is not a report, and every caller below either has just logged them or never
 // will, so zeroing here would erase drops the SEND line never printed.
+// Consequence for the counters that now ship with the batch: they are per-report,
+// not per-batch. An unreported interval (no match id, or curl init failed) carries
+// its drops into the next shipped batch, so a non-zero droppedSwitches does not
+// prove those switches belonged to that batch's interval.
 stock timeline_buffers_drain() {
     g_swCount = 0;
     g_swHead  = 0;
@@ -2938,11 +2942,15 @@ stock send_ac_weapon_timeline_batch() {
     pos += formatex(g_weaponTimelineJsonBuf[pos], buflen - pos,
         "{^"matchId^":^"%s^",^"switches^":[", matchId);
 
-    // Oldest-first, so the payload stays chronological. The headroom guard would
-    // therefore cut the NEWEST switches — the opposite of the ring's own policy —
-    // which is tolerable only because TL_JSON_BUF_SIZE is derived to hold a full
-    // ring, making the cut unreachable. Break that derivation and truncation
-    // silently starts discarding newest again.
+    // Oldest-first, i.e. insertion order. That is real-time order, but NOT tsMs
+    // order across a changelevel: get_gametime() restarts on the new map while the
+    // ring is not drained at a map change, so a batch spanning the halftime seam
+    // carries tsMs running backwards mid-payload with no marker. firedAtUtc is
+    // monotonic through it — resolve on that, never on tsMs alone.
+    // The headroom guard would cut the NEWEST switches here, the opposite of the
+    // ring's own policy, which is tolerable only because TL_JSON_BUF_SIZE is
+    // derived to hold a full ring and the cut is unreachable. Break that
+    // derivation and truncation silently starts discarding newest again.
     new emitted = 0;
     for (new n = 0; n < g_swCount && pos < headroom; n++) {
         new i = (g_swHead + n) % WEAPON_SW_BUFFER_SIZE;
@@ -3266,7 +3274,8 @@ stock send_ac_weapon_fire_batch() {
 // ================ 0.5.0 Weapon Timeline Forward Handlers ================
 // Append-to-ring-buffer handlers for dod_client_weaponswitch + client_damage.
 // Gated on: AC config loaded + active match + player alive + non-spectator.
-// LIFO-drop on overflow; bump the dropped-counter for observability.
+// Overflow policy differs per stream, deliberately — see each handler. Both bump
+// a dropped-counter, and both counters ride out with the batch.
 
 // 0.10.135: shared append-time gate. Accepts "real match active" OR
 // "baseline mode on". The previous gate (0.10.133/.134) probed
