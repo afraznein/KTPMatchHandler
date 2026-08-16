@@ -10399,6 +10399,16 @@ public cmd_test_end_match(id) {
     new s1 = str_to_num(s1Arg);
     new s2 = str_to_num(s2Arg);
 
+    // Match production's ktp_match_teardown_notify ordering exactly: weapon
+    // accumulators must flush while the daemon still holds match_id + half.
+    // Emitting KTP_MATCH_END first clears that context, which made every Lane B
+    // StatsMe row land with match_id=NULL/half=0 and left derived match damage
+    // at zero even though weapon data itself was present.
+    #if defined HAS_DODX
+    dodx_flush_all_stats();
+    ktp_reset_all_wstats();
+    #endif
+
     log_ktp("event=TEST_END_MATCH match_id=%s final=%d-%d", g_matchId, s1, s2);
     log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"test^")",
         g_matchId, g_currentMap);
@@ -10426,22 +10436,6 @@ public cmd_test_end_match(id) {
 
     new ret;
     ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_currentMap, g_matchType, s1, s2);
-
-    // Production match-end fires DODX stats flush (per CLAUDE.md "Match Flow"
-    // section — `dodx_flush_all_stats()` at half/match end). Mirroring it
-    // here means the test-mode end-match path exercises the same DODX
-    // forward chain (`dod_stats_flush(id)`) as production, which lets the
-    // Tier 2 `test_dod_stats_flush_fires_on_match_end` test assert the
-    // forward fires for connected bots without needing a separate dispatch
-    // primitive. Test-mode-only — `cmd_test_end_match` is fully gated by
-    // `#if defined KTP_TEST_MODE`, so production binary stays byte-identical.
-    // HAS_DODX guard mirrors production discipline (e.g. line 707/948/1169);
-    // CI image strip-down or pre-DODX fork should fail-soft, not refuse to
-    // compile.
-    #if defined HAS_DODX
-    dodx_flush_all_stats();
-    ktp_reset_all_wstats();   // parity with the production sites; see the stock
-    #endif
 
     // Production match-end (KTPMatchHandler.sma:785) also fires the AC
     // match-end POST. Mirror it here so the Tier 2 `test_17_ac_match_end_*`
