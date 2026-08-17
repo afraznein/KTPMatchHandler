@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.165"
+#define PLUGIN_VERSION "0.10.166"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -603,6 +603,7 @@ new g_discordResponseBuf[4096];  // Response buffer for Discord API callbacks (m
 // Discord message editing support
 new g_discordMatchMsgId[32];         // Message ID of the consolidated match embed
 new g_discordMatchChannelId[64];     // Channel where match embed was sent
+new g_discordEmbedReqMatchId[64];    // Match that issued the pending embed create (async identity check)
 // Roster tracking for 2nd half comparison (detect new players)
 new g_firstHalfRosterAllies[16][44]; // SteamIDs of players on Allies in 1st half (max 16)
 new g_firstHalfRosterAxis[16][44];   // SteamIDs of players on Axis in 1st half (max 16)
@@ -5618,8 +5619,7 @@ stock end_match_cleanup() {
     // The localinfo keys go above, but these are Pawn globals and outlive the
     // map change — a later match would edit this match's embed, and the OT save
     // would then persist the dead id under the new match's context.
-    g_discordMatchMsgId[0] = EOS;
-    g_discordMatchChannelId[0] = EOS;
+    clear_discord_match_identity();
 
     // Reset hostname to base (no match suffix)
     update_server_hostname();
@@ -9167,6 +9167,9 @@ public cmd_ready(id) {
             // cached value when gamerules is unavailable.
             reset_match_scores();
             clear_match_roster();
+            // Same reasoning for the embed identity — an abandoned match leaves
+            // its Discord ids in localinfo and restore repopulates them.
+            clear_discord_match_identity();
             // Clear any previous OT scores (2D array)
             for (new r = 0; r < sizeof g_otScores; r++) {
                 g_otScores[r][0] = 0;
@@ -9439,6 +9442,9 @@ public cmd_ready(id) {
             reset_match_scores();
             // Clear roster for 1st half (capture deferred to Phase 2)
             clear_match_roster();
+            // And the embed identity, for the same reason the roster is cleared:
+            // an abandoned predecessor leaves its ids in localinfo.
+            clear_discord_match_identity();
         }
         // Roster capture deferred to Phase 2 (task_deferred_discord_fwd) to reduce Phase 0 stall
 
@@ -9735,7 +9741,7 @@ public task_deferred_discord_fwd() {
         g_matchId, g_lastDeferredScheduleSrc, get_gametime());
 
     // Deferred from Phase 0: capture roster snapshot (loops all players, ~5-10ms)
-    capture_roster_snapshot();
+    capture_roster_snapshot(team1_current_side());
 
     // Deferred from Phase 0: update server hostname with match state
     // (If unpaused during Phase 0, ktp_unpause_now already set it — this is a harmless no-op)
@@ -9744,14 +9750,21 @@ public task_deferred_discord_fwd() {
     // Discord notification - consolidated match embed
     #if defined HAS_CURL
     if (!g_disableDiscord) {
+        new status[64];
         if (g_inOvertime) {
-            new status[64];
             formatex(status, charsmax(status), "OVERTIME ROUND %d - Match Live", g_otRound);
-            send_match_embed_update(status);
-        } else if (g_currentHalf == 1) {
-            send_match_embed_create();
         } else if (g_currentHalf == 2) {
-            send_match_embed_update("2nd Half - Match Live");
+            copy(status, charsmax(status), "2nd Half - Match Live");
+        } else {
+            copy(status, charsmax(status), "1st Half - Match Live");
+        }
+        // Key on whether an embed exists, not on the period: a fresh .ktpOT
+        // opens at OT round 1 with no message id, so every update no-ops and
+        // the match produced no Discord output at all.
+        if (!g_discordMatchMsgId[0]) {
+            send_match_embed_create(status, team1_current_side());
+        } else {
+            send_match_embed_update(status);
         }
     }
     #endif
@@ -10149,6 +10162,10 @@ public cmd_test_advance_live(id) {
     g_matchLive = true;
     g_currentHalf = half;
     set_localinfo(LOCALINFO_LIVE, "1");
+
+    // This bypasses cmd_ready, so it must do the fresh-match clear itself or the
+    // suite's second match edits the first one's embed.
+    if (half == 1) clear_discord_match_identity();
 
     log_ktp("event=TEST_ADVANCE_LIVE match_id=%s half=%d map=%s matchType=%d",
         g_matchId, half, g_currentMap, _:g_matchType);
@@ -10658,8 +10675,7 @@ public cmd_test_reset(id) {
     g_disableDiscord = false;
     // Discord persistent-embed state: cleared so a subsequent test_9b match-end
     // edit doesn't try to PATCH a stale message ID from a previous test run.
-    g_discordMatchMsgId[0] = EOS;
-    g_discordMatchChannelId[0] = EOS;
+    clear_discord_match_identity();
     // Score-change guards used by task_periodic_score_save (sma:1290) — reset
     // to sentinel -1 so the first score event in the next test fires the
     // embed-update path instead of being suppressed as "no change" from a

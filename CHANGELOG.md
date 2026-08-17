@@ -6,6 +6,96 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.166] - 2026-08-17
+
+Overtime attribution and overtime Discord output. The two headline bugs surface
+only in OT, which is why they survived this long — but two of the items below
+reach regulation play, the common trigger being `.forcereset` followed by a new
+`.ktp`.
+
+### Fixed
+
+#### The Phase-2 roster snapshot filed players by a hardcoded 2nd-half swap
+
+`capture_roster_snapshot()` derived team identity from `g_currentHalf == 2`. In
+overtime `g_currentHalf` is `OT_HALF_BASE + round` (101, 102, …), so that test is
+never true and the snapshot fell through to `teamId = side` — the unswapped
+mapping. Odd OT rounds were right by coincidence, because team 1 starts as
+Allies; even rounds were inverted.
+
+The blast radius was narrow but real. Anyone who typed `.ready` was already in
+the roster via the correctly-keyed write in `cmd_ready`, and
+`add_to_match_roster` refuses a SteamID already present in either roster, so
+returning players were a no-op. What was left was a player **new** to the roster
+on an even OT round — a substitute, or someone who connected after round 1's
+snapshot. They were filed on the wrong team, and that propagated to the Discord
+rosters and to anti-cheat attribution.
+
+The snapshot now takes the side from `team1_current_side()`, the same helper the
+ready counts, half-captain tracking and `cmd_ready` roster write already use.
+It is passed in as a parameter because this include is pulled in before the
+helper is defined.
+
+The side filter moved with it, and that part is not cosmetic:
+`get_players(…, "ch")` includes spectators, whose side is 0 or 3. The guard now
+tests `side` directly, because a bare `(side == team1Side) ? 1 : 2` would file
+every spectator on team 2.
+
+That filter also fixes a regulation-play bug the old code had. In 1st half and OT
+the old `teamId = side` left spectators as 0 or 3 and the guard rejected them —
+but in 2nd half the swap `(side == 1) ? 2 : 1` mapped **both** side 0 and side 3
+to **1**, so every spectator and unassigned player present at 2nd-half go-live
+was silently added to the roster as team 1.
+
+#### A fresh `.ktpOT` produced no Discord output at all
+
+The go-live dispatch tested `g_inOvertime` first and only reached
+`send_match_embed_create()` through `g_currentHalf == 1`. A match started
+directly with `.ktpOT` or `.draftOT` is in overtime from its first go-live, so it
+only ever called `send_match_embed_update()` — which returns immediately on an
+empty `g_discordMatchMsgId`, logging `DISCORD_EDIT_SKIP reason=no_msg_id`. No
+embed was ever created, so every later update for that match hit the same guard:
+the match reported nothing, start to finish. `save_first_half_roster()` never ran
+either, since the create path is its only caller.
+
+The dispatch now keys on whether an embed exists rather than on the period, and
+`send_match_embed_create()` takes the status string so OT round 1 does not
+announce itself as "1st Half".
+
+It also takes the side team 1 currently occupies. Create used to run only at 1st
+half, where team 1 is Allies, so it could build its two roster fields from sides
+1 and 2 and label them with the team names. Now that it can run at a 2nd half or
+an even OT round — whenever an earlier create failed to capture a message id —
+that assumption would print each team's players under the other team's name.
+
+#### A fresh match could edit the previous match's embed
+
+Keying on the message id exposes an existing hole. `g_discordMatchMsgId` is
+cleared in `end_match_cleanup()`, so a match abandoned without it leaves
+`LOCALINFO_DISCORD_MSG` populated, and `restore_match_context_from_localinfo()`
+repopulates the global on the next map load. Under the old period-keyed dispatch
+that was harmless at 1st-half go-live, which always created; under an id-keyed
+one it would edit the dead match's embed instead.
+
+Both fresh-match entry points now clear the embed identity, alongside the roster
+and score resets they already did for the same reason: the 1st-half seed block
+and the explicit-OT init block. The clear lives in one stock,
+`clear_discord_match_identity()`, which `end_match_cleanup()` also calls in place
+of the two hand-rolled global assignments it used to carry.
+
+#### The embed-create callback could stamp a message id onto a different match
+
+`discord_embed_callback` wrote `g_discordMatchMsgId` and its localinfo key with
+no check that the match it was created for is still the current one. A create
+issued at go-live whose response landed after a `.cancel`, `.forcereset` or
+abandoned half would stamp the dead match's id onto whatever came next, and
+`end_match_cleanup`'s clear cannot help because it already ran. The request now
+stamps the match id and the callback drops the write on a mismatch, logging
+`DISCORD_MSG_ID_DISCARDED reason=match_changed`. Pre-existing, but the fresh-OT
+path above adds a second way to reach it.
+
+---
+
 ## [0.10.165] - 2026-08-15
 
 P3 cleanup cut. No new behaviour; every item removes a way the plugin could act
