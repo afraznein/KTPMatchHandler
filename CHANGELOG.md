@@ -8,7 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-Repo hygiene only — no plugin code change, so no version bump and no new build.
+### Added
+
+#### 0.10.160 - direct 6v6 `.testmatch` production-path driving
+
+- Drive the production `.ktp`, `.confirm`, and `.ready` handlers directly for
+  fake clients.  Lane B's ReHLDS topology does not route fake-client
+  `engclient_cmd("say")` calls through the registered chat handlers.
+- Fix the contained test shape at 6v6; `.testmatch` now creates exactly 12 bots.
+
+#### 0.10.159 - bot-backed `.testmatch` for Lane B
+
+- A `KTP_TEST_MODE`-only `.testmatch` / `amx_ktp_testmatch` entry point fills a
+  disposable LAN server with bots, then makes those bots issue the real `.ktp`,
+  `.confirm`, and `.ready` chat commands. It therefore shares the production
+  match state machine instead of maintaining a second copy that can drift.
+- The command is fail-closed: it additionally requires
+  `ktp_testmatch_enabled 1`, `sv_lan 1`, an idle server, and no human clients.
+  Match IDs end in `-TEST`; Discord and anti-cheat HTTP sinks are suppressed in
+  code for the complete test-match lifetime.
 
 ### Removed
 
