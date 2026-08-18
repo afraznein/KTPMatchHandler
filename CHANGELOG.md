@@ -10,6 +10,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+#### 0.10.161 - match-type lifecycle metadata
+
+- Add the numeric KTPMatchHandler match type to every production and test-mode
+  `KTP_MATCH_START` marker. HLStatsX persists this fail-closed classification
+  so scheduled retention can expire scrim/12man analytics without selecting
+  official, KTP OT, draft, or draft OT matches.
+
 #### 0.10.160 - direct 6v6 `.testmatch` production-path driving
 
 - Drive the production `.ktp`, `.confirm`, and `.ready` handlers directly for

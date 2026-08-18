@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.160"
+#define PLUGIN_VERSION "0.10.161"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // ---------- CVARs ----------
@@ -1667,8 +1667,8 @@ public task_delayed_match_start_log() {
     if (g_matchStartLogFired) return;
     g_matchStartLogFired = true;
 
-    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")", g_delayedMatchId, g_delayedMap, g_delayedHalf);
-    log_ktp("event=DELAYED_MATCH_START_LOG matchid=%s map=%s half=%s", g_delayedMatchId, g_delayedMap, g_delayedHalf);
+    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^")", g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
+    log_ktp("event=DELAYED_MATCH_START_LOG matchid=%s map=%s half=%s type=%d", g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
 }
 
 // Delayed dodx_set_match_id after round restart
@@ -1780,10 +1780,10 @@ public task_roundlive_match_context() {
     #endif
 
     // Log KTP_MATCH_START for HLStatsX (fires on round-live instead of fixed timer)
-    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")",
-        g_delayedMatchId, g_delayedMap, g_delayedHalf);
-    log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s",
-        g_delayedMatchId, g_delayedMap, g_delayedHalf);
+    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^")",
+        g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
+    log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s type=%d",
+        g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
 }
 
 // Timeout fallback: if RoundState=1 never fires within 5s, fire context anyway
@@ -10216,10 +10216,10 @@ public cmd_test_fire_match_start_log(id) {
         formatex(halfText, charsmax(halfText), "%d", g_currentHalf);
     }
 
-    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")",
-        g_matchId, g_currentMap, halfText);
-    log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s",
-        g_matchId, g_currentMap, halfText);
+    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^")",
+        g_matchId, g_currentMap, halfText, _:g_matchType);
+    log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s type=%d",
+        g_matchId, g_currentMap, halfText, _:g_matchType);
 
     // Mirror the KTP_MATCH_START line into the AMXX log directory so
     // tests/integration/log_tail.py can find it via wait_for_log_substring
@@ -10229,8 +10229,8 @@ public cmd_test_fire_match_start_log(id) {
     // HLStatsX UDP via logaddress_add. Surfaced 2026-05-06 first Tier 2
     // run — test_8 timed out waiting on a substring that lived in a
     // different log dir.
-    log_amx("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") [test-mode mirror]",
-        g_matchId, g_currentMap, halfText);
+    log_amx("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^") [test-mode mirror]",
+        g_matchId, g_currentMap, halfText, _:g_matchType);
 
     console_print(id, "KTP_TEST_ROUNDLIVE_LOG: ok match_id=%s half=%s", g_matchId, halfText);
     return PLUGIN_HANDLED;
