@@ -1466,8 +1466,8 @@ stock save_ot_state_to_localinfo() {
     set_localinfo(LOCALINFO_DISCORD_MSG, g_discordMatchMsgId);
     set_localinfo(LOCALINFO_DISCORD_CHAN, g_discordMatchChannelId);
 
-    // OT state: techBudget1,techBudget2,startingSide
-    formatex(buf, charsmax(buf), "%d,%d,%d", g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs);
+    // Through the helper so this stays paired with parse_ot_state()
+    format_ot_state(buf, charsmax(buf), g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs);
     set_localinfo(LOCALINFO_OT_STATE, buf);
 
     format_scores(buf, charsmax(buf), g_regulationScore[1], g_regulationScore[2]);
@@ -2253,24 +2253,6 @@ stock parse_ot_state(const buf[], &techA, &techX, &side) {
     return count;
 }
 
-// Append OT round score to OT scores string: "t1,t2|t1,t2|..."
-stock append_ot_score(buf[], maxlen, t1, t2) {
-    new tmp[16];
-    if (buf[0]) {
-        formatex(tmp, charsmax(tmp), "|%d,%d", t1, t2);
-    } else {
-        formatex(tmp, charsmax(tmp), "%d,%d", t1, t2);
-    }
-    // All-or-nothing append: a truncated "t1,t2" pair would parse as garbage
-    // on restore. A round that doesn't fit is dropped whole (deep-OT
-    // degradation; the 127-byte localinfo cap makes this reachable ~10+ rounds).
-    if (strlen(buf) + strlen(tmp) > maxlen) {
-        log_ktp("event=OT_SCORES_APPEND_SKIPPED len=%d", strlen(buf));
-        return;
-    }
-    add(buf, maxlen, tmp);
-}
-
 // Parse OT scores string into array, returns number of rounds
 // scores[round][1] = team1 score, scores[round][2] = team2 score (1-indexed rounds)
 stock parse_ot_scores(const buf[], scores[][3], maxrounds) {
@@ -2286,14 +2268,6 @@ stock parse_ot_scores(const buf[], scores[][3], maxrounds) {
         scores[r + 1][2] = t2;
     }
     return numRounds;
-}
-
-// Generate OT scores string from array
-stock generate_ot_scores_string(buf[], maxlen, scores[][3], numRounds) {
-    buf[0] = EOS;
-    for (new r = 1; r <= numRounds; r++) {
-        append_ot_score(buf, maxlen, scores[r][1], scores[r][2]);
-    }
 }
 
 // ---------- End Localinfo State Helpers ----------
@@ -6144,14 +6118,16 @@ stock flatten_for_log(const src[], dest[], maxlen) {
 }
 
 // Classify a disconnect from the engine's own SV_DropClient reason. drop=false
-// means the client left without one, which is not evidence either way.
+// means the client left without one, which is not evidence either way. Runs on
+// the raw reason: flatten_for_log strips the quotes "sent 'drop'" matches on.
+// Ban is tested before kick so "Kicked and banned" reports the stronger fact.
 stock classify_disconnect(bool:dropped, const reason[], dest[], maxlen) {
     if (!dropped || !reason[0]) {
         copy(dest, maxlen, "unknown");
+    } else if (containi(reason, "banned") != -1 || containi(reason, "ban list") != -1) {
+        copy(dest, maxlen, "banned");
     } else if (containi(reason, "Kicked") != -1) {
         copy(dest, maxlen, "kicked");
-    } else if (containi(reason, "ban") != -1) {
-        copy(dest, maxlen, "banned");
     } else if (containi(reason, "sent 'drop'") != -1) {
         copy(dest, maxlen, "quit");
     } else if (containi(reason, "timed out") != -1) {
@@ -6208,9 +6184,13 @@ stock on_client_left(id, bool:dropped, const reason[]) {
                     // admin kick pausing the kicked player's own team. Logged
                     // rather than gated: which kinds should be exempt is a
                     // ruleset call, and the log is the evidence for making it.
-                    new dcKind[12], dcReason[96];
+                    new dcKind[12], dcReason[64];
                     classify_disconnect(dropped, reason, dcKind, charsmax(dcKind));
-                    flatten_for_log(reason, dcReason, charsmax(dcReason));
+                    // Only the SV_DropClient path hands us a terminated array;
+                    // every drop=false site forwards a zero-length one with no
+                    // terminator, so scanning it reads uninitialized AMX heap.
+                    if (dropped) flatten_for_log(reason, dcReason, charsmax(dcReason));
+                    else dcReason[0] = EOS;
 
                     // If already counting down for another disconnect, just announce
                     if (g_disconnectCountdown > 0) {
@@ -6218,7 +6198,9 @@ stock on_client_left(id, bool:dropped, const reason[]) {
                         get_user_name(id, name, charsmax(name));
                         get_user_authid(id, sid, charsmax(sid));
                         team_name_from_id(tid, teamName, charsmax(teamName));
-                        log_ktp("event=ADDITIONAL_DISCONNECT player='%s' steamid=%s team=%s kind=%s reason='%s' countdown_active=true",
+                        // reason last: log_ktp truncates at 256, and a lost tail
+                        // must cost the reason rather than a fixed marker.
+                        log_ktp("event=ADDITIONAL_DISCONNECT player='%s' steamid=%s team=%s countdown_active=true kind=%s reason='%s'",
                                 name, safe_sid(sid), teamName, dcKind, dcReason);
                         announce_all("Additional disconnect: %s (%s) - countdown already active", name, teamName);
                         return;
@@ -6798,7 +6780,6 @@ public cmd_ot_break_unsupported(id) {
     if (!is_user_connected(id)) return PLUGIN_HANDLED;
 
     client_print(id, print_chat, "[KTP] OT breaks are not supported. Ready up when both teams are set.");
-    log_ktp("event=OT_BREAK_REQUEST_UNSUPPORTED id=%d", id);
 
     return PLUGIN_HANDLED;
 }

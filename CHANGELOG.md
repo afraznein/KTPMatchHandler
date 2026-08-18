@@ -33,6 +33,15 @@ are not supported. Unregistering them would send the text to public chat as a
 say, which is worse than an honest refusal. The `.ext` command keeps its normal
 pause-extension behaviour; it no longer has a dead OT branch in front of it.
 
+Deleting `save_ot_context()` orphaned two serialization helpers.
+`generate_ot_scores_string()` is gone: it wrote `_ktp_ots` with no cap at all,
+while the surviving writer in `save_ot_state_to_localinfo()` cuts at the last
+complete round boundary and warns, because the engine rejects a localinfo value
+at or past `MAX_KV_LEN` outright and a rejected write silently keeps the old
+value. `append_ot_score()` went with it. `format_ot_state()` was kept and the
+inline `formatex` in `save_ot_state_to_localinfo()` now routes through it, so the
+`_ktp_otst` format cannot drift from `parse_ot_state()`.
+
 ### Changed
 
 #### Auto-DC now records why the player left
@@ -49,6 +58,17 @@ left without going through `SV_DropClient`, which is not evidence either way.
 `kicked`, `banned`, `quit`, `timeout`, `dropped`, `unknown`) and the flattened
 reason string. Steam's reasons are multi-line and `log_ktp` writes one line per
 event, so the raw text is stripped of newlines, tabs and single quotes first.
+Classification runs on the raw reason, before that stripping, because
+`Client sent 'drop'` is matched on its quotes. Ban is tested ahead of kick so the
+`banid`-with-kick reason reports the stronger fact, and both ban anchors are the
+full phrases rather than the substring `ban`, which a filename in a `Bad file`
+reason could otherwise trip. `reason=` is last in both lines: `log_ktp` truncates
+at its buffer, and a lost tail must cost the reason rather than a fixed marker.
+
+The reason is only read when `drop` is true. Every other forward site hands the
+plugin a zero-length array with **no terminator**, so scanning it would read
+uninitialized AMX heap and log it — on exactly the crash-reconnect path this
+feature exists to catch.
 
 **Behaviour is unchanged**: auto-DC still fires for every kind, including an admin
 kick pausing the kicked player's own team. Which kinds should be exempt is a
