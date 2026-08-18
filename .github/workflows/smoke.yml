@@ -19,7 +19,7 @@ on:
   # Cost of firing on every PR is one smoke run; cost of the filter is a
   # branch nobody can merge.
   push:
-    branches: ['**']
+    branches: [main, preprod]
   pull_request: {}
   workflow_dispatch:
 
