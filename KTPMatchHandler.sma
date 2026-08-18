@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.166"
+#define PLUGIN_VERSION "0.10.167"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -447,10 +447,6 @@ new g_otTechBudget[3];              // OT tech budgets (reset once at OT start)
 // subtract -- keep it that way if the dodx restore below does not run.
 new g_otScoreBase[3];
 new g_otTeam1StartsAs = 0;          // Which side team1 starts on this OT round (1=Allies, 2=Axis)
-new bool:g_otBreakActive = false;   // Break in progress before OT
-new g_otBreakVotes[33];             // Player votes for break (0=none, 1=yes)
-new g_otBreakExtensions[3];         // Extensions used per team [1]=team1, [2]=team2
-new g_otBreakTimeLeft = 0;          // Break countdown seconds remaining
 
 // ---------- Tunables (defaults; CVARs can override at runtime) ----------
 new g_countdownSeconds = 5;    // unpause countdown
@@ -696,8 +692,6 @@ new g_taskMatchStartLogId = 55614;          // Task ID for delayed KTP_MATCH_STA
 new bool:g_matchStartLogFired = false;      // One-shot guard: prevents task_delayed_match_start_log from firing multiple times
 new g_taskHalftimeWatchdogId = 55615;       // Task ID for halftime changelevel watchdog
 new g_taskGeneralWatchdogId = 55616;        // Task ID for general (no-match) changelevel watchdog
-new g_taskOtBreakVoteId = 55617;            // Task ID for OT break vote check
-new g_taskOtBreakTickId = 55618;            // Task ID for OT break countdown tick
 new g_taskIdleHintId = 55619;               // Task ID for idle command hint
 new g_task13InputTimeoutId = 55627;         // Task ID for 1.3 Community Queue ID input timeout
 new g_taskSetMatchIdId = 55620;             // Task ID for delayed dodx_set_match_id after round restart
@@ -4906,14 +4900,14 @@ public plugin_init() {
     register_clcmd("say_team .whoneedsready", "cmd_whoneedsready");
 
     // Overtime break commands
-    register_clcmd("say /otbreak", "cmd_otbreak");
-    register_clcmd("say_team /otbreak", "cmd_otbreak");
-    register_clcmd("say .otbreak", "cmd_otbreak");
-    register_clcmd("say_team .otbreak", "cmd_otbreak");
-    register_clcmd("say /skip", "cmd_ot_skip");
-    register_clcmd("say_team /skip", "cmd_ot_skip");
-    register_clcmd("say .skip", "cmd_ot_skip");
-    register_clcmd("say_team .skip", "cmd_ot_skip");
+    register_clcmd("say /otbreak", "cmd_ot_break_unsupported");
+    register_clcmd("say_team /otbreak", "cmd_ot_break_unsupported");
+    register_clcmd("say .otbreak", "cmd_ot_break_unsupported");
+    register_clcmd("say_team .otbreak", "cmd_ot_break_unsupported");
+    register_clcmd("say /skip", "cmd_ot_break_unsupported");
+    register_clcmd("say_team /skip", "cmd_ot_break_unsupported");
+    register_clcmd("say .skip", "cmd_ot_break_unsupported");
+    register_clcmd("say_team .skip", "cmd_ot_break_unsupported");
     // Note: .ext is already registered for pause extension, will check context in handler
 
     // NOTE: We do NOT register the console "pause" command because KTP-ReHLDS has it built-in
@@ -5520,99 +5514,6 @@ public plugin_end() {
 // - process_ot_round_end_changelevel() for OT rounds
 // These are called from OnChangeLevel() which intercepts all map changes.
 
-// ========== OVERTIME SYSTEM ==========
-
-// End the break and start overtime
-stock end_ot_break() {
-    g_otBreakActive = false;
-    g_otBreakTimeLeft = 0;
-
-    announce_all("Break ended. Starting overtime...");
-    log_ktp("event=OT_BREAK_ENDED");
-
-    start_overtime_round();
-}
-
-// Start an overtime round (changelevel with OT context)
-stock start_overtime_round() {
-    // Announce OT round
-    announce_all("========================================");
-    announce_all("  OVERTIME ROUND %d", g_otRound);
-    announce_all("  %s vs %s", g_team1Name, g_team2Name);
-    announce_all("========================================");
-
-    log_ktp("event=OT_ROUND_START round=%d match_id=%s team1_side=%s",
-            g_otRound, g_matchId,
-            g_otTeam1StartsAs == 1 ? "Allies" : "Axis");
-
-    // Save OT context before changelevel
-    save_ot_context();
-
-    #if defined HAS_CURL
-    if (!g_disableDiscord) {
-        new status[64];
-        formatex(status, charsmax(status), "OVERTIME ROUND %d", g_otRound);
-        send_match_embed_update(status);
-    }
-    #endif
-
-    // Changelevel to same map for OT round
-    log_ktp("event=OT_CHANGELEVEL map=%s round=%d", g_matchMap, g_otRound);
-    server_cmd("changelevel %s", g_matchMap);
-    server_exec();
-}
-
-// Save OT context to localinfo before changelevel
-stock save_ot_context() {
-    new buf[128];
-
-    // Core match identity (same as regulation)
-    set_localinfo(LOCALINFO_MATCH_ID, g_matchId);
-    set_localinfo(LOCALINFO_MATCH_MAP, g_matchMap);
-
-    // Mode: "ot1", "ot2", etc.
-    formatex(buf, charsmax(buf), "ot%d", g_otRound);
-    set_localinfo(LOCALINFO_MODE, buf);
-
-    // Team names (persist through all OT rounds)
-    set_localinfo(LOCALINFO_TEAMNAME1, g_team1Name);
-    set_localinfo(LOCALINFO_TEAMNAME2, g_team2Name);
-
-    // First half scores (from regulation)
-    format_scores(buf, charsmax(buf), g_firstHalfScore[1], g_firstHalfScore[2]);
-    set_localinfo(LOCALINFO_H1_SCORES, buf);
-
-    // Regulation totals
-    format_scores(buf, charsmax(buf), g_regulationScore[1], g_regulationScore[2]);
-    set_localinfo(LOCALINFO_REG_SCORES, buf);
-
-    // OT scores (all rounds so far)
-    new otScoresStr[128];
-    generate_ot_scores_string(otScoresStr, charsmax(otScoresStr), g_otScores, g_otRound - 1);  // -1 because current round not played yet
-    set_localinfo(LOCALINFO_OT_SCORES, otScoresStr);
-
-    // OT state: techA,techX,side
-    format_ot_state(buf, charsmax(buf), g_otTechBudget[1], g_otTechBudget[2], g_otTeam1StartsAs);
-    set_localinfo(LOCALINFO_OT_STATE, buf);
-
-    // Consolidated regulation state (pause counts not used in OT, but preserve for logging)
-    format_state(buf, charsmax(buf), 0, 0, g_otTechBudget[1], g_otTechBudget[2]);
-    set_localinfo(LOCALINFO_STATE, buf);
-
-    // Match type (defense in depth — value persists from regulation, but save explicitly)
-    set_localinfo(LOCALINFO_MATCH_TYPE, fmt("%d", _:g_matchType));
-
-    // Discord IDs
-    set_localinfo(LOCALINFO_DISCORD_MSG, g_discordMatchMsgId);
-    set_localinfo(LOCALINFO_DISCORD_CHAN, g_discordMatchChannelId);
-
-    log_ktp("event=OT_CONTEXT_SAVED match_id=%s round=%d reg=%d-%d ot_scores='%s' side=%d",
-            g_matchId, g_otRound, g_regulationScore[1], g_regulationScore[2],
-            otScoresStr, g_otTeam1StartsAs);
-}
-
-// ========== END OVERTIME SYSTEM ==========
-
 // Clean up match state after match ends (regulation or OT)
 stock end_match_cleanup() {
     g_currentHalf = 0;
@@ -5655,11 +5556,6 @@ stock end_match_cleanup() {
     g_otRound = 0;
     g_regulationScore[1] = 0;
     g_regulationScore[2] = 0;
-    g_otBreakActive = false;
-    g_otBreakTimeLeft = 0;
-    arrayset(g_otBreakVotes, 0, sizeof(g_otBreakVotes));
-    g_otBreakExtensions[1] = 0;
-    g_otBreakExtensions[2] = 0;
 
     // Reset team names to defaults after match ends
     reset_team_names();
@@ -6231,7 +6127,41 @@ public task_restore_player_score(id) {
 }
 
 // Shared handler
-stock on_client_left(id) {
+// Steam's drop reasons are multi-line and log_ktp writes one line per event.
+stock flatten_for_log(const src[], dest[], maxlen) {
+    new j = 0;
+    for (new i = 0; src[i] && j < maxlen; i++) {
+        new c = src[i];
+        if (c == '^n' || c == '^r' || c == '^t') {
+            if (j > 0 && dest[j - 1] != ' ') dest[j++] = ' ';
+            continue;
+        }
+        if (c == '^'') continue;
+        dest[j++] = c;
+    }
+    while (j > 0 && dest[j - 1] == ' ') j--;
+    dest[j] = EOS;
+}
+
+// Classify a disconnect from the engine's own SV_DropClient reason. drop=false
+// means the client left without one, which is not evidence either way.
+stock classify_disconnect(bool:dropped, const reason[], dest[], maxlen) {
+    if (!dropped || !reason[0]) {
+        copy(dest, maxlen, "unknown");
+    } else if (containi(reason, "Kicked") != -1) {
+        copy(dest, maxlen, "kicked");
+    } else if (containi(reason, "ban") != -1) {
+        copy(dest, maxlen, "banned");
+    } else if (containi(reason, "sent 'drop'") != -1) {
+        copy(dest, maxlen, "quit");
+    } else if (containi(reason, "timed out") != -1) {
+        copy(dest, maxlen, "timeout");
+    } else {
+        copy(dest, maxlen, "dropped");
+    }
+}
+
+stock on_client_left(id, bool:dropped, const reason[]) {
     if (id >= 1 && id <= MAX_PLAYERS) {
         g_ready[id] = false;
 
@@ -6274,14 +6204,22 @@ stock on_client_left(id) {
             if (tid >= 1 && tid <= 2) {
                 // Check if team has tech budget (LAN mode: budget never gates)
                 if (g_techBudget[tid] > 0 || is_lan_mode()) {
+                    // Auto-DC fires the same way for every kind, including an
+                    // admin kick pausing the kicked player's own team. Logged
+                    // rather than gated: which kinds should be exempt is a
+                    // ruleset call, and the log is the evidence for making it.
+                    new dcKind[12], dcReason[96];
+                    classify_disconnect(dropped, reason, dcKind, charsmax(dcKind));
+                    flatten_for_log(reason, dcReason, charsmax(dcReason));
+
                     // If already counting down for another disconnect, just announce
                     if (g_disconnectCountdown > 0) {
                         new name[32], teamName[16], sid[44];
                         get_user_name(id, name, charsmax(name));
                         get_user_authid(id, sid, charsmax(sid));
                         team_name_from_id(tid, teamName, charsmax(teamName));
-                        log_ktp("event=ADDITIONAL_DISCONNECT player='%s' steamid=%s team=%s countdown_active=true",
-                                name, safe_sid(sid), teamName);
+                        log_ktp("event=ADDITIONAL_DISCONNECT player='%s' steamid=%s team=%s kind=%s reason='%s' countdown_active=true",
+                                name, safe_sid(sid), teamName, dcKind, dcReason);
                         announce_all("Additional disconnect: %s (%s) - countdown already active", name, teamName);
                         return;
                     }
@@ -6297,8 +6235,8 @@ stock on_client_left(id) {
                     new teamName[16];
                     team_name_from_id(tid, teamName, charsmax(teamName));
 
-                    log_ktp("event=DISCONNECT_DETECTED player='%s' steamid=%s team=%s",
-                            g_disconnectedPlayerName, safe_sid(g_disconnectedPlayerSteamId), teamName);
+                    log_ktp("event=DISCONNECT_DETECTED player='%s' steamid=%s team=%s kind=%s reason='%s'",
+                            g_disconnectedPlayerName, safe_sid(g_disconnectedPlayerSteamId), teamName, dcKind, dcReason);
 
                     announce_all("PLAYER DISCONNECTED: %s (%s) | Auto tech-pause in %d... (type .nodc to cancel)", g_disconnectedPlayerName, teamName, DISCONNECT_COUNTDOWN_SECS);
 
@@ -6317,9 +6255,13 @@ stock on_client_left(id) {
 
 // Use the newer forward when available; fall back for older AMXX
 #if defined AMXX_VERSION_NUM && AMXX_VERSION_NUM >= 190
-public client_disconnected(id) { on_client_left(id); }
+public client_disconnected(id, bool:drop, message[], maxlen) {
+    #pragma unused maxlen
+    on_client_left(id, drop, message);
+}
 #else
-public client_disconnect(id) { on_client_left(id); }
+// The deprecated forward carries no reason, so every leave reads as unattributed.
+public client_disconnect(id) { on_client_left(id, false, ""); }
 #endif
 
 public client_putinserver(id) {
@@ -6808,11 +6750,6 @@ public cmd_extend_pause(id) {
         return PLUGIN_HANDLED;
     }
 
-    // Check if this is an OT break extension
-    if (g_inOvertime && g_otBreakActive) {
-        return cmd_ot_extend(id);
-    }
-
     if (!g_isPaused) {
         client_print(id, print_chat, "[KTP] No active pause to extend.");
         return PLUGIN_HANDLED;
@@ -6854,112 +6791,14 @@ public cmd_extend_pause(id) {
 
 // ========== OVERTIME BREAK COMMANDS ==========
 
-// Request OT break
-public cmd_otbreak(id) {
+// The break subsystem never had a start path: votes were collected and a break
+// announced, but nothing ever armed it. Both commands stay registered so the
+// text does not leak into public chat as a say.
+public cmd_ot_break_unsupported(id) {
     if (!is_user_connected(id)) return PLUGIN_HANDLED;
 
-    if (!g_inOvertime) {
-        client_print(id, print_chat, "[KTP] No overtime in progress.");
-        return PLUGIN_HANDLED;
-    }
-
-    if (g_otBreakActive) {
-        client_print(id, print_chat, "[KTP] Break already in progress.");
-        return PLUGIN_HANDLED;
-    }
-
-    if (g_matchLive) {
-        client_print(id, print_chat, "[KTP] Cannot request break during live play.");
-        return PLUGIN_HANDLED;
-    }
-
-    // The break subsystem's start path was never built (votes were collected
-    // and announced but nothing ever consumed them — g_otBreakActive has no
-    // setter). Be honest instead of promising a break that never comes.
-    client_print(id, print_chat, "[KTP] OT breaks are not currently supported. Ready up when both teams are set.");
+    client_print(id, print_chat, "[KTP] OT breaks are not supported. Ready up when both teams are set.");
     log_ktp("event=OT_BREAK_REQUEST_UNSUPPORTED id=%d", id);
-
-    return PLUGIN_HANDLED;
-}
-
-// Skip OT break (any player)
-public cmd_ot_skip(id) {
-    if (!is_user_connected(id)) return PLUGIN_HANDLED;
-
-    if (!g_inOvertime) {
-        client_print(id, print_chat, "[KTP] No overtime in progress.");
-        return PLUGIN_HANDLED;
-    }
-
-    new name[32];
-    get_user_name(id, name, charsmax(name));
-
-    if (g_otBreakActive) {
-        // End break early
-        remove_task(g_taskOtBreakTickId);
-        announce_all("%s ended the break early.", name);
-        log_ktp("event=OT_BREAK_SKIPPED_EARLY player='%s'", name);
-        end_ot_break();
-    } else if (!g_matchLive && task_exists(g_taskOtBreakVoteId)) {
-        // Skip break before it starts (during voting period)
-        remove_task(g_taskOtBreakVoteId);
-        announce_all("%s skipped the break. Preparing overtime...", name);
-        log_ktp("event=OT_BREAK_SKIPPED player='%s'", name);
-        start_overtime_round();
-    } else {
-        client_print(id, print_chat, "[KTP] Cannot skip during live play.");
-    }
-
-    return PLUGIN_HANDLED;
-}
-
-// Extend OT break (5 minutes, 2x per team)
-public cmd_ot_extend(id) {
-    if (!is_user_connected(id)) return PLUGIN_HANDLED;
-
-    if (!g_inOvertime || !g_otBreakActive) {
-        client_print(id, print_chat, "[KTP] No OT break to extend.");
-        return PLUGIN_HANDLED;
-    }
-
-    new tid = get_user_team_id(id);
-    if (tid != 1 && tid != 2) {
-        client_print(id, print_chat, "[KTP] You must be on a team to extend the break.");
-        return PLUGIN_HANDLED;
-    }
-
-    // Map current side to team identity for extension tracking
-    // In OT, we need to figure out which team identity (1 or 2) this side represents
-    new teamIdentity;
-    if (g_otTeam1StartsAs == tid) {
-        teamIdentity = 1;  // This side is team 1
-    } else {
-        teamIdentity = 2;  // This side is team 2
-    }
-
-    new const MAX_OT_EXTENSIONS = 2;
-    if (g_otBreakExtensions[teamIdentity] >= MAX_OT_EXTENSIONS) {
-        client_print(id, print_chat, "[KTP] Your team has used all %d extensions.", MAX_OT_EXTENSIONS);
-        return PLUGIN_HANDLED;
-    }
-
-    new name[32];
-    get_user_name(id, name, charsmax(name));
-
-    g_otBreakExtensions[teamIdentity]++;
-    g_otBreakTimeLeft += 300;  // Add 5 minutes
-
-    new teamName[32];
-    if (teamIdentity == 1) {
-        copy(teamName, charsmax(teamName), g_team1Name);
-    } else {
-        copy(teamName, charsmax(teamName), g_team2Name);
-    }
-
-    announce_all("%s extended the break by 5 minutes. (%s: %d/2 extensions)",
-        name, teamName, g_otBreakExtensions[teamIdentity]);
-    log_ktp("event=OT_BREAK_EXTENDED player='%s' team=%s extension=%d/2",
-        name, teamName, g_otBreakExtensions[teamIdentity]);
 
     return PLUGIN_HANDLED;
 }
@@ -8552,15 +8391,6 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     g_halfCaptain2_name[0] = EOS;
     g_halfCaptain2_sid[0] = EOS;
 
-    // Clear OT break state
-    g_otBreakActive = false;
-    g_otBreakTimeLeft = 0;
-    arrayset(g_otBreakVotes, 0, sizeof(g_otBreakVotes));
-    g_otBreakExtensions[1] = 0;
-    g_otBreakExtensions[2] = 0;
-    remove_task(g_taskOtBreakVoteId);
-    remove_task(g_taskOtBreakTickId);
-
     // Clear scores
     reset_match_scores();
     g_inOvertime = false;
@@ -9720,8 +9550,7 @@ public task_apply_match_config_and_start() {
         if (g_inOvertime) {
             // save_ot_state_to_localinfo() persists g_otTechBudget[], not
             // g_techBudget[] -- without this, round 2 inherits the pre-config
-            // value. (Not save_ot_context(): that is dead code, reachable only
-            // through the never-armed OT-break subsystem.)
+            // value.
             g_otTechBudget[1] = g_techBudgetSecs;
             g_otTechBudget[2] = g_techBudgetSecs;
         }

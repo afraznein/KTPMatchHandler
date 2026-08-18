@@ -6,6 +6,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.167] - 2026-08-18
+
+Removes the overtime break subsystem, which never had a start path, and gives the
+auto-disconnect log the engine's own reason for the disconnect.
+
+### Removed
+
+#### The overtime break subsystem
+
+`g_otBreakActive` was assigned `false` at three sites and `true` at none;
+`g_taskOtBreakVoteId` was passed to `task_exists()` and `remove_task()` but never
+to `set_task()`. The entry functions that would have armed it (`trigger_overtime`,
+`task_check_ot_break_votes`, `start_ot_break`, `task_ot_break_tick`) were deleted
+in 0.10.90 once OT became changelevel-based, and nothing replaced them. 0.10.143
+then made `.otbreak` answer honestly, but left the scaffolding standing.
+
+Everything downstream of that flag was therefore unreachable: `end_ot_break()`,
+`start_overtime_round()`, `save_ot_context()` (a full parallel localinfo writer
+that would have competed with `save_ot_state_to_localinfo()` had it ever run),
+`cmd_ot_extend()`, the break branches of `cmd_ot_skip()`, the OT branch of
+`cmd_extend_pause()`, the four break globals, and the two task ids. All removed.
+
+`.otbreak` and `.skip` stay registered and now share one handler that says breaks
+are not supported. Unregistering them would send the text to public chat as a
+say, which is worse than an honest refusal. The `.ext` command keeps its normal
+pause-extension behaviour; it no longer has a dead OT branch in front of it.
+
+### Changed
+
+#### Auto-DC now records why the player left
+
+`client_disconnected` was declared as `(id)`, discarding the `drop` and `message`
+arguments the forward supplies. `message` is the reason string from the engine's
+own `SV_DropClient` call site, which is the only thing that distinguishes a
+deliberate leave (`Client sent 'drop'`) from a lost connection (`Timed out`,
+`Reliable channel overflowed`, the Steam cases) from an admin action (`Kicked`,
+`Kicked and banned`, `Added to banned list`). `drop` is false when the client
+left without going through `SV_DropClient`, which is not evidence either way.
+
+`DISCONNECT_DETECTED` and `ADDITIONAL_DISCONNECT` now carry `kind=` (one of
+`kicked`, `banned`, `quit`, `timeout`, `dropped`, `unknown`) and the flattened
+reason string. Steam's reasons are multi-line and `log_ktp` writes one line per
+event, so the raw text is stripped of newlines, tabs and single quotes first.
+
+**Behaviour is unchanged**: auto-DC still fires for every kind, including an admin
+kick pausing the kicked player's own team. Which kinds should be exempt is a
+ruleset question, not a code one, and this log is the evidence for answering it.
+
+---
+
 ## [0.10.166] - 2026-08-17
 
 Overtime attribution and overtime Discord output. The two headline bugs surface
