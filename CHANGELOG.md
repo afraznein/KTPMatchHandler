@@ -6,7 +6,613 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
-## [Unreleased]
+## [0.10.166] - 2026-08-17
+
+Overtime attribution and overtime Discord output. The two headline bugs surface
+only in OT, which is why they survived this long — but two of the items below
+reach regulation play, the common trigger being `.forcereset` followed by a new
+`.ktp`.
+
+### Fixed
+
+#### The Phase-2 roster snapshot filed players by a hardcoded 2nd-half swap
+
+`capture_roster_snapshot()` derived team identity from `g_currentHalf == 2`. In
+overtime `g_currentHalf` is `OT_HALF_BASE + round` (101, 102, …), so that test is
+never true and the snapshot fell through to `teamId = side` — the unswapped
+mapping. Odd OT rounds were right by coincidence, because team 1 starts as
+Allies; even rounds were inverted.
+
+The blast radius was narrow but real. Anyone who typed `.ready` was already in
+the roster via the correctly-keyed write in `cmd_ready`, and
+`add_to_match_roster` refuses a SteamID already present in either roster, so
+returning players were a no-op. What was left was a player **new** to the roster
+on an even OT round — a substitute, or someone who connected after round 1's
+snapshot. They were filed on the wrong team, and that propagated to the Discord
+rosters and to anti-cheat attribution.
+
+The snapshot now takes the side from `team1_current_side()`, the same helper the
+ready counts, half-captain tracking and `cmd_ready` roster write already use.
+It is passed in as a parameter because this include is pulled in before the
+helper is defined.
+
+The side filter moved with it, and that part is not cosmetic:
+`get_players(…, "ch")` includes spectators, whose side is 0 or 3. The guard now
+tests `side` directly, because a bare `(side == team1Side) ? 1 : 2` would file
+every spectator on team 2.
+
+That filter also fixes a regulation-play bug the old code had. In 1st half and OT
+the old `teamId = side` left spectators as 0 or 3 and the guard rejected them —
+but in 2nd half the swap `(side == 1) ? 2 : 1` mapped **both** side 0 and side 3
+to **1**, so every spectator and unassigned player present at 2nd-half go-live
+was silently added to the roster as team 1.
+
+#### A fresh `.ktpOT` produced no Discord output at all
+
+The go-live dispatch tested `g_inOvertime` first and only reached
+`send_match_embed_create()` through `g_currentHalf == 1`. A match started
+directly with `.ktpOT` or `.draftOT` is in overtime from its first go-live, so it
+only ever called `send_match_embed_update()` — which returns immediately on an
+empty `g_discordMatchMsgId`, logging `DISCORD_EDIT_SKIP reason=no_msg_id`. No
+embed was ever created, so every later update for that match hit the same guard:
+the match reported nothing, start to finish. `save_first_half_roster()` never ran
+either, since the create path is its only caller.
+
+The dispatch now keys on whether an embed exists rather than on the period, and
+`send_match_embed_create()` takes the status string so OT round 1 does not
+announce itself as "1st Half".
+
+It also takes the side team 1 currently occupies. Create used to run only at 1st
+half, where team 1 is Allies, so it could build its two roster fields from sides
+1 and 2 and label them with the team names. Now that it can run at a 2nd half or
+an even OT round — whenever an earlier create failed to capture a message id —
+that assumption would print each team's players under the other team's name.
+
+#### A fresh match could edit the previous match's embed
+
+Keying on the message id exposes an existing hole. `g_discordMatchMsgId` is
+cleared in `end_match_cleanup()`, so a match abandoned without it leaves
+`LOCALINFO_DISCORD_MSG` populated, and `restore_match_context_from_localinfo()`
+repopulates the global on the next map load. Under the old period-keyed dispatch
+that was harmless at 1st-half go-live, which always created; under an id-keyed
+one it would edit the dead match's embed instead.
+
+Both fresh-match entry points now clear the embed identity, alongside the roster
+and score resets they already did for the same reason: the 1st-half seed block
+and the explicit-OT init block. The clear lives in one stock,
+`clear_discord_match_identity()`, which `end_match_cleanup()` also calls in place
+of the two hand-rolled global assignments it used to carry.
+
+#### The embed-create callback could stamp a message id onto a different match
+
+`discord_embed_callback` wrote `g_discordMatchMsgId` and its localinfo key with
+no check that the match it was created for is still the current one. A create
+issued at go-live whose response landed after a `.cancel`, `.forcereset` or
+abandoned half would stamp the dead match's id onto whatever came next, and
+`end_match_cleanup`'s clear cannot help because it already ran. The request now
+stamps the match id and the callback drops the write on a mismatch, logging
+`DISCORD_MSG_ID_DISCARDED reason=match_changed`. Pre-existing, but the fresh-OT
+path above adds a second way to reach it.
+
+---
+
+## [0.10.165] - 2026-08-15
+
+P3 cleanup cut. No new behaviour; every item removes a way the plugin could act
+on state that no longer describes the server it is running on.
+
+### Fixed
+
+#### Admin confirm latches could execute on the next map without a confirmation
+
+`.forcereset` and `.restarthalf` both take a second command inside a 10-second
+window. The window was `(now - armedAt) < 10.0` with no lower bound, and neither
+latch was cleared in `plugin_init()`. Gametime restarts at ~1.0 on every map
+(`SV_SpawnServer` sets `g_psv.time = 1.0`), so a latch armed late on map A left
+`now - armedAt` deeply negative on map B — which passes `< 10.0`. One `.forcereset`
+typed after the map change would then wipe match state with the confirmation step
+skipped entirely. Both latches now carry `now >= armedAt` and are cleared in
+`plugin_init()`, matching the guards `.setstate` already had.
+
+#### `.tech` could freeze the server inside the changelevel window
+
+A `.tech` typed a few seconds before timelimit expiry ran its pre-pause countdown
+straight into the map change and called `execute_pause()` there. `execute_pause()`
+now refuses during intermission, and the pre-pause countdown aborts with a chat
+line instead of pausing. The refusal lives in `execute_pause()` because the auto-DC
+countdown reaches it by the same route.
+
+`g_isPaused` is also cleared in `plugin_init()` now. The engine unpauses on every
+map load (`SV_SpawnServer`), but the Pawn flag is a plugin global and outlived the
+map change, so it could latch `true` into the next map and make `.tech` refuse
+"already paused" on a server that was not. The per-pause session fields
+`cmd_tech_pause` arms *before* its countdown — `g_isTechPause`, `g_pauseOwnerTeam`,
+`g_pauseStartTime`, `g_techPauseStartTime`, `g_techPauseFrozenTime` — are cleared
+with it, since an aborted countdown leaves them set with no pause behind them.
+`g_techBudget` is deliberately not in that list: it is match state, restored from
+localinfo on the continuation path.
+
+The auto-DC countdown had to be taught the same thing rather than left to discover
+it at `execute_pause()`. Its grace window is 30 seconds long and timelimit can
+expire inside it, so the arming site's intermission check is not enough: on expiry
+the tick logged `AUTO_TECH_PAUSE`, armed the tech-pause fields and posted the
+Discord embed, then called an `execute_pause()` that now refuses — a live
+man-advantage window carrying a paused record, with the disconnect state left armed
+and no retry. Both countdowns now abort during intermission through `clear_pause_session_state()`
+rather than dropping their own few fields — `cmd_tech_pause` arms the tech-pause
+flags and the budget clock *before* its pre-pause countdown, so an inline abort
+would leave a tech pause armed with nothing behind it. That stock deliberately does
+not touch `g_techBudget` or `g_pauseCountTeam`, so nothing is charged or refunded.
+
+#### The owner-timeout auto-unpause request is removed
+
+`setup_auto_unpause_request()` armed `set_task` for 300s at the start of every tech
+pause — and tasks do not run while the server is paused, so it never fired once.
+Its HUD ticker decremented a counter no HUD read. The behaviour it advertised has
+always come from budget expiry instead. Removed rather than ported into
+`OnPausedHUDUpdate`: reviving it would auto-request an unpause after 5 minutes in
+LAN mode, where expiry is deliberately disabled. `ktp_unpause_autorequest_secs` is
+gone with it.
+
+#### Match-context teardown owns the roster and captain keys
+
+`clear_localinfo_match_context()` left `_ktp_caps` and the chunked
+`_ktp_r1_N`/`_ktp_r2_N` roster keys behind; only `.cancel` and `.forcereset` cleared
+them, each with its own two-line copy. Folded into the one stock, so the map-load
+teardown exits clear them too. Inert today — every halftime save rewrites the whole
+roster key range including the empty slots — but a partial save would have left a
+dead match's players readable.
+
+#### `clear_pause_session_state()` owns `g_pauseStartTime`
+
+It was zeroed at one call site only. Nothing misbehaved — the readers are reached
+only while the engine is genuinely paused, most via a `g_isPaused` test and
+`show_pending_hud_during_pause()` by being callable only from the
+`OnPausedHUDUpdate` ReAPI hook — but there is now one owner instead of two.
+
+#### The map-load restore's empty and unknown-mode exits reset in-memory state
+
+Both returned without touching the Pawn globals, so a match that lost its localinfo
+context left `g_matchLive` / `g_secondHalfPending` / `g_matchMap` / the half scores
+set for the next go-live to read. Same defect class as the `h2_pending_abandoned`
+exit fixed in 0.10.162, reached through a different door; both exits now route
+through `reset_match_state_after_finalize()`.
+
+#### `.restarthalf`'s overtime refusal is reachable again
+
+Since OT rounds carry `g_currentHalf = OT_HALF_BASE + round`, the generic
+"2nd half only" check answered first and the OT-specific message never showed. The
+OT check now runs first.
+
+### Verified, not changed
+
+**MH-03 (weapon-timeline flush task duplicates on every map change) does not
+reproduce.** In extension mode `KTPAMX_ReloadPlugins()` calls `g_tasksMngr.clear()`
+before it fires `FF_PluginInit` (`KTPAMXX/amxmodx/meta_api.cpp`, clear then the
+forward), so no task survives a map change and the re-arm in `plugin_init()` is what
+keeps the flush alive rather than what duplicates it. The finding assumed
+Metamod-mode semantics. The idle-hint task in `plugin_init()` is unpaired for the
+same reason and is equally correct.
+
+---
+
+## [0.10.164] - 2026-08-15
+
+### Fixed
+
+#### An OT round is no longer a first half
+
+`g_currentHalf` carried three meanings in two values: `1` meant "regulation
+first half" *and* "any OT round". Every site that needed to tell them apart had
+to remember `g_inOvertime` as well, and the ones that forgot wrote
+regulation-shaped state while an OT round was live. The remaining sites share
+one cause, so they are fixed by removing the overload rather than by adding a
+guard to each — grep `g_currentHalf ==` to see that no bare `== 1` can now mean
+an OT round.
+
+**OT round N is now `OT_HALF_BASE + N`** — the encoding `ktp_match_start`
+already publishes to KTPHLTVRecorder and the tier-2 witness contract already
+documents. Both writers move:
+
+- the OT continuation branch, which set `1` "for OT round detection in
+  `handle_map_change`" — a function deleted two cuts ago;
+- the fresh-match branch, which a `.ktpOT` / `.draftOT` reaches with
+  `g_inOvertime` already set (EXPLICIT_OT_INIT clears `g_secondHalfPending`
+  first), and which labelled OT round 1 "1st half".
+
+What that fixes at the reader sites:
+
+| site | was | now |
+|---|---|---|
+| `msg_TeamScore` | every OT flag cap overwrote `_ktp_h1` with the OT scoreboard | regulation halves only |
+| periodic score save | same, every 120s | same |
+| proactive context save | ran the 2nd-half save during OT | runs the OT save |
+
+`_ktp_h1` is the regulation half-1 record: `finalize_abandoned_match` reports it
+in the "MATCH ENDED (2nd half)" embed and the 2nd-half restore seeds the
+scoreboard from it. Nothing read it for OT — an abandoned OT reports `_ktp_reg`
+— so OT deliberately persists no running score of its own.
+
+The map-config tech-budget reseed *depended* on the overload to reach OT round
+1, so it now branches on `g_inOvertime` explicitly. Behaviour unchanged: fresh
+budgets reseed, restored ones never refill.
+
+#### An OT round abandoned mid-round restored as a 2nd half
+
+At every OT go-live the proactive save ran
+`save_match_context_for_second_half()`, stamping `_ktp_mode = "h2"` over the
+round's own `"otN"`. The next map load then read "h2": wrong finalize branch,
+"MATCH ENDED (2nd half)" instead of "MATCH ENDED (OTn)", and regulation totals
+reported as half-1 scores. A fresh `.ktpOT` had no OT context persisted at all
+until its first round ended — so an abandoned round 1 was unrecoverable as OT.
+
+OT go-live now writes the OT shape. `save_ot_state_for_next_round()` is
+`save_ot_state_to_localinfo()`, called from go-live as well as the round
+handover; both persist the context for the round *about to be played*, so the
+content is the same either way.
+
+### Changed
+
+- `save_ot_localinfo_shared()` folded into `save_ot_state_to_localinfo()`. With
+  one caller the split can only reintroduce the half-updated OT save that lost
+  the Discord message/channel IDs on every round past the first in 0.10.143.
+- `save_ot_state_for_first_round()` **deleted** (dead since it was written). It
+  hardcoded `"ot1"` and wrote regulation half-1 scores; the tied-regulation-to-OT
+  path it was built for was replaced by explicit `.ktpOT` / `.draftOT`, which a
+  tie now points at rather than triggering.
+- `ktp_match_start`'s `half` argument reads `g_currentHalf` directly instead of
+  re-deriving `100 + g_otRound`. Same values on the wire.
+- `.forcereset` reports the period through one OT-aware formatter, so an OT
+  round shows as `ot2` rather than the raw code. The log token keeps its
+  `live_` prefix and stays greppable.
+- **A tech pause spent in OT now survives a crash.** `save_state_to_localinfo()`
+  wrote `_ktp_state`, but the OT restore takes its budgets from `_ktp_otst` and
+  ignores `_ktp_state` entirely — so an OT deduction was persisted to a key
+  nothing read, and a crash handed the team back time it had already spent. The
+  comment at the deduct site had claimed this was covered since 0.10.118. Both
+  deduct paths call the one function, so the branch lives there rather than at
+  each call site; it is cheap only because this cut created a single OT save.
+- `end_match_cleanup()` now clears the in-memory Discord message/channel IDs
+  alongside their localinfo keys. They are Pawn globals, so they outlived the
+  map change: a later match edited the finished match's embed, and the OT save
+  would have persisted that dead id under the new match's context.
+
+### Known limitations
+
+Found while fixing the above, left deliberately — none is a regression, and each
+wants its own verification:
+
+- A fresh `.ktpOT` / `.draftOT` never runs `send_match_embed_create()`, so
+  round 1 has no embed to edit. The abandoned-OT teardown, forward and log line
+  now all fire correctly for it; only the Discord embed cannot.
+- `capture_roster_snapshot()` keys on `g_currentHalf == 2` rather than
+  `team1_current_side()`, so it inverts team identity on OT rounds where team 1
+  starts as Axis. Same defect class, a `== 2` site rather than a `== 1` one.
+- `.restarthalf`'s OT-specific refusal is unreachable — the `!= 2` half check
+  short-circuits first, so a live OT round gets the generic "2nd half only"
+  message. Cosmetic; the command is refused either way.
+
+---
+
+## [0.10.163] - 2026-08-14
+
+### Fixed
+
+#### The weapon-switch ring was sized from an estimate, not from the traffic
+
+The 64-entry switch ring came from a sizing comment that guessed switches ran
+"30-60 in 30s". Fleet telemetry from the plugin's own `AC_WEAPON_TIMELINE_SEND`
+counters does not agree with that guess: the ring had been running at its cap
+rather than absorbing the interval, so arriving switches were discarded. Sizes
+below are taken from the measured distribution instead.
+
+This is not uniform thinning. A weapon switch is a *state transition*, so the
+consumer resolves the equipped weapon to the most recent switch it can see; every
+lost switch leaves that answer stale until the next retained one. The loss
+corrupts weapon **attribution**, not accuracy — no accuracy figure is computed
+from this stream.
+
+**Sizes, from the measured distribution rather than from an estimate:**
+
+| ring | was | now | basis |
+|---|---|---|---|
+| switches | 64 | **512** | comfortably above the measured worst case |
+| hits | 128 | **48** | well above the measured peak — and that peak is a *true* max, since the hit ring never dropped |
+| fires | 384 | 384 | unchanged — the fire ring never dropped either |
+
+Hits are the donor for the switch growth, and could only become the donor after
+the decoupling below. Data segment 790,764 → 1,027,004 bytes.
+
+#### `FIRE_BUFFER_SIZE` no longer derives from the hit buffer
+
+It was `WEAPON_HIT_BUFFER_SIZE * 3`, which made the **shot denominator** a side
+effect of hit-buffer tuning: harvesting memory from the over-provisioned hit
+buffer would have silently rescaled the fire ring and `FIRE_JSON_BUF_SIZE` with
+it, inflating accuracy on the consumer side with nothing in the diff to show for
+it. Now an independent constant at the same value, so the change is
+behaviour-neutral and exists only to make the resize above safe.
+
+#### Overflow now discards the oldest switch, not the newest
+
+The ring kept the oldest 64 and threw away each arriving event — the worst
+available policy for attribution, because the resulting gap propagates *forward*:
+the consumer stays on a stale weapon for the rest of the interval and into the
+next one. Dropping the oldest instead confines the loss to events already behind
+the gap and preserves the most recent transitions, which are the ones that decide
+what is equipped now.
+
+Implemented as a true ring (head index + count), so the overflow path stays O(1)
+inside a per-event game forward. All three buffer-reset sites now route through
+one `timeline_buffers_drain()` stock; resetting the count without the head would
+have read the next interval from a stale offset.
+
+#### Switch loss is now visible outside the game-server log
+
+`dropped_sw` existed only in the `AC_WEAPON_TIMELINE_SEND` line, so a stored
+interval that lost switches to overflow was indistinguishable downstream from one
+where nobody switched. The batch now carries `droppedSwitches`,
+`truncatedSwitches`, `droppedHits` and `truncatedHits`, matching what the
+weapon-fire batch already reports. Unknown members are ignored by the ingest, so
+this ships safely ahead of the column that stores it.
+
+### Changed
+
+#### The timeline payload buffer is derived, not a literal
+
+Ring size and payload size are one decision — a ring the JSON cannot carry merely
+converts `dropped_*` into `trunc_*`. `TL_JSON_BUF_SIZE` and the headroom reserve
+are now computed from the ring sizes and per-row widths (`TL_*` constants),
+replacing a 14336 literal and a hand-picked 256-byte reserve. Row widths use the
+storage bounds the code enforces rather than values seen in practice, and were
+checked against the emitted format strings.
+
+The reserve mattered more than it looks: the guard tests `pos < headroom` *before*
+writing a row, so the buffer must absorb a whole row after that test **and** still
+close the JSON. Widening the tail against an unchanged reserve would have cut the
+closing brace mid-token — which the ingest rejects for every player in the batch,
+while the log still reports nothing shed. Same trap already documented for
+`AIM_ROW_MAX` and `FIRE_TAIL_BYTES`.
+
+A worst-case batch is a full ring of each stream, which stays inside the API's
+5000-entry cap with room to spare.
+
+---
+
+## [0.10.162] - 2026-08-14
+
+### Fixed
+
+#### The map-load restore exits now share one post-finalize reset
+
+`finalize_abandoned_match`, `finalize_completed_second_half` and the
+`h2_pending_abandoned` branch each close a match **without** running
+`end_match_cleanup`, and each carried its own partial reset. They now route through
+one stock, `reset_match_state_after_finalize()`.
+
+Two leaks came out of that:
+
+- `ktp_match_competitive` is an **engine** cvar, so it survives a changelevel.
+  `finalize_completed_second_half` was the exit that did not clear the in-memory
+  state to go with it, so a completed match could leave the plugin holding half
+  state that the next go-live on the next map reads as a continuation.
+- The `h2_pending_abandoned` reset cleared `g_firstHalfScore[0]` and `[1]`. The
+  array is indexed **[1] = team 1, [2] = team 2** — index 0 is unused — so team 2's
+  first-half score survived a reset that was meant to clear it. Latent rather than
+  field-visible: every reader of `g_firstHalfScore[2]` is preceded by a write (the
+  h2 restore re-parses it from localinfo, and every fresh go-live passes through
+  `reset_match_scores()`). Fixed because the next reader added need not be.
+
+#### A continuation half with no match id is refused instead of played
+
+`abandoned_pending` clears `g_matchId` but the half state is plugin-global, and
+extension mode never reloads plugins across a changelevel. Returning to the match
+map re-entered the 2nd-half go-live with an empty id, and every log line for that
+half carried `match_id=` empty. `hlstats.pl`'s `getProperties` reads straight past an
+empty quoted field into the next one, so the phantom id `") (map "dod_harrington`
+spread across 13 tables / 721 rows from a single Philly LAN half.
+
+The shared reset above closes the state half. The go-live now also refuses the
+continuation outright when `g_matchId` is empty (`CONTINUATION_REFUSED`), announces
+it, clears the dead match's localinfo score keys, and starts a fresh match — the half
+still gets played, under an id that exists. The score keys matter because the
+deferred Phase-2 save rewrites match *identity* but not scores, so without the clear
+an abandon of the fresh match would report the dead one's half-1 score under the new
+id.
+
+#### Discord embed descriptions rendered a literal `\n`
+
+Pawn's control character is `^`, so the four multi-line admin embed descriptions
+carried a backslash and an `n`, which the JSON escaper then escaped as `\\n` and
+Discord rendered verbatim. They are the only `\n` sequences in the plugin; every
+other multi-line string already used `^n`.
+
+#### `.forcereset` and the cancellation notices go to the ops Discord channel
+
+`execute_force_reset` sets `g_matchType = MATCH_TYPE_COMPETITIVE` while clearing
+state and only *then* sends its embed, so channel routing by match type put every
+force reset in the `.ktp` match channel. Moving the send earlier is not the fix — it
+would route a 12man or draft force reset into *that* match's channel.
+
+New `send_discord_admin_embed()` forces `discord_channel_id_default`, which the
+config loader already parses and which falls back to the competitive channel when
+unset. Applied to **Server Force Reset**, **Match Cancelled**, **Match Setup
+Cancelled** and **2nd Half Restarted**. `Match State Set` still routes by match type
+— `.setstate` happens inside a live match.
+
+Operators who want these separated must set `discord_channel_id_default` in each
+server's `discord.ini`; without it the behaviour is unchanged.
+
+#### Dead `<:ktp:…>` emoji replaced
+
+Four admin embeds carried an emoji ID that no longer resolves. All four now use
+`<:KTP:1002382703020212245>`.
+
+### Changed
+
+#### `save_ot_state_for_first_round` / `_for_next_round` share their common half
+
+The two saves were ~80% identical, and the copy that drifted is what lost the Discord
+message and channel IDs on every OT round past the first (0.10.143) — the embed could
+not be edited for the rest of the OT. Every key both saves have in common now lives
+in `save_ot_localinfo_shared()`, so a key added there reaches every OT round; each
+caller keeps only its own specifics (round mode, the OT-scores string vs. the
+1st-half scores). `MATCH_TYPE` was missing from the first-round save — the restore
+reads it — and is now covered by the shared stock.
+
+#### `say` and `say_team` share one handler
+
+`cmd_say_team_hook` was a ~73-line verbatim copy of `cmd_say_hook` differing only in
+the pause-relay `teamOnly` flag. That copy is what dropped lowercase `.ktpot` on CHI2
+(2026-04-26): the prefix check was added to one hook and not the other, so the
+`TIE_DETECTED` recovery path was unreachable from team chat. Both publics now call
+`handle_say_command(id, bool:teamOnly)`.
+
+---
+
+## [0.10.161] - 2026-08-13
+
+### Changed
+
+#### Overtime half length is now `ktp_ot_timelimit`, default 10 minutes (was a hardcoded 5)
+
+Ruleset §1.10 moves OT halves from 5 to 10 minutes (S10 ballot item 3). The old value
+appeared eight times — three executable, five in comments — and the non-clock copies
+are the ones that would have rotted silently:
+
+| Site | Was | Now |
+|---|---|---|
+| `mp_timelimit` in `task_apply_match_config_and_start` | `5` | `ktp_ot_timelimit_mins()` |
+| `log_ktp("event=OT_TIMELIMIT duration=…")` | hardcoded `5` | the value actually applied |
+| `announce_all("5-minute overtime round …")` | hardcoded `5` | the value actually applied |
+| 5 comments reading "5-min rounds" | `5` | named the cvar, per half |
+
+Had only the `mp_timelimit` literal been changed, the log would have reported
+`duration=5` for every OT half while the clock ran 10, and the announce would have told
+both teams "5-minute" mid-match, on screen, while the server ran 10. The five comments
+are the copies a grep for the *new* symbol never finds.
+
+**Why a cvar and not a new literal.** Changing OT length is otherwise a version bump,
+a review, a 24-instance wave and a nightly restart to activate. As a cvar it is a
+`dodserver.cfg` line, which matters here because the balloted value was ambiguous
+enough to need operator disambiguation — the next such change should not cost a wave.
+
+**Why it is not cached in `ktp_sync_config_from_cvars()`.** `ktp_tech_budget_seconds`
+needs its re-seed guard because it seeds `g_techBudget[]`, a consumable copy made
+*before* the map config runs — so a map config changing the cvar leaves the seed stale,
+and refilling it mid-match is itself a bug. OT length has neither property: it is read
+and consumed straight into `mp_timelimit` at the point of use, holds no derived state,
+and is not consumable. Caching it would manufacture exactly the hazard the guard exists
+to undo. Bounds are `1..60`; out-of-range logs `OT_TIMELIMIT_INVALID` and falls back to
+10, because `mp_timelimit 0` means *no limit* — an OT half that never ends.
+
+**Set it at server-config level only.** The go-live announce reads the cvar ~0.05s
+before `exec_map_config()` and the clock reads it after, so a *map* config setting
+`ktp_ot_timelimit` would make the chat line and the real clock disagree. §1.10 is one
+league-wide value, so per-map OT length is a misconfiguration rather than a feature;
+resolving it once pre-config was rejected because that reintroduces the read-before-
+map-config shape the tech-budget re-seed guard exists to repair.
+
+Terminology tightened while here: one `g_otRound` is one OT **half**, not a two-half
+overtime. §1.10 is "two additional halves of N minutes each", so this clock is per half
+and OT total is 2 × `ktp_ot_timelimit`. The announce does not fire on an explicit
+`.ktpOT`/`.draftOT` round 1 (pre-existing: that path falls through to the first-half
+branch), so it covers OT rounds 2+ and the tie-continuation path, not every OT half.
+
+Tech-pause budget deliberately unchanged — one variable per ruleset change.
+
+---
+
+## [0.10.160] - 2026-08-11
+
+### Added
+
+#### Shot geometry attached to the weapon-fire batch (tier 2.3 consumer)
+
+Joins the DODX `dodx_get_shot_geom` sensor to the 2.2 shot transport added in
+0.10.159 directly below — both cuts ship together, neither pre-dates the other.
+Inside `dod_client_weapon_fire`, for hitscan firearm ids only, the handler reads
+the shot's captured geometry and — when the read returns 1 — widens that shot's row
+from 3 ints to 9: `[weaponId, tsMs, firedAtUtc, err_udeg, range_units,
+tgt_angvel_mdps, sight_gap_ms, hitgroup, trace_start_units]`. The API accepts
+exactly the two widths and asserts the order on ingest.
+
+Correctness properties, in priority order:
+
+- **A 0-return is NULL forever.** The per-shot `hasGeom` flag starts false, is
+  set only by this dispatch's own read, and is written into the ring
+  unconditionally — a recycled ring slot cannot leak a previous interval's
+  sample. Grenade/rocket/melee/custom ids are never queried at all.
+- **A sample violating its own contract is demoted, not repaired**: `[2]`/`[3]`
+  must be -1 together, the four magnitudes non-negative. Violations count in
+  `geom_rejected` (a module-bug tripwire), and the shot ships 3-wide.
+- **The read precedes the capacity checks** — it is destructive and belongs to
+  this dispatch; consuming it for a shot that is then dropped loses data
+  (counted) rather than leaving a stash a later dispatch could mispair with.
+- **Byte budget re-derived, not hand-counted**: per-field digit widths are named
+  constants (`FIRE_D_*`), summed into `FIRE_GEOM_EXTRA_BYTES`; the buffer sizes
+  on the all-9-wide worst case and the per-row headroom guard uses the same
+  constants plus the per-roster-entry geometry count, so guard and buffer cannot
+  drift apart.
+
+---
+
+## [0.10.159] - 2026-08-11
+
+### Added
+
+#### Weapon-fire batch — the miss denominator (tier 2.2 transport)
+
+Buffers every `dod_client_weapon_fire` dispatch and POSTs it to
+`/api/match/weapon-fire-batch` on the weapon-timeline cadence. This is the
+denominator the hits stream never had: `client_damage` only ever sees shots that
+connected, so accuracy was not computable from it alone. Every actuation the
+forward reports is shipped, grenades and rockets included; the consumer filters
+by weapon id.
+
+**Transport only.** Same rule as the aim-geometry batch — this repo is public, so
+what the counts mean is decided in the private consumer. No threshold, no ratio.
+
+Correctness properties:
+
+- **Rows carry a roster index, never a slot.** A slot is not an identity, so the
+  authid is captured at fire time into a per-batch roster and the slot is never
+  read again. A mid-interval substitute gets a fresh roster entry and the previous
+  occupant's shots keep their own name. The cache is re-verified against the
+  authid on every shot rather than trusted, and is invalidated in
+  `client_putinserver` (before the bot/HLTV skip — the invalidation is about the
+  slot, not the player), in `on_client_left`, and at `plugin_init`.
+- **`plugin_init` unmaps the slot cache but deliberately does NOT reset the ring.**
+  Extension-mode globals persist across a map change, so a compile-time zero would
+  alias every slot to roster entry 0 — but shots buffered before a halftime
+  changelevel keep their captured identity and still owe the next flush.
+- **The loss counters ride IN the payload**, unlike the siblings' log-only
+  counters. An undercounted denominator against a fully-recorded hit stream
+  inflates accuracy — the accusing direction — so the API must be able to see that
+  an interval was lossy without reading game-server logs.
+- **No synthetic-id fallback.** A shot outside a match must not borrow or invent a
+  match id: a wrong denominator deflates that match's accuracy for real players.
+  Discard, and clear the counters.
+- **Truncation is fair and counted.** A rotating start cursor means a full payload
+  sheds a different player each interval rather than always the same one, and the
+  shed path counts what it dropped instead of breaking silently.
+- The ring is drained at match end before the id is cleared, so the tail of the
+  deciding round is not lost.
+
+**No module drain on this path.** Unlike the aim-geometry batch — which calls
+`dodx_reset_aim_stats` while building its payload, before the POST is issued — the
+shot ring lives entirely in the plugin. `fire_batch_reset()` runs after
+`curl_easy_perform`, and `CURLOPT_COPYPOSTFIELDS` copies the buffer immediately,
+so reusing it on the next flush cannot race an in-flight request. A failed or
+timed-out POST therefore loses exactly that one interval and cannot corrupt the
+next.
+
+## [Unreleased — partially shipped, see note]
+
+Repo hygiene only — no plugin code change, so this carried no version bump of its
+own. It is filed below released sections because it is not wholly unreleased: the
+build-script commits are ancestors of the 0.10.159/0.10.160 cut and therefore shipped
+inside it, while the `compile.bat` removal and its doc line live only on `main` and
+have never been in a fleet build. Reconcile when `main` and the shipped line merge.
 
 ### Added
 
