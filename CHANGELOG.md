@@ -298,17 +298,13 @@ wants its own verification:
 
 ### Fixed
 
-#### The weapon-switch ring lost half of everything it was given
+#### The weapon-switch ring was sized from an estimate, not from the traffic
 
-Measured across the fleet from the plugin's own `AC_WEAPON_TIMELINE_SEND`
-counters (24,627 flush lines): of 3,171,557 switches offered, **1,609,957 —
-50.8% — were never buffered.** The ring held 64 entries against an offering that
-averaged ~129 per 30s flush and peaked near 394, so it ran pinned at its cap:
-20,479 of 20,946 switch flushes (97.8%) reported exactly 64 sent, mean 63.36, and
-no flush ever exceeded 64. That had been true since at least 2026-07-16.
-
-The sizing comment claimed switches ran "30-60 in 30s". That estimate is where
-the 64 came from, and measurement puts it off by 2-6x.
+The 64-entry switch ring came from a sizing comment that guessed switches ran
+"30-60 in 30s". Fleet telemetry from the plugin's own `AC_WEAPON_TIMELINE_SEND`
+counters does not agree with that guess: the ring had been running at its cap
+rather than absorbing the interval, so arriving switches were discarded. Sizes
+below are taken from the measured distribution instead.
 
 This is not uniform thinning. A weapon switch is a *state transition*, so the
 consumer resolves the equipped weapon to the most recent switch it can see; every
@@ -320,9 +316,9 @@ from this stream.
 
 | ring | was | now | basis |
 |---|---|---|---|
-| switches | 64 | **512** | ~1.3x the observed worst case (~394) |
-| hits | 128 | **48** | >2x the observed peak (22), a true max over 24,627 flushes with **zero** drops ever recorded |
-| fires | 384 | 384 | unchanged — 0 of 65,410 dropped, peak 155 |
+| switches | 64 | **512** | comfortably above the measured worst case |
+| hits | 128 | **48** | well above the measured peak — and that peak is a *true* max, since the hit ring never dropped |
+| fires | 384 | 384 | unchanged — the fire ring never dropped either |
 
 Hits are the donor for the switch growth, and could only become the donor after
 the decoupling below. Data segment 790,764 → 1,027,004 bytes.
@@ -353,7 +349,7 @@ have read the next interval from a stale offset.
 #### Switch loss is now visible outside the game-server log
 
 `dropped_sw` existed only in the `AC_WEAPON_TIMELINE_SEND` line, so a stored
-interval that lost half its switches was indistinguishable downstream from one
+interval that lost switches to overflow was indistinguishable downstream from one
 where nobody switched. The batch now carries `droppedSwitches`,
 `truncatedSwitches`, `droppedHits` and `truncatedHits`, matching what the
 weapon-fire batch already reports. Unknown members are ignored by the ingest, so
