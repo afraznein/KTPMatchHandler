@@ -9,6 +9,17 @@
 
 // ================= Discord Notifications =================
 #if defined HAS_CURL
+// The ops channel for non-match events. Unlike the per-type channels this one
+// DOES fall back to the competitive channel, so an operator who never set
+// discord_channel_id_default still gets the notice somewhere.
+stock get_discord_default_channel_id(channelId[], maxlen) {
+    if (g_discordChannelIdDefault[0]) {
+        copy(channelId, maxlen, g_discordChannelIdDefault);
+    } else {
+        copy(channelId, maxlen, g_discordChannelId);
+    }
+}
+
 stock get_discord_channel_id(channelId[], maxlen) {
     // Get the appropriate Discord channel ID based on match type
     // 12man/draft/scrim do NOT fall back to default - they require explicit channel config
@@ -39,12 +50,7 @@ stock get_discord_channel_id(channelId[], maxlen) {
         }
         default: {
             // Non-match context (forcereset, cancellations, etc.)
-            // Use dedicated default channel, fall back to competitive if not configured
-            if (g_discordChannelIdDefault[0]) {
-                copy(channelId, maxlen, g_discordChannelIdDefault);
-            } else {
-                copy(channelId, maxlen, g_discordChannelId);
-            }
+            get_discord_default_channel_id(channelId, maxlen);
         }
     }
 
@@ -124,12 +130,11 @@ new g_simpleEmbedPayload[1024];
 new g_simpleEmbedTitle[128];
 new g_simpleEmbedDesc[512];
 
-// Send a simple Discord embed (for one-off events like cancel/reset)
-stock send_discord_simple_embed(const title[], const description[], color) {
+// Send a simple Discord embed (for one-off events like cancel/reset).
+stock send_discord_simple_embed_to(const channelId[], const title[], const description[], color) {
 #if defined HAS_CURL
     if (g_disableDiscord) return;
-    get_discord_channel_id(g_discordChannelIdBuf, charsmax(g_discordChannelIdBuf));
-    if (!g_discordRelayUrl[0] || !g_discordChannelIdBuf[0] || !g_discordAuthSecret[0]) return;
+    if (!g_discordRelayUrl[0] || !channelId[0] || !g_discordAuthSecret[0]) return;
 
     // Escape title and description
     escape_for_json(title, g_simpleEmbedTitle, charsmax(g_simpleEmbedTitle));
@@ -143,7 +148,7 @@ stock send_discord_simple_embed(const title[], const description[], color) {
     // {"channelId":"...","embeds":[{"title":"...","description":"...","color":...,"footer":{"text":"server - map"}}]}
     formatex(g_simpleEmbedPayload, charsmax(g_simpleEmbedPayload),
         "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"description^":^"%s^",^"color^":%d,^"footer^":{^"text^":^"%s - %s^"}}]}",
-        g_discordChannelIdBuf, g_simpleEmbedTitle, g_simpleEmbedDesc, color, hostnameEscaped, g_currentMap);
+        channelId, g_simpleEmbedTitle, g_simpleEmbedDesc, color, hostnameEscaped, g_currentMap);
 
     // Send via curl
     new CURL:curl = curl_easy_init();
@@ -157,6 +162,28 @@ stock send_discord_simple_embed(const title[], const description[], color) {
         log_ktp("event=DISCORD_EMBED_SIMPLE_SEND title='%s'", title);
         curl_easy_perform(curl, "discord_callback");
     }
+#endif
+}
+
+// Route by the current match type.
+stock send_discord_simple_embed(const title[], const description[], color) {
+#if defined HAS_CURL
+    get_discord_channel_id(g_discordChannelIdBuf, charsmax(g_discordChannelIdBuf));
+    send_discord_simple_embed_to(g_discordChannelIdBuf, title, description, color);
+#endif
+}
+
+// Admin/ops notices (.forcereset, cancellations, 2nd-half restart) go to the ops
+// channel by force, never by match type: .forcereset resets g_matchType to
+// COMPETITIVE while clearing state and only then sends, so type-based routing put
+// every one of them in the .ktp match channel. Resolving the channel earlier is
+// not the fix either — it would route a 12man or draft forcereset into that
+// match's channel.
+stock send_discord_admin_embed(const title[], const description[], color) {
+#if defined HAS_CURL
+    new channelId[64];
+    get_discord_default_channel_id(channelId, charsmax(channelId));
+    send_discord_simple_embed_to(channelId, title, description, color);
 #endif
 }
 
@@ -360,9 +387,22 @@ stock clear_match_roster() {
     g_matchRosterTeam2Count = 0;
 }
 
+// Every fresh-match entry point must call this. The go-live dispatch keys on
+// g_discordMatchMsgId, so an id surviving an abandoned match would make the new
+// match edit the dead one's embed instead of creating its own.
+stock clear_discord_match_identity() {
+    g_discordMatchMsgId[0] = EOS;
+    g_discordMatchChannelId[0] = EOS;
+    g_discordEmbedReqMatchId[0] = EOS;
+    set_localinfo(LOCALINFO_DISCORD_MSG, "");
+    set_localinfo(LOCALINFO_DISCORD_CHAN, "");
+}
+
 // Capture all current players to the persistent roster
-// Call this at match start to get initial roster
-stock capture_roster_snapshot() {
+// Call this at match start to get initial roster.
+// team1Side comes from team1_current_side() — this include is pulled in before
+// that helper is defined, so the caller resolves it.
+stock capture_roster_snapshot(team1Side) {
     new players[MAX_PLAYERS], pnum;
     get_match_participants(players, pnum);
 
@@ -373,18 +413,11 @@ stock capture_roster_snapshot() {
         get_user_authid(id, authid, charsmax(authid));
         new side = get_user_team(id); // 1=Allies, 2=Axis
 
-        // Convert current side to team identity
-        // In 1st half: Allies = Team 1, Axis = Team 2
-        // In 2nd half: Allies = Team 2, Axis = Team 1
-        new teamId;
-        if (g_currentHalf == 2) {
-            teamId = (side == 1) ? 2 : 1; // Swapped
-        } else {
-            teamId = side;
-        }
-
-        if (teamId == 1 || teamId == 2) {
-            add_to_match_roster(name, authid, teamId);
+        // A hardcoded 2nd-half swap reads even OT rounds backwards. Filter on
+        // side, not on the derived id: get_players() includes spectators
+        // (side 0/3), which the ternary alone would file as team 2.
+        if (side == 1 || side == 2) {
+            add_to_match_roster(name, authid, (side == team1Side) ? 1 : 2);
         }
     }
     log_ktp("event=ROSTER_SNAPSHOT team1=%d team2=%d", g_matchRosterTeam1Count, g_matchRosterTeam2Count);
@@ -619,7 +652,14 @@ public discord_embed_callback(CURL:curl, CURLcode:code) {
                 idEnd++;
             }
             new idLen = idEnd - idStart;
-            if (idLen > 0 && idLen < charsmax(g_discordMatchMsgId)) {
+            // The match must still be the one that asked. Both ids empty is a
+            // teardown, not a match — without that test equal("","") passes and
+            // the dead match's id lands on nothing.
+            new bool:sameMatch = g_matchId[0] && equal(g_discordEmbedReqMatchId, g_matchId);
+            if (idLen > 0 && idLen < charsmax(g_discordMatchMsgId) && !sameMatch) {
+                log_ktp("event=DISCORD_MSG_ID_DISCARDED reason=match_changed requested='%s' current='%s'",
+                    g_discordEmbedReqMatchId, g_matchId);
+            } else if (idLen > 0 && idLen < charsmax(g_discordMatchMsgId)) {
                 for (new i = 0; i < idLen; i++) {
                     g_discordMatchMsgId[i] = g_discordResponseBuf[idStart + i];
                 }
@@ -654,18 +694,23 @@ public discord_embed_callback(CURL:curl, CURLcode:code) {
     // Note: g_curlHeaders is persistent — never free here (overlapping async requests)
 }
 
-// Send match embed and capture message ID for later editing
-stock send_match_embed_create() {
+// Send match embed and capture message ID for later editing.
+// status and team1Side are parameters because create is no longer 1st-half-only:
+// a fresh .ktpOT creates at OT round 1, and a failed capture can leave it to run
+// at a half where team 1 is on Axis.
+stock send_match_embed_create(const status[], team1Side) {
     if (g_disableDiscord) return;
 
     // Get channel ID
     get_discord_channel_id(g_discordChannelIdBuf, charsmax(g_discordChannelIdBuf));
     if (!g_discordRelayUrl[0] || !g_discordChannelIdBuf[0] || !g_discordAuthSecret[0]) return;
 
-    // Build rosters
-    new alliesCount = 0, axisCount = 0;
-    build_roster_with_tags(g_rosterAllies, charsmax(g_rosterAllies), 1, alliesCount);
-    build_roster_with_tags(g_rosterAxis, charsmax(g_rosterAxis), 2, axisCount);
+    // Build rosters by TEAM IDENTITY, not by side — the fields are labelled
+    // g_team1Name/g_team2Name, and create can now run at a half where team 1 is
+    // on Axis, which would show each team under the other's name.
+    new team1Count = 0, team2Count = 0;
+    build_roster_with_tags(g_rosterAllies, charsmax(g_rosterAllies), team1Side, team1Count);
+    build_roster_with_tags(g_rosterAxis, charsmax(g_rosterAxis), (team1Side == 1) ? 2 : 1, team2Count);
 
     // Escape for JSON
     escape_for_json(g_rosterAllies[0] ? g_rosterAllies : "No players", g_rosterAlliesEscaped, charsmax(g_rosterAlliesEscaped));
@@ -680,13 +725,17 @@ stock send_match_embed_create() {
     new embedTitleEscaped[160];
     escape_for_json(embedTitle, embedTitleEscaped, charsmax(embedTitleEscaped));
 
+    new statusEscaped[128];
+    escape_for_json(status, statusEscaped, charsmax(statusEscaped));
+
     // Build embed JSON - initial version at match start
     formatex(g_rosterEmbedPayload, charsmax(g_rosterEmbedPayload),
-        "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":5763719,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Status^",^"value^":^"1st Half - Match Live^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Map: %s | Server: %s^"}}]}",
+        "{^"channelId^":^"%s^",^"embeds^":[{^"title^":^"%s^",^"color^":5763719,^"fields^":[{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"%s (%d)^",^"value^":^"%s^",^"inline^":true},{^"name^":^"Status^",^"value^":^"%s^",^"inline^":false}],^"footer^":{^"text^":^"Match: %s | Map: %s | Server: %s^"}}]}",
         g_discordChannelIdBuf,
         embedTitleEscaped,
-        g_team1Name, alliesCount, g_rosterAlliesEscaped,
-        g_team2Name, axisCount, g_rosterAxisEscaped,
+        g_team1Name, team1Count, g_rosterAlliesEscaped,
+        g_team2Name, team2Count, g_rosterAxisEscaped,
+        statusEscaped,
         g_matchId, g_matchMap, g_serverHostnameEscaped);
 
     // Send with response capture (C++ module auto-buffers when no WRITEFUNCTION set)
@@ -697,6 +746,11 @@ stock send_match_embed_create() {
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_curlHeaders);
         curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_rosterEmbedPayload);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5);
+
+        // Stamp the requesting match so a teardown between POST and response
+        // discards the response. One slot, so it identifies the LATEST create,
+        // not concurrent ones — creates do not overlap in practice.
+        copy(g_discordEmbedReqMatchId, charsmax(g_discordEmbedReqMatchId), g_matchId);
 
         log_ktp("event=DISCORD_MATCH_EMBED_CREATE");
         curl_easy_perform(curl, "discord_embed_callback");
