@@ -106,6 +106,14 @@ new g_cvarOtTimelimit;        // minutes per OT half (ktp_ot_timelimit); read li
 #if defined KTP_TEST_MODE
 new g_cvarTestSkipReadyCount; // test-mode: when 1, get_required_ready_count() returns 1 so
                               // a single fake client can drive match-start (ktp_test_skip_ready_count)
+new g_cvarTestMatchEnabled;
+new bool:g_testMatchActive = false;
+new g_testMatchTargetPerTeam = 6;
+new g_testMatchPolls = 0;
+new g_testMatchError[64];
+new g_taskTestMatchFillId = 55671;
+new g_taskTestMatchReadyId = 55672;
+new g_taskTestMatchLiveId = 55673;
 #endif
 
 // ---------- Discord Config (loaded from INI) ----------
@@ -1767,8 +1775,8 @@ public task_delayed_match_start_log() {
     if (g_matchStartLogFired) return;
     g_matchStartLogFired = true;
 
-    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")", g_delayedMatchId, g_delayedMap, g_delayedHalf);
-    log_ktp("event=DELAYED_MATCH_START_LOG matchid=%s map=%s half=%s", g_delayedMatchId, g_delayedMap, g_delayedHalf);
+    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^")", g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
+    log_ktp("event=DELAYED_MATCH_START_LOG matchid=%s map=%s half=%s type=%d", g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
 }
 
 // Delayed dodx_set_match_id after round restart
@@ -1869,7 +1877,7 @@ public task_roundlive_match_context() {
         // pdata) skew the SAVE validation gate for the whole match.
         // dodx_set_user_deaths re-baselines both sides atomically.
         new ids[32], num, fails;
-        get_players(ids, num, "ch");
+        get_match_participants(ids, num);
         for (new i = 0; i < num; i++) {
             // Returns 0 on missing edict/pdata — a failed write leaves that
             // player's counters stale (the SAVE gate later refuses, safe).
@@ -1880,10 +1888,10 @@ public task_roundlive_match_context() {
     #endif
 
     // Log KTP_MATCH_START for HLStatsX (fires on round-live instead of fixed timer)
-    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")",
-        g_delayedMatchId, g_delayedMap, g_delayedHalf);
-    log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s",
-        g_delayedMatchId, g_delayedMap, g_delayedHalf);
+    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^")",
+        g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
+    log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s type=%d",
+        g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
 }
 
 // Timeout fallback: if RoundState=1 never fires within 5s, fire context anyway
@@ -2475,6 +2483,14 @@ stock get_short_hostname_code(output[], maxlen) {
 // NOTE: Map is NOT included - HLTV appends it when recording
 // Called at first half start; same matchID persists for second half
 stock generate_match_id() {
+#if defined KTP_TEST_MODE
+    if (g_testMatchActive) {
+        formatex(g_matchId, charsmax(g_matchId), "%d-TEST", get_systime());
+        log_ktp("event=MATCH_ID_GENERATED match_id=%s type=testmatch", g_matchId);
+        return;
+    }
+#endif
+
     // Re-fetch hostname to avoid timing issues where plugin loads before dodserver.cfg
     // This ensures hostname is current even if it wasn't set during plugin_cfg()
     get_cvar_string("hostname", g_serverHostname, charsmax(g_serverHostname));
@@ -2789,6 +2805,12 @@ public ac_callback(CURL:curl, CURLcode:code) {
 // Idempotent on the API side (upsert on match_id + server_endpoint).
 // Safe to call multiple times per match — only updates the row, doesn't duplicate.
 stock send_ac_match_announce(const matchId[]) {
+#if defined KTP_TEST_MODE
+    if (g_testMatchActive) {
+        log_ktp("event=TESTMATCH_OUTBOUND_SUPPRESSED sink=ac_announce match_id=%s", matchId);
+        return;
+    }
+#endif
     if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !matchId[0] || !g_acServerEndpoint[0]) return;
 
     // Omit startedAt — API defaults to UtcNow when field is missing/default.
@@ -2817,6 +2839,14 @@ stock send_ac_match_announce(const matchId[]) {
 
 // Mark a match ended on the KTPAntiCheat API. Idempotent — only updates rows with ended_at IS NULL.
 stock send_ac_match_end(const matchId[]) {
+#if defined KTP_TEST_MODE
+    if (g_testMatchActive) {
+        g_swCount = 0;
+        g_hitCount = 0;
+        log_ktp("event=TESTMATCH_OUTBOUND_SUPPRESSED sink=ac_end match_id=%s", matchId);
+        return;
+    }
+#endif
     if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !matchId[0] || !g_acServerEndpoint[0]) return;
 
     // 0.5.0 — drain any pending weapon-timeline events BEFORE marking the
@@ -2859,6 +2889,13 @@ stock send_ac_match_end(const matchId[]) {
 // retries on transient API outage would risk infinite buffer growth, and
 // the 30d retention on the API side means brief gaps are acceptable.
 stock send_ac_weapon_timeline_batch() {
+#if defined KTP_TEST_MODE
+    if (g_testMatchActive) {
+        g_swCount = 0;
+        g_hitCount = 0;
+        return;
+    }
+#endif
     if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !g_acServerEndpoint[0]) return;
     if (g_swCount == 0 && g_hitCount == 0) return;
 
@@ -2985,6 +3022,9 @@ stock send_ac_weapon_timeline_batch() {
 // buffer is fixed-size and evicts by smallest residual, so a retry would not
 // recover anything and WOULD re-send windows the API already stored.
 stock send_ac_aim_geometry_batch() {
+#if defined KTP_TEST_MODE
+    if (g_testMatchActive) return;
+#endif
     if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !g_acServerEndpoint[0]) return;
 
     new matchId[64];
@@ -4992,6 +5032,14 @@ public plugin_init() {
     // Cvar registered here so get_required_ready_count() can read it via
     // get_pcvar_num().
     g_cvarTestSkipReadyCount = register_cvar("ktp_test_skip_ready_count", "0");
+    g_cvarTestMatchEnabled = register_cvar("ktp_testmatch_enabled", "0");
+
+    register_clcmd("say .testmatch",      "cmd_testmatch_chat", ADMIN_RCON);
+    register_clcmd("say_team .testmatch", "cmd_testmatch_chat", ADMIN_RCON);
+    register_concmd("amx_ktp_testmatch", "cmd_testmatch_rcon", ADMIN_RCON,
+        "[TEST-MODE] - fill a 6v6 bot server and drive real .ktp/.confirm/.ready flow");
+    register_concmd("amx_ktp_testmatch_status", "cmd_testmatch_status", ADMIN_RCON,
+        "[TEST-MODE] - report asynchronous .testmatch progress or failure");
 
     register_concmd("amx_ktp_test_setup_match",   "cmd_test_setup_match",   ADMIN_RCON,
         "[TEST-MODE] <matchType> [<map>] — set up PRESTART with synthetic captains; matchType 0..5");
@@ -5588,6 +5636,9 @@ stock end_match_cleanup() {
     // Reset match type and Discord flag for next match
     g_matchType = MATCH_TYPE_COMPETITIVE;
     g_disableDiscord = false;
+#if defined KTP_TEST_MODE
+    g_testMatchActive = false;
+#endif
     // CvarChecker keys enforcement off this cvar; without the reset it kept
     // enforcing competitive rules on pub play after every match (only the
     // .forcereset path cleared it).
@@ -6360,9 +6411,21 @@ stock format_current_half(out[], maxlen, const prefix[]) {
     return formatex(out, maxlen, "%sh%d", prefix, g_currentHalf);
 }
 
+// Production matches deliberately ignore bots. A TEST-MODE .testmatch uses the
+// same match state machine but treats its disposable-server bots as players.
+stock get_match_participants(players[32], &num) {
+#if defined KTP_TEST_MODE
+    if (g_testMatchActive) {
+        get_players(players, num, "h"); // connected humans + bots; exclude HLTV
+        return;
+    }
+#endif
+    get_players(players, num, "ch");   // production: connected humans only
+}
+
 stock get_ready_counts(&alliesPlayers, &axisPlayers, &alliesReady, &axisReady) {
     alliesPlayers = 0; axisPlayers = 0; alliesReady = 0; axisReady = 0;
-    new ids[32], num; get_players(ids, num, "ch");
+    new ids[32], num; get_match_participants(ids, num);
 
     // During 2nd half pending, use roster-based team identity to handle players
     // who haven't switched to correct game team yet after map change
@@ -6414,7 +6477,7 @@ stock build_unready_names(&alliesCount, &axisCount) {
     alliesCount = 0; axisCount = 0;
 
     new ids[32], num;
-    get_players(ids, num, "ch");
+    get_match_participants(ids, num);
     for (new i = 0; i < num; i++) {
         new player = ids[i];
         new tid = get_user_team_id(player);
@@ -7416,7 +7479,19 @@ stock handle_say_command(id, bool:teamOnly) {
 }
 
 // ===== Start / Pre-Start =====
+// Keep every entry point on one production state-machine implementation.  The
+// public command wrapper owns AMXX argument collection; test mode supplies the
+// same parsed command text directly because fake-client engclient_cmd("say")
+// does not traverse the registered chat handler in the Lane B topology.
 public cmd_match_start(id) {
+    new args[64];
+    read_args(args, charsmax(args));
+    remove_quotes(args);
+    trim(args);
+    return match_start_with_args(id, args);
+}
+
+stock match_start_with_args(id, const suppliedArgs[]) {
     // Block starting a new match if one is already in progress
     // Note: 2nd half and OT are allowed because g_matchLive=false between halves
     if (g_matchLive) {
@@ -7435,7 +7510,10 @@ public cmd_match_start(id) {
     // Ensure Discord is enabled for competitive matches
     // (scrim/12man/draft set g_matchType and g_disableDiscord before calling this)
     if (g_matchType == MATCH_TYPE_COMPETITIVE) {
-        g_disableDiscord = false;  // Enable Discord for competitive matches
+#if defined KTP_TEST_MODE
+        if (!g_testMatchActive)
+#endif
+            g_disableDiscord = false;  // Enable Discord for real competitive matches
     }
 
     // Season check - only applies to competitive matches (/start, /ktp)
@@ -7452,9 +7530,7 @@ public cmd_match_start(id) {
     // predicate in lockstep.
     if (is_official_match_type(g_matchType)) {
         new args[64], password[64];
-        read_args(args, charsmax(args));
-        remove_quotes(args);
-        trim(args);
+        copy(args, charsmax(args), suppliedArgs);
 
         // Parse out password - skip the command prefix (/ktp or .ktp)
         // read_args returns full text: "/ktp password"
@@ -8462,6 +8538,9 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     // Reset match type
     g_matchType = MATCH_TYPE_COMPETITIVE;
     g_disableDiscord = false;
+#if defined KTP_TEST_MODE
+    g_testMatchActive = false;
+#endif
     clear_competitive_match_flags("forcereset");
 
     // Clear team names
@@ -10043,6 +10122,158 @@ public cmd_ktpconfig(id) {
 // integration-test roadmap that depends on this surface.
 #if defined KTP_TEST_MODE
 
+stock testmatch_fail(const reason[]) {
+    remove_task(g_taskTestMatchFillId);
+    remove_task(g_taskTestMatchReadyId);
+    remove_task(g_taskTestMatchLiveId);
+    log_ktp("event=TESTMATCH_FAILED reason='%s'", reason);
+    console_print(0, "KTP_TESTMATCH: ERROR reason=%s", reason);
+    copy(g_testMatchError, charsmax(g_testMatchError), reason);
+    if (g_matchLive || g_matchPending || g_preStartPending || g_matchId[0])
+        execute_force_reset(0, "testmatch_guard", "TEST", "127.0.0.1");
+    g_testMatchActive = false;
+    g_disableDiscord = false;
+}
+
+stock begin_testmatch(id, targetPerTeam) {
+    if (get_pcvar_num(g_cvarTestMatchEnabled) != 1) {
+        console_print(id, "KTP_TESTMATCH: ERROR reason=disabled set_ktp_testmatch_enabled_1");
+        return PLUGIN_HANDLED;
+    }
+    if (get_cvar_num("sv_lan") != 1) {
+        console_print(id, "KTP_TESTMATCH: ERROR reason=sv_lan_required");
+        return PLUGIN_HANDLED;
+    }
+    if (g_matchLive || g_matchPending || g_preStartPending || g_testMatchActive) {
+        console_print(id, "KTP_TESTMATCH: ERROR reason=match_state_not_idle");
+        return PLUGIN_HANDLED;
+    }
+
+    new players[32], num;
+    get_players(players, num, "h");
+    for (new i = 0; i < num; i++) {
+        if (!is_user_bot(players[i])) {
+            console_print(id, "KTP_TESTMATCH: ERROR reason=human_client_present");
+            return PLUGIN_HANDLED;
+        }
+    }
+
+    // Lane B is deliberately the tournament-sized 6v6 shape.  Do not let an
+    // RCON argument silently turn the contained test server into a larger one.
+    targetPerTeam = 6;
+    g_testMatchTargetPerTeam = targetPerTeam;
+    g_testMatchPolls = 0;
+    g_testMatchError[0] = EOS;
+    g_testMatchActive = true;
+    g_disableDiscord = true;
+    g_matchType = MATCH_TYPE_COMPETITIVE;
+
+    new allies = 0, axis = 0;
+    for (new i = 0; i < num; i++) {
+        if (!is_user_bot(players[i])) continue;
+        new tid = get_user_team(players[i]);
+        if (tid == 1) allies++;
+        else if (tid == 2) axis++;
+    }
+    for (new i = allies; i < targetPerTeam; i++) server_cmd("addbot allies");
+    for (new i = axis; i < targetPerTeam; i++) server_cmd("addbot axis");
+    server_exec();
+
+    log_ktp("event=TESTMATCH_FILL_BEGIN target_per_team=%d existing_allies=%d existing_axis=%d", targetPerTeam, allies, axis);
+    console_print(id, "KTP_TESTMATCH: FILLING target_per_team=%d", targetPerTeam);
+    remove_task(g_taskTestMatchFillId);
+    set_task(0.5, "task_testmatch_fill", g_taskTestMatchFillId, _, _, "b");
+    return PLUGIN_HANDLED;
+}
+
+public cmd_testmatch_chat(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+    return begin_testmatch(id, 6);
+}
+
+public cmd_testmatch_rcon(id) {
+    if (id != 0 && !(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+    return begin_testmatch(id, 6);
+}
+
+public cmd_testmatch_status(id) {
+    if (id != 0 && !(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+    if (g_testMatchError[0])
+        console_print(id, "KTP_TESTMATCH: ERROR reason=%s", g_testMatchError);
+    else if (g_matchLive && g_testMatchActive)
+        console_print(id, "KTP_TESTMATCH: LIVE match_id=%s bots_per_team=%d", g_matchId, g_testMatchTargetPerTeam);
+    else if (g_testMatchActive)
+        console_print(id, "KTP_TESTMATCH: ACTIVE");
+    else
+        console_print(id, "KTP_TESTMATCH: IDLE");
+    return PLUGIN_HANDLED;
+}
+
+public task_testmatch_fill() {
+    if (!g_testMatchActive) return;
+    if (++g_testMatchPolls > 120) {
+        testmatch_fail("bot_fill_timeout");
+        return;
+    }
+
+    new players[32], num, allies = 0, axis = 0, captainAllies = 0, captainAxis = 0;
+    get_players(players, num, "h");
+    for (new i = 0; i < num; i++) {
+        new id = players[i];
+        if (!is_user_bot(id)) continue;
+        new tid = get_user_team(id);
+        if (tid == 1) { allies++; if (!captainAllies) captainAllies = id; }
+        else if (tid == 2) { axis++; if (!captainAxis) captainAxis = id; }
+    }
+    if (allies < g_testMatchTargetPerTeam || axis < g_testMatchTargetPerTeam) return;
+
+    remove_task(g_taskTestMatchFillId);
+    new startCommand[96];
+    formatex(startCommand, charsmax(startCommand), ".ktp %s", g_ktpMatchPassword);
+    match_start_with_args(captainAllies, startCommand);
+    g_disableDiscord = true;
+    if (!g_preStartPending) {
+        testmatch_fail("production_ktp_start_rejected");
+        return;
+    }
+    cmd_pre_confirm(captainAllies);
+    cmd_pre_confirm(captainAxis);
+    log_ktp("event=TESTMATCH_PRESTART_DRIVEN allies=%d axis=%d", allies, axis);
+    console_print(0, "KTP_TESTMATCH: PRESTART allies=%d axis=%d", allies, axis);
+    g_testMatchPolls = 0;
+    set_task(0.25, "task_testmatch_ready", g_taskTestMatchReadyId, _, _, "b");
+}
+
+public task_testmatch_ready() {
+    if (!g_testMatchActive) return;
+    if (!g_matchPending) {
+        if (++g_testMatchPolls > 80) testmatch_fail("pending_timeout");
+        return;
+    }
+    remove_task(g_taskTestMatchReadyId);
+
+    new players[32], num;
+    get_players(players, num, "h");
+    for (new i = 0; i < num; i++) {
+        new id = players[i];
+        if (is_user_bot(id) && (get_user_team(id) == 1 || get_user_team(id) == 2))
+            cmd_ready(id);
+    }
+    g_testMatchPolls = 0;
+    set_task(0.25, "task_testmatch_live", g_taskTestMatchLiveId, _, _, "b");
+}
+
+public task_testmatch_live() {
+    if (!g_testMatchActive) return;
+    if (!g_matchLive) {
+        if (++g_testMatchPolls > 80) testmatch_fail("live_timeout");
+        return;
+    }
+    remove_task(g_taskTestMatchLiveId);
+    log_ktp("event=TESTMATCH_LIVE match_id=%s bots_per_team=%d", g_matchId, g_testMatchTargetPerTeam);
+    console_print(0, "KTP_TESTMATCH: LIVE match_id=%s bots_per_team=%d", g_matchId, g_testMatchTargetPerTeam);
+}
+
 // Set up the match state machine to PRESTART with synthetic captains.
 //
 // Args: <matchType> [<map>]
@@ -10403,10 +10634,10 @@ public cmd_test_fire_match_start_log(id) {
         formatex(halfText, charsmax(halfText), "%d", g_currentHalf);
     }
 
-    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^")",
-        g_matchId, g_currentMap, halfText);
-    log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s",
-        g_matchId, g_currentMap, halfText);
+    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^")",
+        g_matchId, g_currentMap, halfText, _:g_matchType);
+    log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s type=%d",
+        g_matchId, g_currentMap, halfText, _:g_matchType);
 
     // Mirror the KTP_MATCH_START line into the AMXX log directory so
     // tests/integration/log_tail.py can find it via wait_for_log_substring
@@ -10416,8 +10647,8 @@ public cmd_test_fire_match_start_log(id) {
     // HLStatsX UDP via logaddress_add. Surfaced 2026-05-06 first Tier 2
     // run — test_8 timed out waiting on a substring that lived in a
     // different log dir.
-    log_amx("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") [test-mode mirror]",
-        g_matchId, g_currentMap, halfText);
+    log_amx("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^") [test-mode mirror]",
+        g_matchId, g_currentMap, halfText, _:g_matchType);
 
     console_print(id, "KTP_TEST_ROUNDLIVE_LOG: ok match_id=%s half=%s", g_matchId, halfText);
     return PLUGIN_HANDLED;
@@ -10586,6 +10817,16 @@ public cmd_test_end_match(id) {
     new s1 = str_to_num(s1Arg);
     new s2 = str_to_num(s2Arg);
 
+    // Match production's ktp_match_teardown_notify ordering exactly: weapon
+    // accumulators must flush while the daemon still holds match_id + half.
+    // Emitting KTP_MATCH_END first clears that context, which made every Lane B
+    // StatsMe row land with match_id=NULL/half=0 and left derived match damage
+    // at zero even though weapon data itself was present.
+    #if defined HAS_DODX
+    dodx_flush_all_stats();
+    ktp_reset_all_wstats();
+    #endif
+
     log_ktp("event=TEST_END_MATCH match_id=%s final=%d-%d", g_matchId, s1, s2);
     log_message("KTP_MATCH_END (matchid ^"%s^") (map ^"%s^") (status ^"test^")",
         g_matchId, g_currentMap);
@@ -10614,22 +10855,6 @@ public cmd_test_end_match(id) {
     new ret;
     ExecuteForward(g_fwdMatchEnd, ret, g_matchId, g_currentMap, g_matchType, s1, s2);
 
-    // Production match-end fires DODX stats flush (per CLAUDE.md "Match Flow"
-    // section — `dodx_flush_all_stats()` at half/match end). Mirroring it
-    // here means the test-mode end-match path exercises the same DODX
-    // forward chain (`dod_stats_flush(id)`) as production, which lets the
-    // Tier 2 `test_dod_stats_flush_fires_on_match_end` test assert the
-    // forward fires for connected bots without needing a separate dispatch
-    // primitive. Test-mode-only — `cmd_test_end_match` is fully gated by
-    // `#if defined KTP_TEST_MODE`, so production binary stays byte-identical.
-    // HAS_DODX guard mirrors production discipline (e.g. line 707/948/1169);
-    // CI image strip-down or pre-DODX fork should fail-soft, not refuse to
-    // compile.
-    #if defined HAS_DODX
-    dodx_flush_all_stats();
-    ktp_reset_all_wstats();   // parity with the production sites; see the stock
-    #endif
-
     // Production match-end (KTPMatchHandler.sma:785) also fires the AC
     // match-end POST. Mirror it here so the Tier 2 `test_17_ac_match_end_*`
     // test can assert the POST lands in FakeRelay's `received_ac_match_end`.
@@ -10643,6 +10868,11 @@ public cmd_test_end_match(id) {
     g_preStartPending = false;
     g_matchPending = false;
     g_currentHalf = 0;
+
+    if (g_testMatchActive) {
+        g_testMatchActive = false;
+        g_disableDiscord = false;
+    }
 
     console_print(id, "KTP_TEST_END: ok match_id=%s final=%d-%d", g_matchId, s1, s2);
     return PLUGIN_HANDLED;
@@ -10673,6 +10903,7 @@ public cmd_test_reset(id) {
     // g_disableDiscord=true, and without an explicit reset here a test that
     // ran SCRIM before COMPETITIVE would silently lose the embed POST.
     g_disableDiscord = false;
+    g_testMatchActive = false;
     // Discord persistent-embed state: cleared so a subsequent test_9b match-end
     // edit doesn't try to PATCH a stale message ID from a previous test run.
     clear_discord_match_identity();

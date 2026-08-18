@@ -21,7 +21,7 @@ on:
   # `--admin` override. Workflow fires on all pushes/PRs; the job's first
   # step decides whether to run pytest based on what actually changed.
   push:
-    branches: ['**']
+    branches: [main, preprod]
   pull_request: {}
   workflow_dispatch:
 

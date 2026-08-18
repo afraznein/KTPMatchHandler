@@ -404,7 +404,7 @@ stock clear_discord_match_identity() {
 // that helper is defined, so the caller resolves it.
 stock capture_roster_snapshot(team1Side) {
     new players[MAX_PLAYERS], pnum;
-    get_players(players, pnum, "ch"); // connected, not HLTV
+    get_match_participants(players, pnum);
 
     for (new i = 0; i < pnum; i++) {
         new id = players[i];
