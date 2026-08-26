@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.166"
+#define PLUGIN_VERSION "0.10.167"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -1317,6 +1317,20 @@ stock ktp_reset_all_wstats() {
     }
     return cleared;
 }
+
+#if defined KTP_TEST_MODE
+// Lane B drives .testmatch with bots, so its teardown must clear the same bot
+// accumulators it just flushed. Keep this separate from the production helper:
+// production deliberately ignores bots, while test mode excludes only HLTV.
+stock ktp_reset_test_wstats() {
+    new players[32], num, cleared = 0;
+    get_players(players, num, "h");
+    for (new i = 0; i < num; i++) {
+        if (reset_user_wstats(players[i])) cleared++;
+    }
+    return cleared;
+}
+#endif
 
 // Handle first half end (save state, allow immediate changelevel)
 stock handle_first_half_end() {
@@ -10824,7 +10838,7 @@ public cmd_test_end_match(id) {
     // at zero even though weapon data itself was present.
     #if defined HAS_DODX
     dodx_flush_all_stats();
-    ktp_reset_all_wstats();
+    ktp_reset_test_wstats();
     #endif
 
     log_ktp("event=TEST_END_MATCH match_id=%s final=%d-%d", g_matchId, s1, s2);

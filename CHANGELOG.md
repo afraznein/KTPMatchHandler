@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.167] - 2026-08-26
+
+### Fixed
+
+- Test-mode match teardown now resets weapon-stat accumulators for Lane B's bot
+  roster immediately after flushing. Production teardown continues to reset
+  connected human players only. This prevents a completed all-bot `.testmatch`
+  from replaying its StatsMe rows when the next test match starts.
+
 ## [0.10.166] - 2026-08-17
 
 Overtime attribution and overtime Discord output. The two headline bugs surface
