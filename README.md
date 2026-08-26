@@ -416,6 +416,11 @@ server_cmd("pause");         // Requires pausable 1
 
 > **Note:** Tactical pauses are disabled. Only technical pauses (`.tech`) are allowed.
 
+> **Note:** A disconnect that the engine reports as a **kick** or a **ban** does not
+> arm the auto tech-pause — the server removed that player, so their team is not
+> spending budget over it. Every other kind still arms, an ordinary quit included.
+> The skip is logged as `AUTO_TECH_PAUSE_SKIPPED`.
+
 > **Note (v0.7.1):** Tactical pause limits and tech budgets are now per-MATCH, not per-half. Teams cannot reset their pause allowance by going to 2nd half.
 
 ### Pause Flow
