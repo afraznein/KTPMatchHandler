@@ -56,6 +56,31 @@ Scope notes for whoever reads this next:
   passes an unterminated zero-length array.
 - No forward signature changed, so **KTPHLTVRecorder needs no rebuild**.
 
+### Fixed
+
+#### A second disconnector during an active countdown lost their rejoin snapshot
+
+`on_client_left()`'s countdown-already-active branch (a player leaves while the
+auto tech-pause countdown is already running for someone else) returned early
+after logging and announcing. `save_player_score(id)` sits at the very end of
+the function, so that `return` skipped it — no rejoin snapshot, only for
+whichever teammate disconnected second.
+
+The branch now falls through instead of returning. `save_player_score(id)` is
+already called unconditionally on every other path out of `on_client_left` —
+including the kicked/banned exemption arm directly above, which never
+returned in the first place — so falling through here reaches no state that
+wasn't already reachable; it just gives this arm the same treatment as every
+other disconnect.
+
+No change to when the countdown arms, what it logs, or the auto tech-pause
+itself — only to whether the second disconnector's frags, deaths and score are
+captured for their own eventual rejoin.
+
+**Match outcomes**: no effect. Team score comes from the game DLL via DODX, not
+from this snapshot; this only restores a disconnecting player's own per-player
+stats on reconnect.
+
 ## [0.10.167] - 2026-08-18
 
 Removes the overtime break subsystem, which never had a start path, and gives the
