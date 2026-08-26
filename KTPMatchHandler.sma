@@ -6200,6 +6200,10 @@ stock on_client_left(id, bool:dropped, const reason[]) {
                         // can see is indistinguishable from the pause failing.
                         log_ktp("event=AUTO_TECH_PAUSE_SKIPPED player='%s' steamid=%s team=%s kind=%s reason='%s'",
                                 exName, safe_sid(exSid), exTeam, dcKind, dcReason);
+                        // Say it in-game too. The team is live and a man down with
+                        // no countdown coming, and silence here reads to them as
+                        // the auto tech-pause being broken.
+                        announce_all("PLAYER REMOVED: %s (%s) | No auto tech-pause (%s) - use .tech if you need to sub", exName, exTeam, dcKind);
                     }
                     // If already counting down for another disconnect, just announce
                     else if (g_disconnectCountdown > 0) {

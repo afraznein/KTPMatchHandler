@@ -34,6 +34,18 @@ happened before, and it cannot deduct budget that would not have been deducted.
 The skip is logged rather than silent, as `AUTO_TECH_PAUSE_SKIPPED` carrying the
 same `player`/`steamid`/`team`/`kind`/`reason` fields as `DISCONNECT_DETECTED` —
 an exemption nobody can see is indistinguishable from the auto-pause being broken.
+It is also **announced in game**, because the server log is not visible to the team
+that just went a man down: they are live, no countdown is coming, and silence reads
+to them as the auto-pause having failed. The announcement names the player and the
+kind and points at `.tech` for a sub. This replaces the `ADDITIONAL_DISCONNECT`
+announcement in the one case where a kick lands during another player's countdown —
+deliberately, since "additional disconnect, countdown already active" describes a
+pause that is not going to be armed for this player.
+
+⚠️ **The skip log inherits the surrounding budget gate**, so a kick for a team whose
+tech budget is already exhausted logs nothing at all. Behaviour is right (nothing
+would have armed either way), but do not read a missing `AUTO_TECH_PAUSE_SKIPPED`
+as the exemption having failed to fire.
 
 Scope notes for whoever reads this next:
 - The exemption sits inside the existing auto-DC gate, so the modes that already
