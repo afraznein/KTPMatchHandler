@@ -6216,7 +6216,9 @@ stock on_client_left(id, bool:dropped, const reason[]) {
                         log_ktp("event=ADDITIONAL_DISCONNECT player='%s' steamid=%s team=%s countdown_active=true kind=%s reason='%s'",
                                 name, safe_sid(sid), teamName, dcKind, dcReason);
                         announce_all("Additional disconnect: %s (%s) - countdown already active", name, teamName);
-                        return;
+                        // Falls through to save_player_score() below instead of
+                        // returning early — a second disconnector still needs a
+                        // rejoin snapshot.
                     }
                     else {
                         // Store disconnected player info
