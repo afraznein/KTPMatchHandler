@@ -82,7 +82,8 @@ See `N:\Nein_\KTP Git Projects\KTPAmxxCurl\*.py` for working deployment scripts.
 When starting a 12man, player selects "1.3 Community Discord" option:
 1. Prompted to enter Queue ID from Discord
 2. Must enter Queue ID twice for confirmation
-3. Match ID format: `1.3-{queueId}-{map}-{hostname}`
+3. Match ID format: `1.3-{queueId}-{shortHostname}` (e.g. `1.3-5031-ATL2`). The
+   map is deliberately NOT included — HLTV appends it when recording.
 4. Type "cancel" or "abort" during entry to restart
 
 ## Auto-DC Behavior (v0.10.53+)
