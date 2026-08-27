@@ -6180,10 +6180,6 @@ stock on_client_left(id, bool:dropped, const reason[]) {
             if (tid >= 1 && tid <= 2) {
                 // Check if team has tech budget (LAN mode: budget never gates)
                 if (g_techBudget[tid] > 0 || is_lan_mode()) {
-                    // Auto-DC fires the same way for every kind, including an
-                    // admin kick pausing the kicked player's own team. Logged
-                    // rather than gated: which kinds should be exempt is a
-                    // ruleset call, and the log is the evidence for making it.
                     new dcKind[12], dcReason[64];
                     classify_disconnect(dropped, reason, dcKind, charsmax(dcKind));
                     // Only the SV_DropClient path hands us a terminated array;
@@ -6192,8 +6188,25 @@ stock on_client_left(id, bool:dropped, const reason[]) {
                     if (dropped) flatten_for_log(reason, dcReason, charsmax(dcReason));
                     else dcReason[0] = EOS;
 
+                    // A kick or a ban is the server removing the player, so the
+                    // team did not lose them by abandoning. Every other kind still
+                    // arms, an ordinary quit included -- only these two are exempt.
+                    if (equal(dcKind, "kicked") || equal(dcKind, "banned")) {
+                        new exName[32], exTeam[16], exSid[44];
+                        get_user_name(id, exName, charsmax(exName));
+                        get_user_authid(id, exSid, charsmax(exSid));
+                        team_name_from_id(tid, exTeam, charsmax(exTeam));
+                        // Skips are logged as loudly as arms: an exemption nobody
+                        // can see is indistinguishable from the pause failing.
+                        log_ktp("event=AUTO_TECH_PAUSE_SKIPPED player='%s' steamid=%s team=%s kind=%s reason='%s'",
+                                exName, safe_sid(exSid), exTeam, dcKind, dcReason);
+                        // Say it in-game too. The team is live and a man down with
+                        // no countdown coming, and silence here reads to them as
+                        // the auto tech-pause being broken.
+                        announce_all("PLAYER REMOVED: %s (%s) | No auto tech-pause (%s) - use .tech if you need to sub", exName, exTeam, dcKind);
+                    }
                     // If already counting down for another disconnect, just announce
-                    if (g_disconnectCountdown > 0) {
+                    else if (g_disconnectCountdown > 0) {
                         new name[32], teamName[16], sid[44];
                         get_user_name(id, name, charsmax(name));
                         get_user_authid(id, sid, charsmax(sid));
@@ -6205,26 +6218,27 @@ stock on_client_left(id, bool:dropped, const reason[]) {
                         announce_all("Additional disconnect: %s (%s) - countdown already active", name, teamName);
                         return;
                     }
+                    else {
+                        // Store disconnected player info
+                        get_user_name(id, g_disconnectedPlayerName, charsmax(g_disconnectedPlayerName));
+                        g_disconnectedPlayerTeam = tid;
+                        get_user_authid(id, g_disconnectedPlayerSteamId, charsmax(g_disconnectedPlayerSteamId));
 
-                    // Store disconnected player info
-                    get_user_name(id, g_disconnectedPlayerName, charsmax(g_disconnectedPlayerName));
-                    g_disconnectedPlayerTeam = tid;
-                    get_user_authid(id, g_disconnectedPlayerSteamId, charsmax(g_disconnectedPlayerSteamId));
+                        // Start disconnect countdown
+                        g_disconnectCountdown = DISCONNECT_COUNTDOWN_SECS;
 
-                    // Start disconnect countdown
-                    g_disconnectCountdown = DISCONNECT_COUNTDOWN_SECS;
+                        new teamName[16];
+                        team_name_from_id(tid, teamName, charsmax(teamName));
 
-                    new teamName[16];
-                    team_name_from_id(tid, teamName, charsmax(teamName));
+                        log_ktp("event=DISCONNECT_DETECTED player='%s' steamid=%s team=%s kind=%s reason='%s'",
+                                g_disconnectedPlayerName, safe_sid(g_disconnectedPlayerSteamId), teamName, dcKind, dcReason);
 
-                    log_ktp("event=DISCONNECT_DETECTED player='%s' steamid=%s team=%s kind=%s reason='%s'",
-                            g_disconnectedPlayerName, safe_sid(g_disconnectedPlayerSteamId), teamName, dcKind, dcReason);
+                        announce_all("PLAYER DISCONNECTED: %s (%s) | Auto tech-pause in %d... (type .nodc to cancel)", g_disconnectedPlayerName, teamName, DISCONNECT_COUNTDOWN_SECS);
 
-                    announce_all("PLAYER DISCONNECTED: %s (%s) | Auto tech-pause in %d... (type .nodc to cancel)", g_disconnectedPlayerName, teamName, DISCONNECT_COUNTDOWN_SECS);
-
-                    // Start countdown task
-                    remove_task(g_taskDisconnectCountdownId);
-                    set_task(1.0, "disconnect_countdown_tick", g_taskDisconnectCountdownId, _, _, "b");
+                        // Start countdown task
+                        remove_task(g_taskDisconnectCountdownId);
+                        set_task(1.0, "disconnect_countdown_tick", g_taskDisconnectCountdownId, _, _, "b");
+                    }
                 }
             }
         }
