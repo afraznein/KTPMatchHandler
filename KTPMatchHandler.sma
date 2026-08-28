@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.167"
+#define PLUGIN_VERSION "0.10.168"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -2852,11 +2852,55 @@ stock send_ac_match_announce(const matchId[]) {
 }
 
 // Mark a match ended on the KTPAntiCheat API. Idempotent — only updates rows with ended_at IS NULL.
+// Full no-outbound boundary for a contained .testmatch. Counts make the backing
+// arrays unreadable, so clearing the counters/heads/caches is both sufficient
+// and far cheaper than zeroing hundreds of retained rows in the RCON frame.
+// Keep this separate from the production drains: their loss counters must live
+// until the SEND log/payload reports them, while test data must never cross into
+// the next match.
+#if defined KTP_TEST_MODE
+stock ktp_reset_test_ac_state() {
+    new sw = g_swCount;
+    new swDropped = g_swDropped;
+    new hit = g_hitCount;
+    new hitDropped = g_hitDropped;
+    new fire = g_fireCount;
+    new fireDropped = g_fireDropped;
+
+    timeline_buffers_drain();
+    g_swDropped = 0;
+    g_hitDropped = 0;
+
+    fire_batch_reset();
+    g_aimFlushCursor = 1;
+    g_fireFlushCursor = 1;
+    g_baselineMatchId[0] = EOS;
+
+    // Payloads are scratch, but clearing their first cell makes the test
+    // boundary explicit and prevents a readback/debug path from exposing an
+    // earlier match after all authoritative counts have gone to zero.
+    g_acAnnouncePayload[0] = EOS;
+    g_acEndPayload[0] = EOS;
+    g_weaponTimelineJsonBuf[0] = EOS;
+    g_aimGeometryJsonBuf[0] = EOS;
+    g_fireJsonBuf[0] = EOS;
+
+    new aimReset = 0;
+    #if defined HAS_DODX
+    for (new i = 1; i <= MAX_PLAYERS; i++) {
+        if (is_user_connected(i) && dodx_reset_aim_stats(i)) aimReset++;
+    }
+    #endif
+
+    log_ktp("event=TESTMATCH_AC_STATE_RESET sw=%d sw_dropped=%d hit=%d hit_dropped=%d fire=%d fire_dropped=%d aim_players=%d",
+        sw, swDropped, hit, hitDropped, fire, fireDropped, aimReset);
+}
+#endif
+
 stock send_ac_match_end(const matchId[]) {
 #if defined KTP_TEST_MODE
     if (g_testMatchActive) {
-        g_swCount = 0;
-        g_hitCount = 0;
+        ktp_reset_test_ac_state();
         log_ktp("event=TESTMATCH_OUTBOUND_SUPPRESSED sink=ac_end match_id=%s", matchId);
         return;
     }
@@ -10831,14 +10875,33 @@ public cmd_test_end_match(id) {
     new s1 = str_to_num(s1Arg);
     new s2 = str_to_num(s2Arg);
 
+    // Cancel every deferred writer that can reopen stats or match context after
+    // this command returns. In particular, task_roundlive_timeout() unpauses
+    // DODX before task_roundlive_match_context() checks g_matchLive, so setting
+    // the live flag false below is not sufficient to keep teardown quiescent.
+    g_awaitingRoundLive = false;
+    remove_task(g_taskRoundLiveTimeoutId);
+    remove_task(g_taskSetMatchIdId);
+    remove_task(g_taskMatchStartLogId);
+
     // Match production's ktp_match_teardown_notify ordering exactly: weapon
     // accumulators must flush while the daemon still holds match_id + half.
     // Emitting KTP_MATCH_END first clears that context, which made every Lane B
     // StatsMe row land with match_id=NULL/half=0 and left derived match damage
     // at zero even though weapon data itself was present.
+    //
+    // Lane B bots keep fighting after this RCON returns. Reset alone therefore
+    // leaves a race: fresh post-end kills can enter DODX under the old native
+    // match id and the next match's warmup flush emits them after HLStatsX has
+    // already closed that id. Pause immediately after the final in-context
+    // reset. The next full .testmatch follows cmd_ready -> task_deferred_stats
+    // and resumes at RoundState=1 (or its timeout), exactly like production.
     #if defined HAS_DODX
-    dodx_flush_all_stats();
-    ktp_reset_test_wstats();
+    new flushed = dodx_flush_all_stats();
+    new cleared = ktp_reset_test_wstats();
+    dodx_set_stats_paused(1);
+    log_ktp("event=STATS_FLUSH type=testmatch_end players=%d cleared=%d paused=1 match_id=%s",
+        flushed, cleared, g_matchId);
     #endif
 
     log_ktp("event=TEST_END_MATCH match_id=%s final=%d-%d", g_matchId, s1, s2);
@@ -10876,6 +10939,15 @@ public cmd_test_end_match(id) {
     // wrapping this entire function — production binary stays byte-identical.
     #if defined HAS_CURL
     send_ac_match_end(g_matchId);
+    #endif
+
+    // ORDER IS LOAD-BEARING: send_ac_match_end() drains the weapon timeline
+    // and shot tail by reading DODX's native match id. Clear only after that
+    // drain, while leaving stats paused so bot combat cannot reopen the closed
+    // HLStatsX interval before the next test match reaches round-live.
+    #if defined HAS_DODX
+    ktp_set_match_context("");
+    log_ktp("event=MATCH_ID_CLEARED reason=testmatch_end");
     #endif
 
     g_matchLive = false;
