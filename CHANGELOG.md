@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.168] - 2026-08-28
+
+### Fixed
+
+- Test-mode match teardown now pauses DODX immediately after its final
+  in-context StatsMe flush and all-bot accumulator reset. It emits
+  `KTP_MATCH_END`, drains the anti-cheat tail while the native match context is
+  still available, and only then clears that context. Bots that keep fighting
+  between consecutive Lane B matches can no longer accumulate rows that the
+  next warmup flush would emit outside the closed daemon context. Production
+  teardown is unchanged. Deferred round-live/context callbacks are cancelled
+  at test teardown, and the next full `.testmatch` resumes stats at its normal
+  round-live boundary (or its newly scheduled safety timeout).
+- The same contained teardown now clears all suppressed anti-cheat state without
+  making a network request: timeline ring heads/counts/loss counters, the full
+  weapon-fire batch/roster/cache, per-player aim windows, fairness cursors,
+  baseline identity, and payload scratch state. Consecutive bot matches cannot
+  inherit AC samples or loss metadata from the match that just ended; production
+  AC tail sends and their report-before-reset semantics are unchanged.
+
 ## [0.10.167] - 2026-08-26
 
 ### Fixed
