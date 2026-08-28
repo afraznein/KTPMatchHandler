@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.168"
+#define PLUGIN_VERSION "0.10.169"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -1330,6 +1330,29 @@ stock ktp_reset_test_wstats() {
     }
     return cleared;
 }
+
+// A projectile trace can land after test teardown's final reset even though
+// DODX is paused: the native trace hook owns grenade-shot attribution and runs
+// outside the normal paused-stat gate. Discard all native test state at both
+// the accepted .testmatch entry and the last pre-live boundary. This emits
+// nothing, so a stale accumulator cannot inherit the closed match context.
+stock ktp_reset_test_native_state(const reason[]) {
+    new weaponReset = 0;
+    new aimReset = 0;
+
+    #if defined HAS_DODX
+    if (g_hasDodxStatsNatives) {
+        weaponReset = dodx_reset_all_stats();
+        for (new i = 1; i <= MAX_PLAYERS; i++) {
+            if (is_user_connected(i) && dodx_reset_aim_stats(i)) aimReset++;
+        }
+    }
+    #endif
+
+    log_ktp("event=TESTMATCH_NATIVE_STATE_RESET reason=%s weapon_players=%d aim_players=%d",
+        reason, weaponReset, aimReset);
+    return weaponReset;
+}
 #endif
 
 // Handle first half end (save state, allow immediate changelevel)
@@ -1829,7 +1852,9 @@ public msg_RoundState() {
         if (!g_roundLive && g_matchLive) {
             g_roundLive = true;
             #if defined HAS_DODX
-            if (g_hasDodxStatsNatives) {
+            // Initial activation is handled below while g_awaitingRoundLive is
+            // still true. Later round resumes must never reset live stats.
+            if (g_hasDodxStatsNatives && !g_awaitingRoundLive) {
                 dodx_set_stats_paused(0);
             }
             #endif
@@ -1839,9 +1864,9 @@ public msg_RoundState() {
 
         // Gate: if awaiting round-live for match start, fire deferred context now
         if (g_awaitingRoundLive) {
-            g_awaitingRoundLive = false;
             remove_task(g_taskRoundLiveTimeoutId);
             task_roundlive_match_context();
+            g_awaitingRoundLive = false;
         }
     } else {
         // Round frozen (post-capture or pre-round)
@@ -1857,6 +1882,43 @@ public msg_RoundState() {
         }
     }
     return PLUGIN_CONTINUE;
+}
+
+// One authoritative initial-activation boundary for both RoundState=1 and its
+// timeout fallback. Test mode silently discards any accumulator that completed
+// after the deferred reset, installs the replacement match context, re-baselines
+// score persistence, and only then resumes native collection. Ordinary later
+// round resumes do not call this helper and therefore never reset live stats.
+stock ktp_activate_initial_roundlive_stats() {
+    #if defined HAS_DODX
+    if (!g_hasDodxStatsNatives) return;
+
+    #if defined KTP_TEST_MODE
+    if (g_testMatchActive && g_awaitingRoundLive) {
+        ktp_reset_test_native_state("activation");
+    }
+    #endif
+
+    ktp_set_match_context(g_delayedMatchId);
+    log_ktp("event=MATCH_ID_SET_ROUNDLIVE match_id=%s", g_delayedMatchId);
+
+    // Pin pdata deaths + the dodx observed counter to 0 for everyone at
+    // the go-live instant. dodx_reset_all_stats zeroes the observed
+    // counters ~1s before the clan restart actually executes, so death
+    // events in that window (and warmup deaths the restart leaves in
+    // pdata) skew the SAVE validation gate for the whole match.
+    // dodx_set_user_deaths re-baselines both sides atomically.
+    new ids[32], num, fails;
+    get_match_participants(ids, num);
+    for (new i = 0; i < num; i++) {
+        // Returns 0 on missing edict/pdata — a failed write leaves that
+        // player's counters stale (the SAVE gate later refuses, safe).
+        if (!dodx_set_user_deaths(ids[i], 0)) fails++;
+    }
+    log_ktp("event=SCORE_PERSIST_BASELINE players=%d fails=%d match_id=%s", num, fails, g_delayedMatchId);
+
+    dodx_set_stats_paused(0);
+    #endif
 }
 
 // Fires when round goes live after match start — sets match context in DODX and logs KTP_MATCH_START
@@ -1879,27 +1941,7 @@ public task_roundlive_match_context() {
     if (g_matchStartLogFired) return;
     g_matchStartLogFired = true;
 
-    #if defined HAS_DODX
-    if (g_hasDodxStatsNatives) {
-        ktp_set_match_context(g_delayedMatchId);
-        log_ktp("event=MATCH_ID_SET_ROUNDLIVE match_id=%s", g_delayedMatchId);
-
-        // Pin pdata deaths + the dodx observed counter to 0 for everyone at
-        // the go-live instant. dodx_reset_all_stats zeroes the observed
-        // counters ~1s before the clan restart actually executes, so death
-        // events in that window (and warmup deaths the restart leaves in
-        // pdata) skew the SAVE validation gate for the whole match.
-        // dodx_set_user_deaths re-baselines both sides atomically.
-        new ids[32], num, fails;
-        get_match_participants(ids, num);
-        for (new i = 0; i < num; i++) {
-            // Returns 0 on missing edict/pdata — a failed write leaves that
-            // player's counters stale (the SAVE gate later refuses, safe).
-            if (!dodx_set_user_deaths(ids[i], 0)) fails++;
-        }
-        log_ktp("event=SCORE_PERSIST_BASELINE players=%d fails=%d match_id=%s", num, fails, g_delayedMatchId);
-    }
-    #endif
+    ktp_activate_initial_roundlive_stats();
 
     // Log KTP_MATCH_START for HLStatsX (fires on round-live instead of fixed timer)
     log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^")",
@@ -1915,16 +1957,9 @@ public task_roundlive_timeout() {
     log_amx("[KTP] WARNING: RoundState=1 timeout — firing match context without round-live signal");
     log_ktp("event=ROUNDLIVE_TIMEOUT match_id=%s", g_delayedMatchId);
 
-    g_awaitingRoundLive = false;
     g_roundLive = true;  // Assume live to avoid permanent pause
-
-    #if defined HAS_DODX
-    if (g_hasDodxStatsNatives) {
-        dodx_set_stats_paused(0);
-    }
-    #endif
-
     task_roundlive_match_context();
+    g_awaitingRoundLive = false;
 }
 
 stock announce_all(const fmt[], any:...) {
@@ -9799,13 +9834,26 @@ public task_deferred_stats() {
 
     #if defined HAS_DODX
     if (g_hasDodxStatsNatives) {
-        // 1. Flush warmup stats (logged WITHOUT matchid - these are pre-match stats)
-        new flushed = dodx_flush_all_stats();
-        log_ktp("event=STATS_FLUSH type=warmup players=%d", flushed);
+        #if defined KTP_TEST_MODE
+        if (g_testMatchActive) {
+            // Test teardown clears the native match id, but stats_logging keeps
+            // its last non-empty output buffer when dodx_get_match_id() returns
+            // zero. Never emit a test warmup flush through that stale buffer.
+            // Reset again here so anything delayed after accepted entry is also
+            // discarded immediately before the first possible resume.
+            ktp_reset_test_native_state("prelive");
+        } else {
+        #endif
+            // 1. Flush warmup stats (logged WITHOUT matchid - these are pre-match stats)
+            new flushed = dodx_flush_all_stats();
+            log_ktp("event=STATS_FLUSH type=warmup players=%d", flushed);
 
-        // 2. Reset all stats for fresh match tracking
-        new reset = dodx_reset_all_stats();
-        log_ktp("event=STATS_RESET players=%d", reset);
+            // 2. Reset all stats for fresh match tracking
+            new reset = dodx_reset_all_stats();
+            log_ktp("event=STATS_RESET players=%d", reset);
+        #if defined KTP_TEST_MODE
+        }
+        #endif
 
         // 3. Pause stats until round goes live (RoundState=1)
         // This prevents round-freeze kills from being counted during the countdown
@@ -10215,6 +10263,11 @@ stock begin_testmatch(id, targetPerTeam) {
             return PLUGIN_HANDLED;
         }
     }
+
+    // This is the earliest accepted test-only boundary. The reset is silent
+    // and stays ahead of bot creation, production match setup, every deferred
+    // StatsMe path, and both round-live resume paths.
+    ktp_reset_test_native_state("entry");
 
     // Lane B is deliberately the tournament-sized 6v6 shape.  Do not let an
     // RCON argument silently turn the contained test server into a larger one.

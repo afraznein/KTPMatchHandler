@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.169] - 2026-08-28
+
+### Fixed
+
+- Accepted `.testmatch` starts now silently discard all connected-player DODX
+  weapon and aim state at entry and again at the final pre-live boundary. The
+  test-only deferred path resets instead of emitting a warmup StatsMe flush, so
+  a grenade trace that completes after the preceding match's teardown cannot be
+  replayed through the producer's closed match context. Production warmup
+  flushing is unchanged. Both the initial round-live signal and its safety
+  timeout share one final activation boundary that silently resets test state,
+  installs the new match context, then resumes DODX. Ordinary later round
+  resumes bypass that reset, and the replacement match collects normally.
+
 ## [0.10.168] - 2026-08-28
 
 ### Fixed
