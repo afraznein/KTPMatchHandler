@@ -104,3 +104,57 @@ When starting a 12man, player selects "1.3 Community Discord" option:
 - OT stays on same map via `SetHookChainArg()` to modify map in-place (v0.10.34+)
 - Match ID format: `{timestamp}-{shortHostname}` (e.g., `1768174986-ATL2`)
 - Tactical pauses disabled (v0.10.35) - only `.tech` allowed
+
+## Match Flow
+
+*(Relocated 2026-08-29 from the operator's global project context — this plugin is its one home.)*
+
+```
+Match Types:
+- .ktp <password>  - Competitive (password required)
+- .ktpOT <password> - KTP overtime (password required)
+- .draft           - Draft match
+- .draftOT         - Draft overtime
+- .12man           - 12-man (Standard or 1.3 Community with Queue ID)
+- .scrim           - Scrim match
+
+Flow:
+1. Pre-start: Start command → Both teams .confirm
+2. Pending: Players .ready (6 per team default)
+3. Match Start:
+   - dodx_flush_all_stats() - flush warmup stats
+   - dodx_reset_all_stats() - clear for fresh match
+   - dodx_set_match_id() - set match context
+4. Live: Map config executes, tech pause system active (.pause disabled, .tech only)
+5. Half/Match End:
+   - dodx_flush_all_stats() - flush match stats
+   - KTP_MATCH_END logged for HLStatsX
+
+Admin Commands:
+- .forcereset - Clear all match state (ADMIN_RCON, requires confirmation)
+```
+
+### Tech pause budget
+
+`.pause`/`.tac` are DISABLED — only `.tech` is allowed. Tech pauses use a team budget (default 300s
+per team **per match**, not per half). It is set once at match start and carried across the halftime
+side swap — a team that spends 4:00 in H1 starts H2 with 1:00. OT gets its own separate budget.
+
+## Score Restoration
+
+- Direct `dodx_set_team_score()` can crash if called during map changes
+- Use deferred restoration: set `g_pendingScoreAllies/Axis`, call `schedule_score_restoration()`
+- Scoreboard updates on "next flag touch" event
+
+## Localinfo Persistence
+
+Match state survives map changes via localinfo keys:
+- `_ktp_mid` - Match ID
+- `_ktp_map` - Map name
+- `_ktp_mode` - Mode ("h2", "ot1", "ot2", etc.)
+- `_ktp_state` - Consolidated state (pause/tech counts)
+- `_ktp_h1` - First half scores
+- `_ktp_t1n`/`_ktp_t2n` - Team names
+- `_ktp_reg` - Regulation totals (OT)
+- `_ktp_ots` - OT scores per round
+- `_ktp_otst` - OT state (tech budgets + starting side)
