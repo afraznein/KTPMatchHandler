@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.169] - 2026-08-28
+
+### Fixed
+
+- Accepted `.testmatch` starts now silently discard all connected-player DODX
+  weapon and aim state at entry and again at the final pre-live boundary. The
+  test-only deferred path resets instead of emitting a warmup StatsMe flush, so
+  a grenade trace that completes after the preceding match's teardown cannot be
+  replayed through the producer's closed match context. Production warmup
+  flushing is unchanged. Both the initial round-live signal and its safety
+  timeout share one final activation boundary that silently resets test state,
+  installs the new match context, then resumes DODX. Ordinary later round
+  resumes bypass that reset, and the replacement match collects normally.
+
+## [0.10.168] - 2026-08-28
+
+### Fixed
+
+- Test-mode match teardown now pauses DODX immediately after its final
+  in-context StatsMe flush and all-bot accumulator reset. It emits
+  `KTP_MATCH_END`, drains the anti-cheat tail while the native match context is
+  still available, and only then clears that context. Bots that keep fighting
+  between consecutive Lane B matches can no longer accumulate rows that the
+  next warmup flush would emit outside the closed daemon context. Production
+  teardown is unchanged. Deferred round-live/context callbacks are cancelled
+  at test teardown, and the next full `.testmatch` resumes stats at its normal
+  round-live boundary (or its newly scheduled safety timeout).
+- The same contained teardown now clears all suppressed anti-cheat state without
+  making a network request: timeline ring heads/counts/loss counters, the full
+  weapon-fire batch/roster/cache, per-player aim windows, fairness cursors,
+  baseline identity, and payload scratch state. Consecutive bot matches cannot
+  inherit AC samples or loss metadata from the match that just ended; production
+  AC tail sends and their report-before-reset semantics are unchanged.
+
+## [0.10.167] - 2026-08-26
+
+### Fixed
+
+- Test-mode match teardown now resets weapon-stat accumulators for Lane B's bot
+  roster immediately after flushing. Production teardown continues to reset
+  connected human players only. This prevents a completed all-bot `.testmatch`
+  from replaying its StatsMe rows when the next test match starts.
 ## [0.10.168] - 2026-08-27
 
 ### Changed
