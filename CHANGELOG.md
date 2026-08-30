@@ -48,6 +48,150 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   roster immediately after flushing. Production teardown continues to reset
   connected human players only. This prevents a completed all-bot `.testmatch`
   from replaying its StatsMe rows when the next test match starts.
+## [0.10.168] - 2026-08-27
+
+### Changed
+
+#### A kick or a ban no longer arms the auto tech-pause
+
+0.10.167 added the disconnect classifier and deliberately left it log-only, with
+the open question stated in its own changelog entry: *"Which kinds should be
+exempt is a ruleset question, not a code one, and this log is the evidence for
+answering it."* The ruling came back **kicked and banned, and nothing else**.
+This is that answer.
+
+Both kinds mean the server removed the player. The team that lost them did not
+abandon anything, so arming a 30-second countdown and then charging their tech
+budget for the pause was penalising them for an admin action. `unknown`, `quit`,
+`timeout` and `dropped` are unchanged and still arm — an ordinary rage-quit is
+exactly what the auto tech-pause exists to cover, and widening the exemption past
+these two would start forgiving real abandons.
+
+**This can change a match outcome, in one direction only: it can leave a team
+with tech budget it would previously have spent.** Budget is finite per match
+(default 300s per team, carried across halftime), so a kick that previously cost
+a team a pause no longer does. It cannot cause a pause that would not have
+happened before, and it cannot deduct budget that would not have been deducted.
+
+The skip is logged rather than silent, as `AUTO_TECH_PAUSE_SKIPPED` carrying the
+same `player`/`steamid`/`team`/`kind`/`reason` fields as `DISCONNECT_DETECTED` —
+an exemption nobody can see is indistinguishable from the auto-pause being broken.
+It is also **announced in game**, because the server log is not visible to the team
+that just went a man down: they are live, no countdown is coming, and silence reads
+to them as the auto-pause having failed. The announcement names the player and the
+kind and points at `.tech` for a sub. This replaces the `ADDITIONAL_DISCONNECT`
+announcement in the one case where a kick lands during another player's countdown —
+deliberately, since "additional disconnect, countdown already active" describes a
+pause that is not going to be armed for this player.
+
+⚠️ **The skip log inherits the surrounding budget gate**, so a kick for a team whose
+tech budget is already exhausted logs nothing at all. Behaviour is right (nothing
+would have armed either way), but do not read a missing `AUTO_TECH_PAUSE_SKIPPED`
+as the exemption having failed to fire.
+
+Scope notes for whoever reads this next:
+- The exemption sits inside the existing auto-DC gate, so the modes that already
+  never auto-DC (scrim, 12-man) are unaffected.
+- The classifier tests ban before kick, so *"Kicked and banned"* reports `banned`;
+  both are exempt, so the ordering does not matter here.
+- `reason[]` is still only read behind `dropped` — every `drop=false` call site
+  passes an unterminated zero-length array.
+- No forward signature changed, so **KTPHLTVRecorder needs no rebuild**.
+
+### Fixed
+
+#### A second disconnector during an active countdown lost their rejoin snapshot
+
+`on_client_left()`'s countdown-already-active branch (a player leaves while the
+auto tech-pause countdown is already running for someone else) returned early
+after logging and announcing. `save_player_score(id)` sits at the very end of
+the function, so that `return` skipped it — no rejoin snapshot, only for
+whichever teammate disconnected second.
+
+The branch now falls through instead of returning. `save_player_score(id)` is
+already called unconditionally on every other path out of `on_client_left` —
+including the kicked/banned exemption arm directly above, which never
+returned in the first place — so falling through here reaches no state that
+wasn't already reachable; it just gives this arm the same treatment as every
+other disconnect.
+
+No change to when the countdown arms, what it logs, or the auto tech-pause
+itself — only to whether the second disconnector's frags, deaths and score are
+captured for their own eventual rejoin.
+
+**Match outcomes**: no effect. Team score comes from the game DLL via DODX, not
+from this snapshot; this only restores a disconnecting player's own per-player
+stats on reconnect.
+
+## [0.10.167] - 2026-08-18
+
+Removes the overtime break subsystem, which never had a start path, and gives the
+auto-disconnect log the engine's own reason for the disconnect.
+
+### Removed
+
+#### The overtime break subsystem
+
+`g_otBreakActive` was assigned `false` at three sites and `true` at none;
+`g_taskOtBreakVoteId` was passed to `task_exists()` and `remove_task()` but never
+to `set_task()`. The entry functions that would have armed it (`trigger_overtime`,
+`task_check_ot_break_votes`, `start_ot_break`, `task_ot_break_tick`) were deleted
+in 0.10.90 once OT became changelevel-based, and nothing replaced them. 0.10.143
+then made `.otbreak` answer honestly, but left the scaffolding standing.
+
+Everything downstream of that flag was therefore unreachable: `end_ot_break()`,
+`start_overtime_round()`, `save_ot_context()` (a full parallel localinfo writer
+that would have competed with `save_ot_state_to_localinfo()` had it ever run),
+`cmd_ot_extend()`, the break branches of `cmd_ot_skip()`, the OT branch of
+`cmd_extend_pause()`, the four break globals, and the two task ids. All removed.
+
+`.otbreak` and `.skip` stay registered and now share one handler that says breaks
+are not supported. Unregistering them would send the text to public chat as a
+say, which is worse than an honest refusal. The `.ext` command keeps its normal
+pause-extension behaviour; it no longer has a dead OT branch in front of it.
+
+Deleting `save_ot_context()` orphaned two serialization helpers.
+`generate_ot_scores_string()` is gone: it wrote `_ktp_ots` with no cap at all,
+while the surviving writer in `save_ot_state_to_localinfo()` cuts at the last
+complete round boundary and warns, because the engine rejects a localinfo value
+at or past `MAX_KV_LEN` outright and a rejected write silently keeps the old
+value. `append_ot_score()` went with it. `format_ot_state()` was kept and the
+inline `formatex` in `save_ot_state_to_localinfo()` now routes through it, so the
+`_ktp_otst` format cannot drift from `parse_ot_state()`.
+
+### Changed
+
+#### Auto-DC now records why the player left
+
+`client_disconnected` was declared as `(id)`, discarding the `drop` and `message`
+arguments the forward supplies. `message` is the reason string from the engine's
+own `SV_DropClient` call site, which is the only thing that distinguishes a
+deliberate leave (`Client sent 'drop'`) from a lost connection (`Timed out`,
+`Reliable channel overflowed`, the Steam cases) from an admin action (`Kicked`,
+`Kicked and banned`, `Added to banned list`). `drop` is false when the client
+left without going through `SV_DropClient`, which is not evidence either way.
+
+`DISCONNECT_DETECTED` and `ADDITIONAL_DISCONNECT` now carry `kind=` (one of
+`kicked`, `banned`, `quit`, `timeout`, `dropped`, `unknown`) and the flattened
+reason string. Steam's reasons are multi-line and `log_ktp` writes one line per
+event, so the raw text is stripped of newlines, tabs and single quotes first.
+Classification runs on the raw reason, before that stripping, because
+`Client sent 'drop'` is matched on its quotes. Ban is tested ahead of kick so the
+`banid`-with-kick reason reports the stronger fact, and both ban anchors are the
+full phrases rather than the substring `ban`, which a filename in a `Bad file`
+reason could otherwise trip. `reason=` is last in both lines: `log_ktp` truncates
+at its buffer, and a lost tail must cost the reason rather than a fixed marker.
+
+The reason is only read when `drop` is true. Every other forward site hands the
+plugin a zero-length array with **no terminator**, so scanning it would read
+uninitialized AMX heap and log it — on exactly the crash-reconnect path this
+feature exists to catch.
+
+**Behaviour is unchanged**: auto-DC still fires for every kind, including an admin
+kick pausing the kicked player's own team. Which kinds should be exempt is a
+ruleset question, not a code one, and this log is the evidence for answering it.
+
+---
 
 ## [0.10.166] - 2026-08-17
 
