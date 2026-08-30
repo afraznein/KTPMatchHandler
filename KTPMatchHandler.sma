@@ -413,6 +413,7 @@ new g_taskUnreadyReminderId = 55607;  // Periodic reminder of unready players
 
 // ---------- Forwards (for external plugins) ----------
 new g_fwdMatchStart;    // ktp_match_start(matchId[], map[], matchType, half) - half: 1,2,101+
+new g_fwdMatchSideMap;  // ktp_match_side_map(matchId[], map[], matchType[], half, alliesSlot, axisSlot)
 new g_fwdMatchEnd;      // ktp_match_end(matchId[], map[], matchType, team1Score, team2Score)
 new g_fwdHalfEnd;       // ktp_half_end(matchId[], map[], matchType, half, team1Score, team2Score) - fires at 1st-half end (pre-changelevel)
 
@@ -4736,6 +4737,12 @@ public plugin_init() {
     // Register forwards for external plugins (KTPHLTVRecorder, etc.)
     // ktp_match_start(matchId[], map[], matchType, half) - half: 1=1st, 2=2nd, 101+=OT round
     g_fwdMatchStart = CreateMultiForward("ktp_match_start", ET_IGNORE, FP_STRING, FP_STRING, FP_CELL, FP_CELL);
+    // Companion side-to-team map for score observers. This is intentionally a
+    // new forward rather than an ABI change to ktp_match_start: existing consumers
+    // keep their four-argument contract while new consumers receive a stable,
+    // name-free match-team identity before the matching lifecycle signal.
+    g_fwdMatchSideMap = CreateMultiForward("ktp_match_side_map", ET_IGNORE,
+        FP_STRING, FP_STRING, FP_STRING, FP_CELL, FP_CELL, FP_CELL);
     g_fwdMatchEnd = CreateMultiForward("ktp_match_end", ET_IGNORE, FP_STRING, FP_STRING, FP_CELL, FP_CELL, FP_CELL);
     // ktp_half_end(matchId[], map[], matchType, half, team1Score, team2Score) — fires once at
     // 1st-half end (in handle_first_half_end, before the changelevel) so HUD/stats consumers get
@@ -6432,6 +6439,47 @@ stock team1_current_side() {
     if (g_inOvertime) return g_otTeam1StartsAs;
     if (g_secondHalfPending || g_currentHalf == 2) return 2;
     return 1;
+}
+
+// Stable wire value for the side-map companion forward. Keep this independent
+// from display labels ("KTP OT", etc.): telemetry consumers need a small,
+// canonical key which cannot change when operator-facing wording does.
+stock get_match_type_key(MatchType:matchType, out[], maxlen) {
+    switch (matchType) {
+        case MATCH_TYPE_COMPETITIVE: copy(out, maxlen, "competitive");
+        case MATCH_TYPE_SCRIM:       copy(out, maxlen, "scrim");
+        case MATCH_TYPE_12MAN:       copy(out, maxlen, "12man");
+        case MATCH_TYPE_DRAFT:       copy(out, maxlen, "draft");
+        case MATCH_TYPE_KTP_OT:      copy(out, maxlen, "ktpOT");
+        case MATCH_TYPE_DRAFT_OT:    copy(out, maxlen, "draftOT");
+        default:                     copy(out, maxlen, "unknown");
+    }
+}
+
+// Publish the current engine-side -> stable match-team mapping. Slots are
+// deliberately opaque: 1 is the team which began the match on Allies and 2 is
+// the team which began on Axis. No player, captain, or mutable team-name data
+// crosses this boundary. team1_current_side() is the shared source of truth:
+// regulation H2 swaps it, while OT reads the side actually persisted for this
+// round in g_otTeam1StartsAs rather than guessing from the half number.
+stock emit_match_side_map(half) {
+    new team1Side = team1_current_side();
+    if (team1Side != 1 && team1Side != 2) {
+        log_ktp("event=FWD_MATCH_SIDE_MAP_REFUSED match_id=%s map=%s half=%d reason=invalid_team1_side side=%d",
+            g_matchId, g_currentMap, half, team1Side);
+        return;
+    }
+
+    new alliesTeamSlot = (team1Side == 1) ? 1 : 2;
+    new axisTeamSlot = (team1Side == 2) ? 1 : 2;
+    new matchType[16];
+    get_match_type_key(g_matchType, matchType, charsmax(matchType));
+
+    new ret;
+    ExecuteForward(g_fwdMatchSideMap, ret, g_matchId, g_currentMap, matchType,
+        half, alliesTeamSlot, axisTeamSlot);
+    log_ktp("event=FWD_MATCH_SIDE_MAP match_id=%s map=%s type=%s half=%d allies_slot=%d axis_slot=%d",
+        g_matchId, g_currentMap, matchType, half, alliesTeamSlot, axisTeamSlot);
 }
 
 // The current period for admin-facing output — a bare "%d" prints an OT round
@@ -9786,6 +9834,9 @@ public task_deferred_discord_fwd() {
     {
         new ret;
         new half = g_currentHalf;
+        // Consumers must cache the side mapping before they receive the
+        // lifecycle signal which opens the score stream for this period.
+        emit_match_side_map(half);
         ExecuteForward(g_fwdMatchStart, ret, g_matchId, g_currentMap, g_matchType, half);
         log_ktp("event=FWD_MATCH_START match_id=%s map=%s type=%d half=%d", g_matchId, g_currentMap, g_matchType, half);
 
