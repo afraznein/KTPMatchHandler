@@ -1,6 +1,7 @@
 # KTP Match Handler
 
 **Version 0.10.169** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.168** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -288,9 +289,10 @@ dropped mid-match.
 
 #### Overtime
 ```
-.otbreak                Start the optional 10-minute break before an OT round
-.skip                   Skip the OT break and go straight to the round
+.ktpOT, .draftOT        Start an OT round (see Match Control above)
 ```
+`.otbreak` and `.skip` still answer, but only to say OT breaks are not
+supported — the subsystem never had a start path and was removed in 0.10.167.
 
 #### Pause Control
 ```
@@ -414,6 +416,11 @@ server_cmd("pause");         // Requires pausable 1
 | **Disconnect** | Auto | Uses budget | Per cvar | Auto | From tech |
 
 > **Note:** Tactical pauses are disabled. Only technical pauses (`.tech`) are allowed.
+
+> **Note:** A disconnect that the engine reports as a **kick** or a **ban** does not
+> arm the auto tech-pause — the server removed that player, so their team is not
+> spending budget over it. Every other kind still arms, an ordinary quit included.
+> The skip is logged as `AUTO_TECH_PAUSE_SKIPPED`.
 
 > **Note (v0.7.1):** Tactical pause limits and tech budgets are now per-MATCH, not per-half. Teams cannot reset their pause allowance by going to 2nd half.
 
