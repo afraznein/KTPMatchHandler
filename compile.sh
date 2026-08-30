@@ -142,12 +142,50 @@ done
 # get baked into the .amxx so `amx_ktp_versions` rcon can report what's
 # actually deployed. Falls back to "unknown" if outside the canonical
 # toolchain (e.g., compiling from a tarball without .git).
-GIT_SHA=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+# Resolve the SHA, and make a failure to resolve it VISIBLE. This value is baked
+# into the artifact and reported by `amx_ktp_versions` over rcon, so a build that
+# bakes "unknown" cannot say where it came from -- and nothing in the output said so.
+#
+# The way it fails is not obvious: building from a git WORKTREE under WSL cannot
+# resolve the repo at all, because a worktree's .git is a FILE holding a WINDOWS
+# path that WSL concatenates onto the cwd. `git rev-parse` then fails, the old
+# `|| echo unknown` swallowed it, and GIT_DIRTY below is only computed when the SHA
+# resolves -- so the result was indistinguishable from a clean off-toolchain build.
+#
+# KTP_BUILD_SHA_OVERRIDE lets a caller that knows the commit supply it.
+# KTP_BUILD_REQUIRE_SHA=1 makes an unresolved SHA fatal, for release builds that
+# must not ship without provenance. Neither is set by default.
+if [ -n "${KTP_BUILD_SHA_OVERRIDE:-}" ]; then
+    GIT_SHA="$KTP_BUILD_SHA_OVERRIDE"
+elif GIT_SHA=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null); then
+    :
+else
+    GIT_SHA="unknown"
+    echo "========================================"
+    echo "[WARN] Could not resolve a git SHA for this build."
+    echo "       The artifact will bake KTP_BUILD_SHA \"unknown\" and cannot report"
+    echo "       its provenance via amx_ktp_versions."
+    echo "       If this is a git worktree under WSL, that is the cause -- build from"
+    echo "       a plain clone, or pass KTP_BUILD_SHA_OVERRIDE=<sha>."
+    echo "       Set KTP_BUILD_REQUIRE_SHA=1 to make this fatal instead."
+    echo "========================================"
+    if [ "${KTP_BUILD_REQUIRE_SHA:-0}" = "1" ]; then
+        echo "[KTP-BUILD] FAILED: KTP_BUILD_REQUIRE_SHA=1 and no SHA could be resolved."
+        exit 1
+    fi
+fi
 GIT_DIRTY=""
 if [ "$GIT_SHA" != "unknown" ]; then
-    if ! git -C "$SCRIPT_DIR" diff --quiet 2>/dev/null || \
-       ! git -C "$SCRIPT_DIR" diff --cached --quiet 2>/dev/null; then
-        GIT_DIRTY="-dirty"
+    # `git status --porcelain` rather than `git diff`: diff ignores the index, so a
+    # staged-but-uncommitted change read as clean. And a FAILING git must not read
+    # as dirty -- the old form was `! git diff --quiet`, which treats exit 128 (not
+    # a repo, e.g. a worktree under WSL) identically to exit 1 (really dirty). With
+    # KTP_BUILD_SHA_OVERRIDE set that produced a "-dirty" artifact from a clean tree.
+    if _ktp_status=$(git -C "$SCRIPT_DIR" status --porcelain 2>/dev/null); then
+        [ -n "$_ktp_status" ] && GIT_DIRTY="-dirty"
+    else
+        # Could not tell. Say so rather than claiming clean.
+        GIT_DIRTY="-unverified"
     fi
 fi
 BUILD_TIME=$(date -u +%Y-%m-%dT%H:%MZ)
