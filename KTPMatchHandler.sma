@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.169"
+#define PLUGIN_VERSION "0.10.170"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -133,6 +133,17 @@ new g_acServerSecretHeader[160];     // pre-formatted "X-Server-Secret: ..." (pe
 new g_acServerEndpoint[48];          // "ip:port" of THIS server, built at plugin_cfg
 new g_acAnnouncePayload[512];        // JSON body buffer for POST /api/match/announce
 new g_acEndPayload[256];             // JSON body buffer for POST /api/match/end
+// Widest match-type key the AC wire vocabulary can hold, plus EOS.
+#define AC_MATCH_TYPE_SIZE 16
+// Worst-case body: every field at full width. matchId is g_matchId[64] and the
+// endpoint is g_acServerEndpoint[48], so 63 + 47 usable chars.
+//   {"matchId":"","serverEndpoint":"","matchType":""}  = 49 literal bytes
+#define AC_BODY_LITERAL_BYTES 49
+#define AC_BODY_MAX_BYTES (AC_BODY_LITERAL_BYTES + 63 + 47 + (AC_MATCH_TYPE_SIZE - 1))
+// formatex truncates silently, so the budget is asserted at compile time rather
+// than trusted. Both buffers must hold the worst case plus its EOS.
+#assert AC_BODY_MAX_BYTES + 1 <= 512
+#assert AC_BODY_MAX_BYTES + 1 <= 256
 #if defined HAS_CURL
 new curl_slist: g_acCurlHeaders = SList_Empty;  // persistent headers slist (never freed — async safety)
 #endif
@@ -2819,6 +2830,23 @@ public ac_callback(CURL:curl, CURLcode:code) {
     // g_acCurlHeaders is persistent — never free here (async-safety, same principle as g_curlHeaders).
 }
 
+// Match-type key for the anti-cheat match index. Deliberately NOT
+// get_match_type_key: that spelling is the ktp_match_side_map forward's ABI,
+// while ktp_ac_match_index already holds 851 rows in this one (backfilled from
+// KTPHLTVRecorder's MATCH_WINDOW_OPEN, which demo filenames also use). Two
+// spellings for one concept would make the column unjoinable.
+stock get_ac_match_type_key(MatchType:matchType, out[], maxlen) {
+    switch (matchType) {
+        case MATCH_TYPE_COMPETITIVE: copy(out, maxlen, "ktp");
+        case MATCH_TYPE_SCRIM:       copy(out, maxlen, "scrim");
+        case MATCH_TYPE_12MAN:       copy(out, maxlen, "12man");
+        case MATCH_TYPE_DRAFT:       copy(out, maxlen, "draft");
+        case MATCH_TYPE_KTP_OT:      copy(out, maxlen, "ktpot");
+        case MATCH_TYPE_DRAFT_OT:    copy(out, maxlen, "draftot");
+        default:                     copy(out, maxlen, "match");
+    }
+}
+
 // Announce a match start to the KTPAntiCheat API.
 // Idempotent on the API side (upsert on match_id + server_endpoint).
 // Safe to call multiple times per match — only updates the row, doesn't duplicate.
@@ -2832,9 +2860,14 @@ stock send_ac_match_announce(const matchId[]) {
     if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !matchId[0] || !g_acServerEndpoint[0]) return;
 
     // Omit startedAt — API defaults to UtcNow when field is missing/default.
+    // matchType is what fills ktp_ac_match_index.match_type; the API stores it
+    // under COALESCE, so re-announcing a half never erases an established type.
+    new acMatchType[AC_MATCH_TYPE_SIZE];
+    get_ac_match_type_key(g_matchType, acMatchType, charsmax(acMatchType));
+
     formatex(g_acAnnouncePayload, charsmax(g_acAnnouncePayload),
-        "{^"matchId^":^"%s^",^"serverEndpoint^":^"%s^"}",
-        matchId, g_acServerEndpoint);
+        "{^"matchId^":^"%s^",^"serverEndpoint^":^"%s^",^"matchType^":^"%s^"}",
+        matchId, g_acServerEndpoint, acMatchType);
 
     new url[256];
     formatex(url, charsmax(url), "%s/api/match/announce", g_acApiBaseUrl);
@@ -2921,9 +2954,16 @@ stock send_ac_match_end(const matchId[]) {
     // while the match id can still be read.
     send_ac_weapon_fire_batch();
 
+    // Carried for symmetry and forward-compatibility only: today's
+    // MatchEndRequest has no matchType and /api/match/end never writes the
+    // column, so this field is inert until the API adopts it. The announce
+    // path is what establishes the type. Unknown JSON members are ignored.
+    new acMatchType[AC_MATCH_TYPE_SIZE];
+    get_ac_match_type_key(g_matchType, acMatchType, charsmax(acMatchType));
+
     formatex(g_acEndPayload, charsmax(g_acEndPayload),
-        "{^"matchId^":^"%s^",^"serverEndpoint^":^"%s^"}",
-        matchId, g_acServerEndpoint);
+        "{^"matchId^":^"%s^",^"serverEndpoint^":^"%s^",^"matchType^":^"%s^"}",
+        matchId, g_acServerEndpoint, acMatchType);
 
     new url[256];
     formatex(url, charsmax(url), "%s/api/match/end", g_acApiBaseUrl);
