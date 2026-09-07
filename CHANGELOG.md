@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.170] - 2026-08-30
+
+### Fixed
+
+- The anti-cheat match announce now sends `matchType`, so
+  `ktp_ac_match_index.match_type` stops being written NULL. The API has accepted
+  the field since the column was added and stores it under `COALESCE`, but no
+  release ever emitted it — every row this plugin has produced was untyped, and
+  the values present in the column came from a one-off log backfill rather than
+  from the plugin. Re-announcing a second half cannot erase an established type.
+- The match-end body carries the same field for symmetry and forward
+  compatibility. It is inert today: `MatchEndRequest` has no `matchType` and
+  `/api/match/end` only writes `ended_at`. The announce path is what establishes
+  the type.
+
+### Changed
+
+- The wire vocabulary is `ktp`, `scrim`, `12man`, `draft`, `ktpot`, `draftot`,
+  with `match` as the fallback — matching what the column already holds and what
+  demo filenames use, so the two join. This is deliberately a second helper
+  rather than a reuse of `get_match_type_key`, whose different spelling
+  (`competitive`, `ktpOT`) is the `ktp_match_side_map` forward's ABI and must not
+  change.
+- Both anti-cheat bodies now have an explicit worst-case byte budget asserted at
+  compile time. `formatex` truncates silently, so the widened format string is
+  held to the buffer by `#assert` rather than by inspection.
+
 ## [0.10.169] - 2026-08-28
 
 ### Fixed
