@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.171] - 2026-09-12
+
+### Added - shot-registration diagnostics gated by match type
+
+`ktp_shot_detail_types`, a bitmask of `(1 << MatchType)`, default **4** =
+12-mans only. Other types opt in by adding a bit rather than by editing code.
+
+The stats plugin owns `ktp_stats_shot_detail` and defaults it to 0, but it
+cannot decide when to raise it: DODX exposes `dodx_set_match_id` /
+`dodx_get_match_id` and no match TYPE at all, so the policy has to live with the
+plugin that knows the type.
+
+Match-scoped state, so it follows the teardown-exit invariant rather than being
+sprinkled per exit: raised in `ktp_activate_initial_roundlive_stats()`, forced
+to 0 inside `ktp_match_teardown_notify()` which every teardown exit already
+routes through, and forced to 0 again in `plugin_init` since extension-mode
+globals live for the whole server process. Failing closed matters because a
+12-man and a scrim can share a server.
+
+Resolved via `get_cvar_pointer` rather than `server_cmd`, so a server without
+the stats plugin loaded stays silent instead of spraying unknown-command noise
+into every match console.
+
+⚠️ The first implementation hooked `task_delayed_set_match_id`, which **never
+executes** -- it is defined and its task id is removed in three places, but
+nothing schedules it. It reads exactly like a live path. The exclusion test
+passed anyway, because zero diagnostics on a competitive match is precisely what
+a working 12-mans-only gate produces; only the positive case exposed it.
+
+---
+
 ## [0.10.170] - 2026-08-30
 
 ### Fixed
