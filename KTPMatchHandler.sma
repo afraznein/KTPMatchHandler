@@ -1836,7 +1836,6 @@ public task_delayed_set_match_id() {
     if (g_hasDodxStatsNatives) {
         ktp_set_match_context(g_delayedMatchId);
         log_ktp("event=MATCH_ID_SET_DELAYED match_id=%s", g_delayedMatchId);
-        ktp_apply_shot_detail(true);
     }
     #endif
 }
@@ -1914,6 +1913,12 @@ stock ktp_activate_initial_roundlive_stats() {
 
     ktp_set_match_context(g_delayedMatchId);
     log_ktp("event=MATCH_ID_SET_ROUNDLIVE match_id=%s", g_delayedMatchId);
+
+    // Raise the stats plugin's shot diagnostics here, not in
+    // task_delayed_set_match_id: that task is defined and its id is removed in
+    // three places, but nothing ever schedules it, so it is dead code. This is
+    // the authoritative activation boundary its own comment describes.
+    ktp_apply_shot_detail(true);
 
     // Pin pdata deaths + the dodx observed counter to 0 for everyone at
     // the go-live instant. dodx_reset_all_stats zeroes the observed
