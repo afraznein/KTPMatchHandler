@@ -6,6 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.172] - 2026-09-13
+
+0.10.171 is taken by the open shot-detail gate PR (#35); whichever merges second rebases.
+
+### Added
+
+- **A client blocking cvar corrections cannot ready for a match** (operator ruling 2026-09-13).
+  When KTPCvarChecker reports a player on a team as blocked (typically `cl_filterstuffcmd 1`:
+  corrections are not taking), `.ready` is refused with a chat line naming the cvar and the fix
+  (`cl_filterstuffcmd 0; <cvar> <value>`). The player is not kicked. Logged as
+  `READY_REFUSED_CVAR_BLOCKED`. A hand fix clears on the checker's next query of that cvar (up to
+  ~4 s priority tier, ~19 s standard), so the message says to wait a few seconds.
+- **Go-live is held while a blocked player is on a team.** It is checked at the moment the last
+  `.ready` would take the match live. A player who became blocked after readying is un-readied, and
+  a blocked player who never readied also holds it: once enough others are ready, a player sitting
+  unready on a team still plays. During a 2nd-half/OT pending phase a rostered player still on
+  team 0 after the map change counts too. Every blocked player is named in chat. Logged as
+  `GOLIVE_HELD_CVAR_BLOCKED` plus one `GOLIVE_BLOCKED_PLAYER` per player. Nothing happens once a
+  match is live.
+- **A held match can always be retried.** While held, an already-ready player's `.ready` re-checks
+  go-live instead of answering "already READY", so the match starts on any ready player's next
+  `.ready` once the blocked player fixes it, moves to spectator or leaves. The refusal and the hold
+  share one "on a match team" test (teams 1/2, or team 0 for a rostered player in a 2nd-half/OT
+  pending phase), so a spectator always releases the hold. The latch is cleared when a pending
+  phase starts and on plugin load.
+- **`ktp_blocked_cvar_match_types`** (default `61`): a bitmask of `1 << MatchType` choosing which
+  match types refuse. The default is every type except scrim (`.ktp`, `.ktpOT`, `.draft`,
+  `.draftOT`, `.12man`). That is broader than `ktp_match_competitive` (`.ktp`/`.ktpOT` only). `0`
+  turns the feature off. Pubs never reach `.ready`.
+- `CVAR_BLOCK_BRIDGE available=<0|1> types=<mask>` is logged once per map from `plugin_cfg`, so a
+  server where the refusal is inert says so.
+
+### Known gaps (operator decisions, not bugs)
+
+- **Joining a team after go-live is not checked.** The ruling forbids participation; this release
+  only gates readiness and go-live, because acting on a player once live was ruled out. A blocked
+  player who picks a team after LIVE plays. Closing it means refusing the team pick while blocked.
+- **`hud_takesshots` counts only when it is enforced.** KTPCvarChecker enforces it only while
+  `ktp_match_competitive` is 1, which is set at go-live and survives the halftime map change. So a
+  player blocking only `hud_takesshots` can ready for a `.ktp` first half and is refused for the
+  second.
+- **A fresh reconnect resets the block.** A real disconnect clears it (by contract), and the player
+  is re-flagged after three wrong answers: roughly 10-18 s for a priority-tier cvar, up to ~50 s
+  for a standard-tier one. A crash that gets its old slot back through the engine's slot replay
+  keeps it, which errs toward blocking.
+- **Spectator is assumed to be team 3.** A rostered player on team 0 during a 2nd-half/OT pending
+  phase counts as on a team; if a DoD spectator ever reported 0, spectating would not release a
+  hold there (fixing the cvar or leaving still would).
+
+### Load safety
+
+- KTPCvarChecker is optional. `ktp_cvar_get_blocked` is covered by a native filter set in
+  `plugin_natives`. Without one, AMXX fails the whole plugin load when a native is unbound (checker
+  absent, or older than 7.41). The filter answers only for that native, so any other missing native
+  still fails the load as before.
+- Before every call, the handler checks that the checker's library exists and that the plugin
+  titled "KTP Cvar Checker" is running. AMXX pauses the *calling* plugin when a native's owner is
+  paused or failed to load, and a checker that fails after `plugin_natives` keeps its native bound.
+  With no running checker, `.ready` behaves exactly as in 0.10.170.
+- `tests/config_parse/test_cvar_block_bridge.py` pins that shape: the filter, no `reqlib`, one
+  guarded call site, refusal before `g_ready[id] = true`, hold before the live transition, the
+  default mask derived from the enum. `config-tests` now also runs when `KTPMatchHandler.sma` changes,
+  so these and the existing source-contract tests actually run on source-only PRs.
+
 ## [0.10.170] - 2026-08-30
 
 ### Fixed

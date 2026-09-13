@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.170"
+#define PLUGIN_VERSION "0.10.172"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -467,6 +467,18 @@ new g_preMatchPauseSeconds = 5;  // OPTIMIZED: Cached from g_cvarPreMatchPauseSe
 new g_techBudgetSecs = 300;    // 5 minutes tech budget per team, per match (spans both halves)
 new bool:g_readyOverride = false;  // Debug override: when true, only 1 player needed per team
 new g_readyOverrideArmerSid[44];   // SteamID that armed the override (for armer-disconnect disarm)
+
+// ---------- Blocked-cvar refusal (KTPCvarChecker bridge) ----------
+// A client blocking cvar corrections (typically cl_filterstuffcmd 1) may not
+// ready for a match. The checker is optional: its native is filtered in
+// plugin_natives and every call goes through cvar_bridge_available().
+#define KTP_CVAR_LIBRARY      "ktp_cvar_checker"
+#define KTP_CVAR_PLUGIN_TITLE "KTP Cvar Checker"
+native ktp_cvar_get_blocked(id, cvar[], cvarLen, required[], requiredLen);
+// Bitmask of (1 << MatchType). 61 = every type except scrim (bit 1).
+new g_cvarBlockedCvarTypes;
+// Set while go-live is held, so an already-ready player's .ready re-checks it.
+new bool:g_cvarGoliveHeld = false;
 new g_countdownLeft = 0;
 
 // ---------- OPTIMIZED: Cached CVAR values (Phase 2 optimization) ----------
@@ -4693,6 +4705,13 @@ stock ktp_banner_enabled() {
 // Register natives for external plugins
 public plugin_natives() {
     register_native("ktp_is_match_active", "_native_is_match_active");
+    set_native_filter("native_filter_optional");
+}
+
+// Lets this plugin load without KTPCvarChecker 7.41+; any other missing native
+// still fails the load. trap=1 is handled too, so a stray call returns 0.
+public native_filter_optional(const name[], index, trap) {
+    return equal(name, "ktp_cvar_get_blocked") ? PLUGIN_HANDLED : PLUGIN_CONTINUE;
 }
 
 // Native: ktp_is_match_active() - Returns 1 if match is in progress (live, pending, or prestart)
@@ -4958,6 +4977,11 @@ public plugin_init() {
     register_clcmd("say_team /notready", "cmd_notready");
     register_clcmd("say .notready",      "cmd_notready");
     register_clcmd("say_team .notready", "cmd_notready");
+
+    // Match types where a client blocking cvar corrections cannot ready, as a
+    // bitmask of (1 << MatchType). Default 61: all but scrim. 0 turns it off.
+    g_cvarBlockedCvarTypes = register_cvar("ktp_blocked_cvar_match_types", "61");
+    g_cvarGoliveHeld = false;
 
     // Status + cancel
     register_clcmd("say /status",         "cmd_status");
@@ -5274,6 +5298,10 @@ public plugin_cfg() {
         log_ktp("event=DODX_STATS_NATIVES status=unavailable msg=DODX module not loaded");
     }
     #endif
+
+    // available=0 means .ready is never refused for blocked cvars on this map.
+    log_ktp("event=CVAR_BLOCK_BRIDGE available=%d types=%d",
+            cvar_bridge_available() ? 1 : 0, get_pcvar_num(g_cvarBlockedCvarTypes));
 
     // Check for persisted match context (2nd half continuation)
     restore_match_context_from_localinfo();
@@ -9107,6 +9135,68 @@ public task_setstate_discord() {
     }
 }
 
+// ========== BLOCKED-CVAR REFUSAL ==========
+
+stock bool: cvar_block_applies() {
+    if (!g_cvarBlockedCvarTypes) return false;
+    return (get_pcvar_num(g_cvarBlockedCvarTypes) & (1 << _:g_matchType)) != 0;
+}
+
+// Team 0 counts only for a rostered player still loading after a map change;
+// a spectator (team 3) is never on a match team, so spectating always releases a hold.
+stock bool: on_match_team(id) {
+    new tid = get_user_team_id(id);
+    return tid == 1 || tid == 2 || (tid == 0 && g_secondHalfPending && get_player_roster_team(id) > 0);
+}
+
+// The library is not enough: a checker that failed after plugin_natives keeps its
+// native bound, and AMXX pauses the CALLER on a call into a non-running plugin.
+// A failed load's title is "unknown", so the title lookup only matches one that ran.
+stock bool: cvar_bridge_available() {
+    if (!LibraryExists(KTP_CVAR_LIBRARY, LibType_Library)) return false;
+    new pid = is_plugin_loaded(KTP_CVAR_PLUGIN_TITLE);
+    if (pid < 0) return false;
+    new file[2], title[2], version[2], author[2], status[16];
+    get_plugin(pid, file, 0, title, 0, version, 0, author, 0, status, charsmax(status));
+    return equal(status, "running") || equal(status, "debug");
+}
+
+// Only call after cvar_bridge_available(). Returns the number of blocked cvars.
+stock cvar_block_lookup(id, cvar[], cvarLen, required[], requiredLen) {
+    cvar[0] = EOS;
+    required[0] = EOS;
+    return ktp_cvar_get_blocked(id, cvar, cvarLen, required, requiredLen);
+}
+
+stock tell_cvar_block_fix(id, const cvar[], const required[]) {
+    client_print(id, print_chat, "[KTP] You cannot ready: your client is blocking cvar corrections (%s).", cvar);
+    client_print(id, print_chat, "[KTP] In console type: cl_filterstuffcmd 0; %s %s -- wait a few seconds, then .ready again.", cvar, required);
+}
+
+// Un-readies and names every blocked player on a team. Returns how many.
+stock hold_golive_for_cvar_blocks() {
+    new ids[32], num, held = 0;
+    get_match_participants(ids, num);
+    for (new i = 0; i < num; i++) {
+        new p = ids[i];
+        if (!on_match_team(p)) continue;
+
+        new bcvar[32], breq[16];
+        if (cvar_block_lookup(p, bcvar, charsmax(bcvar), breq, charsmax(breq)) <= 0) continue;
+
+        held++;
+        new bool:wasReady = g_ready[p];
+        g_ready[p] = false;
+        new name[32], sid[44], ip[32], team[16];
+        get_identity(p, name, charsmax(name), sid, charsmax(sid), ip, charsmax(ip), team, charsmax(team));
+        log_ktp("event=GOLIVE_BLOCKED_PLAYER player='%s' steamid=%s cvar=%s was_ready=%d",
+                name, safe_sid(sid), bcvar, wasReady ? 1 : 0);
+        announce_all("Match held: %s is blocking cvar corrections (%s). Once they fix it, spectate or leave, any ready player types .ready.", name, bcvar);
+        tell_cvar_block_fix(p, bcvar, breq);
+    }
+    return held;
+}
+
 // ========== READY/LIVE COMMANDS ==========
 
 // ----- Ready / NotReady / Status -----
@@ -9143,8 +9233,23 @@ public cmd_ready(id) {
     }
     if (!is_user_connected(id)) return PLUGIN_HANDLED;
     if (g_ready[id]) {
-        client_print(id, print_chat, "[KTP] You are already READY.");
-        return PLUGIN_HANDLED;
+        // After a hold, a fixed or departed blocked player leaves nobody else able to start it.
+        if (!g_cvarGoliveHeld) {
+            client_print(id, print_chat, "[KTP] You are already READY.");
+            return PLUGIN_HANDLED;
+        }
+        g_ready[id] = false;
+    }
+    if (on_match_team(id) && cvar_block_applies() && cvar_bridge_available()) {
+        new bcvar[32], breq[16];
+        if (cvar_block_lookup(id, bcvar, charsmax(bcvar), breq, charsmax(breq)) > 0) {
+            new rname[32], rsid[44], rip[32], rteam[16];
+            get_identity(id, rname, charsmax(rname), rsid, charsmax(rsid), rip, charsmax(rip), rteam, charsmax(rteam));
+            log_ktp("event=READY_REFUSED_CVAR_BLOCKED player='%s' steamid=%s cvar=%s match_type=%d",
+                    rname, safe_sid(rsid), bcvar, _:g_matchType);
+            tell_cvar_block_fix(id, bcvar, breq);
+            return PLUGIN_HANDLED;
+        }
     }
     g_ready[id] = true;
 
@@ -9213,6 +9318,19 @@ public cmd_ready(id) {
         || (g_readyOverride && alliesReady + axisReady >= need);
     log_ktp("event=READY_CHECK allies_ready=%d axis_ready=%d need=%d will_start=%d",
             alliesReady, axisReady, need, willStart ? 1 : 0);
+
+    // Last check before go-live. A ready player can become blocked after readying,
+    // and a player on a team who never readied still plays once the rest are
+    // ready, so both hold the match. The blocked player clears it with .ready.
+    if (willStart) {
+        new held = (cvar_block_applies() && cvar_bridge_available()) ? hold_golive_for_cvar_blocks() : 0;
+        g_cvarGoliveHeld = held > 0;
+        if (held > 0) {
+            log_ktp("event=GOLIVE_HELD_CVAR_BLOCKED blocked=%d allies_ready=%d axis_ready=%d need=%d",
+                    held, alliesReady, axisReady, need);
+            return PLUGIN_HANDLED;
+        }
+    }
 
     // Start match when both teams have enough ready players (or solo override)
     if (willStart) {
@@ -10033,6 +10151,7 @@ stock enter_pending_phase(const initiator[]) {
 
     // clear any previous ready states
     for (new i = 1; i <= MAX_PLAYERS; i++) g_ready[i] = false;
+    g_cvarGoliveHeld = false;
 
     // Clear half captains (will be set by first .ready per team)
     g_halfCaptain1_name[0] = g_halfCaptain1_sid[0] = EOS;
