@@ -1,7 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.169** - Advanced competitive match management system for Day of Defeat servers
-**Version 0.10.168** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.172** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -154,6 +153,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
    // (ready count is fixed per match type: 6 for .ktp/.ktpOT, 5 for others)
    ktp_tech_budget_seconds "300"         // 5-min tech budget per team
    ktp_ot_timelimit "10"                 // Minutes per OT half (ruleset 1.10); 1-60
+   ktp_blocked_cvar_match_types "61"     // Match types refusing .ready from a client blocking cvar corrections
    ktp_unready_reminder_secs "30"        // Unready reminder interval
    ktp_unpause_reminder_secs "15"        // Unpause reminder interval
 
@@ -185,6 +185,14 @@ Match goes LIVE! (5-second countdown)
      ↓
 Map config auto-executes
 ```
+
+**Blocked cvar corrections.** With KTPCvarChecker 7.41+ loaded, a player whose client is blocking
+its corrections (typically `cl_filterstuffcmd 1`) cannot `.ready`. Chat tells them the cvar and the
+fix. If a blocked player is on a team when the last `.ready` arrives, the match is held and that
+player is named; it goes live on any ready player's next `.ready` once they fix it, spectate or leave. Nothing
+is done to anyone once the match is live, and nobody is kicked, so a blocked player who joins a team
+after LIVE is not stopped. Scrims are exempt by default (`ktp_blocked_cvar_match_types`). Without
+the checker, `.ready` is unchanged.
 
 **Alternative Match Types (no password required):**
 - `.draft` - Draft match (always available, competitive config)
@@ -551,6 +559,11 @@ ktp_lan_mode "0"                      // 1 = LAN event mode: tech pauses never e
                                       // and don't charge the budget. Read live —
                                       // flip over rcon any time, no restart needed
 ktp_unready_reminder_secs "30"        // Reminder interval for unready players
+ktp_blocked_cvar_match_types "61"     // Bitmask of (1 << match type): where a client blocking
+                                      // cvar corrections cannot .ready and holds go-live.
+                                      // Bits: 0 ktp, 1 scrim, 2 12man, 3 draft, 4 ktpOT,
+                                      // 5 draftOT. 61 = all but scrim; 0 = off.
+                                      // Needs KTPCvarChecker 7.41+, inert without it
 ktp_match_competitive "0"             // 1 = competitive (.ktp/.ktpOT), 0 = casual.
                                       // Set by the plugin, read by KTPCvarChecker
                                       // to pick its enforcement tier — a cross-plugin
@@ -1205,7 +1218,7 @@ For support and questions, please open an issue on GitHub.
 
 ## Status
 
-- **Current Version**: v0.10.169
+- **Current Version**: v0.10.172
 - **Status**: Production (fleet-wide on KTP-ReHLDS extension mode; score persistence in live verification)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + KTPAMXX 2.7.x (extension mode, no Metamod)
 - **Last Updated**: August 2026
@@ -1217,7 +1230,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.169                    ║
+║             KTP MATCH HANDLER v0.10.172                    ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1255,4 +1268,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.169** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.172** - Making competitive Day of Defeat matches better, one pause at a time.
