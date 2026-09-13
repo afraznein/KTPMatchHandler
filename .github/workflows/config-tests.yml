@@ -51,7 +51,7 @@ jobs:
           base="${{ github.event.pull_request.base.sha }}"
           head="${{ github.event.pull_request.head.sha }}"
           if git diff --name-only "$base" "$head" \
-              | grep -qE '^(ktp_maps\.ini$|documents/.*\.ini\.example$|tests/config_parse/|\.github/workflows/config-tests\.yml$)'; then
+              | grep -qE '^(KTPMatchHandler\.sma$|ktp_maps\.ini$|documents/.*\.ini\.example$|tests/config_parse/|\.github/workflows/config-tests\.yml$)'; then
             echo "run=1" >> "$GITHUB_OUTPUT"
             echo "Relevant files changed; will run pytest."
           else
