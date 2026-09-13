@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.170"
+#define PLUGIN_VERSION "0.10.171"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -312,6 +312,12 @@ new bool: g_inIntermission = false;         // true when timelimit expires - dis
 new bool: g_disableDiscord = false;         // when true, skip all Discord notifications
 new MatchType: g_matchType = MATCH_TYPE_COMPETITIVE; // Current match type
 new g_12manDuration = 20; // 12man match duration in minutes (20 or 15)
+
+// Match types allowed to turn on the stats plugin's shot-registration
+// diagnostics, as a bitmask of (1 << MatchType). Default 4 = 12-mans only.
+// The diagnostics cost a DODX native call on every weapon actuation, so they
+// are opt-in per match type rather than fleet-wide.
+new g_cvarShotDetailTypes;
 new g_scrimDuration = 20; // Scrim match duration in minutes (20 or 15)
 
 // ---------- 1.3 Community 12man Queue ID System ----------
@@ -1908,6 +1914,12 @@ stock ktp_activate_initial_roundlive_stats() {
     ktp_set_match_context(g_delayedMatchId);
     log_ktp("event=MATCH_ID_SET_ROUNDLIVE match_id=%s", g_delayedMatchId);
 
+    // Raise the stats plugin's shot diagnostics here, not in
+    // task_delayed_set_match_id: that task is defined and its id is removed in
+    // three places, but nothing ever schedules it, so it is dead code. This is
+    // the authoritative activation boundary its own comment describes.
+    ktp_apply_shot_detail(true);
+
     // Pin pdata deaths + the dodx observed counter to 0 for everyone at
     // the go-live instant. dodx_reset_all_stats zeroes the observed
     // counters ~1s before the clan restart actually executes, so death
@@ -3433,6 +3445,36 @@ stock bool: is_official_match_type(MatchType: t) {
 // for the bare form. hlstats.pl's getProperties() reads only matchid+map, so the
 // key is human-facing — but it's preserved per-site rather than unified, to keep
 // this refactor non-behavioral for log readers and greps.
+// Turn the stats plugin's shot-registration diagnostics on or off for THIS
+// match. The stats plugin owns ktp_stats_shot_detail and defaults it to 0;
+// only this plugin knows the match type, so the policy lives here.
+//
+// Match-scoped state, so it obeys the teardown-exit invariant: enabled when the
+// match context is set, and forced back to 0 through ktp_match_teardown_notify()
+// rather than at each exit. Failing closed matters because a 12-man and a scrim
+// can share a server -- a flag left on would quietly widen collection to a match
+// type nobody opted in.
+//
+// Resolved through get_cvar_pointer rather than server_cmd: if the stats plugin
+// is not loaded the cvar does not exist, and this stays silent instead of
+// spraying unknown-command noise into every match's console.
+stock ktp_apply_shot_detail(bool: live) {
+    new p = get_cvar_pointer("ktp_stats_shot_detail");
+    if (!p) return;  // stats plugin absent -- nothing to gate
+
+    new want = 0;
+    if (live && g_cvarShotDetailTypes) {
+        new mask = get_pcvar_num(g_cvarShotDetailTypes);
+        new bit  = 1 << _:g_matchType;
+        want = (mask & bit) ? 1 : 0;
+    }
+
+    if (get_pcvar_num(p) == want) return;
+    set_pcvar_num(p, want);
+    log_ktp("event=SHOT_DETAIL_SET value=%d match_type=%d live=%d",
+            want, _:g_matchType, live ? 1 : 0);
+}
+
 stock ktp_match_teardown_notify(const matchId[], const map[], const flushType[],
                                 const statusKey[] = "", const statusValue[] = "") {
     if (!matchId[0]) return;
@@ -3464,6 +3506,11 @@ stock ktp_match_teardown_notify(const matchId[], const map[], const flushType[],
     #if defined HAS_DODX
     if (g_hasDodxStatsNatives) ktp_set_match_context("");
     #endif
+
+    // Match-scoped: every teardown exit routes through here, so this is the one
+    // place it has to be dropped. Safe after the context clear -- it touches no
+    // match id.
+    ktp_apply_shot_detail(false);
 }
 
 stock bool: ac_timeline_should_record() {
@@ -4719,6 +4766,11 @@ public plugin_init() {
     g_changeLevelHandled = false;
     g_changeLevelHandledTime = 0.0;
     g_pfnChangeLevelProcessed = false;  // per-intermission debounce; extension-mode globals persist, so clear it per map here
+
+    // Same reason: the shot-diagnostics flag is match-scoped, and a server that
+    // came up mid-anything must not inherit an on-state from before. Fails
+    // closed here as well as at teardown.
+    ktp_apply_shot_detail(false);
     g_inIntermission = false;  // "changelevel in flight on THIS map" — inherently per-map; H1-end sets it
                                // and no pre-0.10.148 path cleared it before the next go-live
 
@@ -4800,6 +4852,8 @@ public plugin_init() {
     num_to_str(g_techBudgetSecs,  tmpTech,   charsmax(tmpTech));
     num_to_str(OT_TIMELIMIT_DEFAULT, tmpOtLimit, charsmax(tmpOtLimit));
 
+    // 1 << MATCH_TYPE_12MAN (2) = 4. Add bits to opt other types in.
+    g_cvarShotDetailTypes = register_cvar("ktp_shot_detail_types", "4");
     g_cvarCountdown       = register_cvar("ktp_pause_countdown",  tmpCnt);
     g_cvarPrePauseSec     = register_cvar("ktp_prepause_seconds", tmpPre);
     g_cvarPreMatchPauseSec = register_cvar("ktp_prematch_pause_seconds", tmpPre); // same default as prepause
