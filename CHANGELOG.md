@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.173] - 2026-09-13
+
+### Fixed
+
+- **The AC weapon-fire flush sent some players' shots twice and never sent others.** The
+  flush walks the player slots from a rotating start cursor, but derived each step's slot
+  from the cursor while also advancing that cursor after every emitted player. The walk
+  therefore jumped: a slot could be visited twice or three times, sending that player's
+  whole shot list again, and other slots were never visited. Those shots were not counted
+  as truncated or dropped, so the payload's loss counters read clean.
+  - Measured: `AC_WEAPON_FIRE_SEND` lines across the fleet's September logs report about
+    54% of buffered shots emitted, with zero truncation, and the stored rows carry
+    whole-list repeats. The shot table is a denominator, so both halves of the defect
+    corrupt accuracy, and the loss half inflates it.
+  - The walk now reads a start slot taken once before the loop. The cursor still ends one
+    past the last emitted player, so truncation fairness is unchanged.
+  - The aim-geometry flush had the same arithmetic. There it only deferred a skipped
+    player's windows to a later flush (the module keeps them until read), so nothing was
+    lost, but it is fixed the same way.
+  - New tripwire: `AC_WEAPON_FIRE_ACCOUNTING_MISMATCH` is logged when emitted plus
+    truncated shots do not equal the buffered count.
+  - `tests/config_parse/test_flush_rotation.py` reads both loops out of the source and runs
+    their cursor arithmetic for every start slot; it fails on the previous code.
+  - Pairs with the API change that drops repeated player entries on ingest
+    (`KTPAntiCheat`, `ac/weapon-fire-duplicate-players`). Either can ship alone; only this
+    one recovers the lost shots.
+
 ## [0.10.172] - 2026-09-13
 
 ### Added

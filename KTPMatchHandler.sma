@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.172"
+#define PLUGIN_VERSION "0.10.173"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -3181,8 +3181,12 @@ stock send_ac_aim_geometry_batch() {
     // shed". If anything ever makes a shed player consume buffer -- emitting a stub
     // row, say -- the cursor silently stops pointing at the first shed player and the
     // rotation stops being fair.
+    //
+    // Walk from a start slot taken once; the cursor moves inside the loop, and
+    // reading it per step skips and revisits slots (see the weapon-fire flush).
+    new startId = g_aimFlushCursor;
     for (new step = 0; step < MAX_PLAYERS; step++) {
-        new id = 1 + ((g_aimFlushCursor - 1 + step) % MAX_PLAYERS);
+        new id = 1 + ((startId - 1 + step) % MAX_PLAYERS);
         if (!is_user_connected(id) || is_user_bot(id)) continue;
         if (!dodx_get_aim_stats(id, stats)) continue;
 
@@ -3302,8 +3306,14 @@ stock send_ac_weapon_fire_batch() {
     // interval. Rows group by the roster entry's capture slot; an entry whose
     // player already disconnected still emits — its identity was captured at
     // fire time, which is exactly why the roster exists.
+    //
+    // The walk reads a start slot taken ONCE, never the live cursor. The cursor is
+    // advanced inside the loop, and deriving `slot` from it made each step jump past
+    // the slot after every emitted row: slots were visited twice (a player's whole
+    // shot list sent twice) or never (shots silently gone, counted nowhere).
+    new startSlot = g_fireFlushCursor;
     for (new step = 0; step < MAX_PLAYERS; step++) {
-        new slot = 1 + ((g_fireFlushCursor - 1 + step) % MAX_PLAYERS);
+        new slot = 1 + ((startSlot - 1 + step) % MAX_PLAYERS);
         for (new r = 0; r < g_fireRosterCount; r++) {
             if (g_fireRosterSlot[r] != slot) continue;
             if (g_fireRosterShots[r] == 0) continue;
@@ -3381,6 +3391,13 @@ stock send_ac_weapon_fire_batch() {
     // reason to ship the sample.
     log_ktp("event=AC_WEAPON_FIRE_SEND match_id=%s players=%d shots=%d shots_geom=%d shots_buf=%d trunc_players=%d trunc_shots=%d dropped=%d geom_rejected=%d bytes=%d",
         matchId, emitted, shotsEmitted, geomEmitted, g_fireCount, truncPlayers, truncShots, g_fireDropped, g_fireGeomRejected, pos);
+    // Every buffered shot is emitted once or counted as truncated. A rotation bug once
+    // broke this on nearly every flush while the SEND line showed it, unread -- so name
+    // the break instead of leaving it to arithmetic nobody does.
+    if (shotsEmitted + truncShots != g_fireCount) {
+        log_ktp("event=AC_WEAPON_FIRE_ACCOUNTING_MISMATCH match_id=%s shots=%d trunc_shots=%d shots_buf=%d",
+            matchId, shotsEmitted, truncShots, g_fireCount);
+    }
 
     curl_easy_perform(curl, "ac_callback");
 
