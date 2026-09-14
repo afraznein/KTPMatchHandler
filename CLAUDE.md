@@ -2,6 +2,9 @@
 
 **REQUIRED: Before writing or modifying any code in this repo, invoke the `plugin-dev` skill** (`.claude/skills/plugin-dev/SKILL.md`). It carries the state-machine safety rules and deploy workflow; do not edit the .sma without it loaded.
 
+**A design that ships as a document is NOT done** — every proposal in a docs-only PR becomes a
+tracked board item in the same act (operator ruling 2026-09-14). See `DESIGN_DOCS_ARE_NOT_DONE.md`.
+
 ## Compile Command
 
 **Production build:**
