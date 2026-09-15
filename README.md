@@ -493,6 +493,15 @@ type = competitive
 
 **On match start**, the plugin automatically executes the map's config file.
 
+Only `config` is parsed. `name` and `type` are documentary — the plugin never reads either, and a
+section that declares no `config` is skipped rather than rejected (the live table uses one for
+`dod_pandemic_aim`, a practice map with no match config).
+
+> **The fleet's `ktp_maps.ini` is owned by `afraznein/KTPDoDServerConfig`**, at
+> `serverfiles/dod/addons/ktpamx/configs/ktp_maps.ini`. Edit it there. The `ktp_maps.ini` in this
+> repo is a CI fixture for `tests/config_parse/test_ktp_maps_ini.py`; changing it changes nothing on
+> any server.
+
 ### Discord Configuration (`discord.ini`)
 
 **Relay-based integration:**
