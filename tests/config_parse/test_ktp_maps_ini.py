@@ -1,12 +1,25 @@
 """Schema validation for `ktp_maps.ini` — the plugin's per-map config map.
 
-Each section is a map name (without `.bsp`); each section carries:
-  - `config` — a `.cfg` filename loaded by exec at match start
-  - `name` — display string surfaced in chat / Discord embeds
-  - `type` — one of {competitive, scrim, casual, draft, 12man, special}
+This file is a CI fixture. The table the fleet loads lives on each game host at
+`<configsdir>/ktp_maps.ini` and is owned by `afraznein/KTPDoDServerConfig`; the
+copy in this repo exists so these assertions run against the real shape.
 
-A typo in any of these silently breaks match flow at runtime — the plugin
-falls back to no map config. This test catches structural drift early.
+What `load_map_mappings()` in `KTPMatchHandler.sma` actually does, which is what
+these tests are allowed to assert:
+
+  - it reads `config = <file>` and nothing else; `name` and `type` are never
+    parsed, so they are documentary
+  - a section that declares no `config` is skipped, not an error — the live
+    table uses one for `dod_pandemic_aim`, whose settings come from the
+    map-start config instead
+  - it stops at `MAX_MAP_ROWS` bindings and truncates keys and values to the
+    buffer widths below, all three silently
+
+An earlier version of this file required `config`, `name` and `type` in every
+section and pinned `type` to a closed set. Neither is a contract the plugin
+implements, and the live table has violated all three since `dod_pandemic_aim`
+shipped — so the test rejected the file the fleet was already running. Assert
+the parser's contract, not the format's prose.
 """
 from __future__ import annotations
 
@@ -19,14 +32,12 @@ from .conftest import REPO_ROOT
 
 CONFIG_PATH = REPO_ROOT / "ktp_maps.ini"
 
-# Per-section required keys. `name` is human-facing; everything else routes
-# to runtime behavior. If a new section type is added in the plugin source,
-# expand this set.
-REQUIRED_KEYS = {"config", "name", "type"}
-
-# Conservative — match what the plugin actually accepts. If the plugin
-# grows new types, this list grows too.
-ALLOWED_TYPES = {"competitive", "scrim", "casual", "draft", "12man", "special"}
+# KTPMatchHandler.sma: `#define MAX_MAP_ROWS 128`, `g_mapKeys[...][96]`,
+# `g_mapCfgs[...][128]`. Exceeding any of the three loses bindings or mangles a
+# path with no error at load time and no symptom until a match starts.
+MAX_MAP_ROWS = 128
+MAX_KEY_LEN = 95
+MAX_CFG_LEN = 127
 
 # A `.cfg` filename pattern. No directories — the plugin loads from the
 # server's `addons/ktpamx/configs/` dir directly.
@@ -39,11 +50,18 @@ _MAP_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 @pytest.fixture(scope="module")
 def parsed():
-    if not CONFIG_PATH.exists():
-        pytest.skip(f"{CONFIG_PATH} not present")
+    # Do not skip on a missing file: removing the fixture would then read as a
+    # pass. If it is gone, that is the failure.
+    assert CONFIG_PATH.exists(), f"{CONFIG_PATH} is missing"
     parser = configparser.ConfigParser()
     parser.read(CONFIG_PATH, encoding="utf-8")
     return parser
+
+
+def bindings(parser):
+    """Sections the plugin turns into a binding: those carrying `config`."""
+    return {s: parser.get(s, "config").strip() for s in parser.sections()
+            if parser.has_option(s, "config")}
 
 
 def test_file_parses_cleanly(parsed):
@@ -52,12 +70,11 @@ def test_file_parses_cleanly(parsed):
     assert parsed.sections(), f"{CONFIG_PATH.name}: no sections parsed"
 
 
-def test_required_keys_per_section(parsed):
-    for section in parsed.sections():
-        missing = REQUIRED_KEYS - set(parsed.options(section))
-        assert not missing, (
-            f"{CONFIG_PATH.name} [{section}]: missing required keys: {sorted(missing)}"
-        )
+def test_at_least_one_section_declares_a_config(parsed):
+    assert bindings(parsed), (
+        f"{CONFIG_PATH.name}: no section declares `config`, so the plugin "
+        f"would load zero bindings"
+    )
 
 
 def test_section_names_look_like_map_names(parsed):
@@ -68,18 +85,21 @@ def test_section_names_look_like_map_names(parsed):
 
 
 def test_config_values_are_cfg_filenames(parsed):
-    for section in parsed.sections():
-        cfg = parsed.get(section, "config", fallback="").strip()
+    for section, cfg in bindings(parsed).items():
         assert _CFG_RE.match(cfg), (
             f"{CONFIG_PATH.name} [{section}]: config={cfg!r} should be a bare .cfg filename"
         )
 
 
-def test_type_values_are_in_allowed_set(parsed):
+def test_sections_without_config_are_documentary_not_malformed(parsed):
+    """A `config`-less section is legal; it must still name itself, so a reader
+    can tell a deliberate documentary entry from a dropped `config` line."""
     for section in parsed.sections():
-        t = parsed.get(section, "type", fallback="").strip().lower()
-        assert t in ALLOWED_TYPES, (
-            f"{CONFIG_PATH.name} [{section}]: type={t!r} not in {sorted(ALLOWED_TYPES)}"
+        if parsed.has_option(section, "config"):
+            continue
+        assert parsed.get(section, "name", fallback="").strip(), (
+            f"{CONFIG_PATH.name} [{section}]: declares no `config`, so the plugin "
+            f"skips it entirely — give it a `name` so that reads as deliberate"
         )
 
 
@@ -89,20 +109,44 @@ def test_name_values_are_non_empty(parsed):
         assert name, f"{CONFIG_PATH.name} [{section}]: name is empty"
 
 
-def test_no_duplicate_map_sections(parsed):
-    """ConfigParser silently merges duplicate sections by default. We can't
-    detect that post-parse, so re-scan the raw file for duplicate `[name]`
-    headers. (This is the bug class where someone copy-pastes a section to
-    edit it and forgets to rename — runtime then picks one arbitrarily.)"""
-    seen: set[str] = set()
-    dups: list[str] = []
-    header_re = re.compile(r"^\s*\[([^\]]+)\]\s*$")
-    for raw in CONFIG_PATH.read_text(encoding="utf-8").splitlines():
-        m = header_re.match(raw)
-        if not m:
-            continue
-        name = m.group(1).strip()
-        if name in seen:
-            dups.append(name)
-        seen.add(name)
-    assert not dups, f"{CONFIG_PATH.name}: duplicate sections: {dups}"
+def test_binding_count_is_under_the_plugin_row_cap(parsed):
+    count = len(bindings(parsed))
+    assert count <= MAX_MAP_ROWS, (
+        f"{CONFIG_PATH.name}: {count} bindings exceeds MAX_MAP_ROWS={MAX_MAP_ROWS}; "
+        f"the plugin drops the overflow silently"
+    )
+
+
+def test_keys_and_values_fit_the_plugin_buffers(parsed):
+    for section, cfg in bindings(parsed).items():
+        assert len(section) <= MAX_KEY_LEN, (
+            f"{CONFIG_PATH.name} [{section}]: section name is {len(section)} chars; "
+            f"the plugin truncates at {MAX_KEY_LEN} and the lookup then never matches"
+        )
+        assert len(cfg) <= MAX_CFG_LEN, (
+            f"{CONFIG_PATH.name} [{section}]: config={cfg!r} is {len(cfg)} chars; "
+            f"the plugin truncates at {MAX_CFG_LEN} and execs a mangled path"
+        )
+
+
+def test_no_two_sections_are_the_same_map(parsed):
+    """The plugin lowercases and strips `.bsp`, so two spellings collide."""
+    seen = {}
+    for section in parsed.sections():
+        key = section.lower()
+        if key.endswith(".bsp"):
+            key = key[: -len(".bsp")]
+        assert key not in seen, (
+            f"{CONFIG_PATH.name}: [{section}] and [{seen[key]}] normalise to the same "
+            f"map key {key!r}; the plugin keeps only the first"
+        )
+        seen[key] = section
+
+
+def test_points_at_the_owning_repo():
+    """The fleet's copy is elsewhere. Say so in the file, not only in a doc."""
+    text = CONFIG_PATH.read_text(encoding="utf-8")
+    assert "KTPDoDServerConfig" in text, (
+        f"{CONFIG_PATH.name}: must name the owning repo, or the next reader edits "
+        f"this copy and changes nothing on any server"
+    )
