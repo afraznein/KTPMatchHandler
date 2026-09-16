@@ -1,0 +1,9 @@
+name: Coordination check
+on: pull_request
+
+jobs:
+  check:
+    uses: andsmit9/ktp-coordination/.github/workflows/check.yml@main
+    with:
+      repo_name: KTPMatchHandler
+    secrets: inherit
