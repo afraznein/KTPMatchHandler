@@ -188,7 +188,10 @@ if [ "$GIT_SHA" != "unknown" ]; then
         GIT_DIRTY="-unverified"
     fi
 fi
-BUILD_TIME=$(date -u +%Y-%m-%dT%H:%MZ)
+# KTP_BUILD_TIME_OVERRIDE makes a build replayable. This stamp is per-minute and
+# gets baked into the .amxx, so without it the same commit cannot be rebuilt to the
+# same md5 -- and the fleet keeps no rollback copy of the artifact a stage replaces.
+BUILD_TIME="${KTP_BUILD_TIME_OVERRIDE:-$(date -u +%Y-%m-%dT%H:%MZ)}"
 cat > "$TEMP_BUILD/include/build_info.inc" <<EOF
 #define KTP_BUILD_SHA "${GIT_SHA}${GIT_DIRTY}"
 #define KTP_BUILD_TIME "$BUILD_TIME"
