@@ -1,9 +1,21 @@
 name: Coordination check
-on: pull_request
 
+# `edited` is not optional. The default pull_request types are opened, synchronize and
+# reopened, so `github.event.pull_request.body` is frozen at trigger time -- adding the
+# required Coordination-Workstream line would not re-run the check, and a manual re-run
+# replays the same stale payload. Observed on KTPInfrastructure#427.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+# Pinned to a SHA, not @main: a moving ref means whatever lands next runs on every PR in
+# every caller. The workflow lives in the PUBLIC KTPInfrastructure because GitHub resolves
+# a private repo's reusable workflow only for repos under the same owner -- pointing at
+# andsmit9/ktp-coordination failed at STARTUP here, with no steps and no logs.
 jobs:
   check:
-    uses: andsmit9/ktp-coordination/.github/workflows/check.yml@main
+    uses: afraznein/KTPInfrastructure/.github/workflows/coordination-check-reusable.yml@4e6b0527c1ac09f9aa4ca7aabbdcf4830047182f
     with:
       repo_name: KTPMatchHandler
-    secrets: inherit
+    secrets:
+      COORD_DEPLOY_KEY: ${{ secrets.COORD_DEPLOY_KEY }}
