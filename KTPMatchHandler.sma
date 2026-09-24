@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.173"
+#define PLUGIN_VERSION "0.10.174"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -133,6 +133,15 @@ new g_acServerSecretHeader[160];     // pre-formatted "X-Server-Secret: ..." (pe
 new g_acServerEndpoint[48];          // "ip:port" of THIS server, built at plugin_cfg
 new g_acAnnouncePayload[512];        // JSON body buffer for POST /api/match/announce
 new g_acEndPayload[256];             // JSON body buffer for POST /api/match/end
+// Announce delivery state. The announce is one POST per half at a 3s timeout, so a
+// dropped packet loses the match_id linkage permanently; these carry it to the
+// callback (which cannot see the caller's locals) and hold it for re-announce.
+new g_acAnnounceMatchId[64];         // match_id of the announce in flight / awaiting confirmation
+new g_acAnnounceAttempts;            // POSTs made for g_acAnnounceMatchId; 0 = idle
+new bool:g_acAnnounceConfirmed;      // latch: a 2xx came back, stop re-announcing
+// ~20 min of 30s carriers. The measured loss clusters on whole evenings, not on
+// single packets, so this bounds an outage rather than a retransmit.
+#define AC_ANNOUNCE_MAX_ATTEMPTS 40
 // Widest match-type key the AC wire vocabulary can hold, plus EOS.
 #define AC_MATCH_TYPE_SIZE 16
 // Worst-case body: every field at full width. matchId is g_matchId[64] and the
@@ -2569,6 +2578,13 @@ stock generate_match_id() {
 stock clear_match_id() {
     g_matchId[0] = EOS;
 
+    // Match identity is gone, so an unconfirmed announce for it can never be
+    // resolved — drop the budget here rather than at each teardown exit, since
+    // every one of them routes through this.
+#if defined HAS_CURL
+    ac_announce_state_reset();
+#endif
+
     // Reset 1.3 Community state
     g_is13CommunityMatch = false;
     g_13QueueId[0] = EOS;
@@ -2854,6 +2870,37 @@ public ac_callback(CURL:curl, CURLcode:code) {
     // g_acCurlHeaders is persistent — never free here (async-safety, same principle as g_curlHeaders).
 }
 
+// Announce-only callback. The shared ac_callback names neither the endpoint nor the
+// match, so a lost announce was indistinguishable from any other AC POST failing and
+// left no log line to correlate against the missing ktp_ac_match_index row.
+public ac_announce_callback(CURL:curl, CURLcode:code) {
+    new httpCode = 0;
+    new bool:ok = false;
+
+    if (code != CURLE_OK) {
+        new error[128];
+        curl_easy_strerror(code, error, charsmax(error));
+        log_ktp("event=AC_ANNOUNCE_FAILED reason=curl curl_code=%d error='%s' match_id=%s endpoint=%s attempt=%d",
+            _:code, error, g_acAnnounceMatchId, g_acServerEndpoint, g_acAnnounceAttempts);
+    } else {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, httpCode);
+        ok = (httpCode >= 200 && httpCode < 300);
+        if (ok) {
+            log_ktp("event=AC_ANNOUNCE_OK http=%d match_id=%s endpoint=%s attempt=%d",
+                httpCode, g_acAnnounceMatchId, g_acServerEndpoint, g_acAnnounceAttempts);
+        } else {
+            log_ktp("event=AC_ANNOUNCE_FAILED reason=http http=%d match_id=%s endpoint=%s attempt=%d",
+                httpCode, g_acAnnounceMatchId, g_acServerEndpoint, g_acAnnounceAttempts);
+        }
+    }
+
+    // Latch on success only. Everything else leaves the re-announce armed.
+    if (ok) g_acAnnounceConfirmed = true;
+
+    curl_easy_cleanup(curl);
+    // g_acCurlHeaders is persistent — never free here (async-safety, same principle as g_curlHeaders).
+}
+
 // Match-type key for the anti-cheat match index. Deliberately NOT
 // get_match_type_key: that spelling is the ktp_match_side_map forward's ABI,
 // while ktp_ac_match_index already holds 851 rows in this one (backfilled from
@@ -2893,12 +2940,23 @@ stock send_ac_match_announce(const matchId[]) {
         "{^"matchId^":^"%s^",^"serverEndpoint^":^"%s^",^"matchType^":^"%s^"}",
         matchId, g_acServerEndpoint, acMatchType);
 
+    // A new match id restarts the budget; a half-2/OT re-announce of the same id
+    // keeps it, so a match that has already burned its retries cannot get a second
+    // full allowance by changing period.
+    if (!equal(g_acAnnounceMatchId, matchId)) {
+        copy(g_acAnnounceMatchId, charsmax(g_acAnnounceMatchId), matchId);
+        g_acAnnounceAttempts = 0;
+    }
+    g_acAnnounceConfirmed = false;
+    g_acAnnounceAttempts++;
+
     new url[256];
     formatex(url, charsmax(url), "%s/api/match/announce", g_acApiBaseUrl);
 
     new CURL:curl = curl_easy_init();
     if (!curl) {
-        log_ktp("event=AC_ERROR reason='curl_init_failed' endpoint=announce");
+        log_ktp("event=AC_ANNOUNCE_FAILED reason='curl_init_failed' match_id=%s endpoint=%s attempt=%d",
+            matchId, g_acServerEndpoint, g_acAnnounceAttempts);
         return;
     }
 
@@ -2908,8 +2966,38 @@ stock send_ac_match_announce(const matchId[]) {
     curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_acAnnouncePayload);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
 
-    log_ktp("event=AC_MATCH_ANNOUNCE_SEND match_id=%s endpoint=%s", matchId, g_acServerEndpoint);
-    curl_easy_perform(curl, "ac_callback");
+    log_ktp("event=AC_MATCH_ANNOUNCE_SEND match_id=%s endpoint=%s attempt=%d",
+        matchId, g_acServerEndpoint, g_acAnnounceAttempts);
+    curl_easy_perform(curl, "ac_announce_callback");
+}
+
+// Re-announce carrier. Rides task_flush_weapon_timeline instead of owning a timer:
+// the cadence that matters here is "is the API reachable yet", and the flush task
+// already answers that every 30s for the whole life of a match, with an arm/disarm
+// lifecycle that has been correct since 0.5.0. A private backoff would have to
+// re-derive both and would still expire before a multi-minute outage ends.
+stock ac_announce_reannounce_if_unconfirmed() {
+    if (!g_acAnnounceMatchId[0] || g_acAnnounceConfirmed) return;
+    if (!g_matchId[0] || !equal(g_matchId, g_acAnnounceMatchId)) return;   // match moved on
+
+    if (g_acAnnounceAttempts >= AC_ANNOUNCE_MAX_ATTEMPTS) {
+        log_ktp("event=AC_ANNOUNCE_GIVEUP match_id=%s endpoint=%s attempts=%d",
+            g_acAnnounceMatchId, g_acServerEndpoint, g_acAnnounceAttempts);
+        g_acAnnounceMatchId[0] = EOS;   // stop re-arming; the GIVEUP line is the record
+        return;
+    }
+
+    log_ktp("event=AC_ANNOUNCE_RETRY match_id=%s endpoint=%s attempt=%d",
+        g_acAnnounceMatchId, g_acServerEndpoint, g_acAnnounceAttempts + 1);
+    send_ac_match_announce(g_acAnnounceMatchId);
+}
+
+// Drop the announce budget/latch. Called wherever match identity is cleared, so a
+// stale pending id can never make the next match's flush task re-POST a dead one.
+stock ac_announce_state_reset() {
+    g_acAnnounceMatchId[0] = EOS;
+    g_acAnnounceAttempts = 0;
+    g_acAnnounceConfirmed = false;
 }
 
 // Mark a match ended on the KTPAntiCheat API. Idempotent — only updates rows with ended_at IS NULL.
@@ -2942,6 +3030,7 @@ stock ktp_reset_test_ac_state() {
     // earlier match after all authoritative counts have gone to zero.
     g_acAnnouncePayload[0] = EOS;
     g_acEndPayload[0] = EOS;
+    ac_announce_state_reset();
     g_weaponTimelineJsonBuf[0] = EOS;
     g_aimGeometryJsonBuf[0] = EOS;
     g_fireJsonBuf[0] = EOS;
@@ -3714,6 +3803,10 @@ public client_damage(att, vic, dmg, wpn, hitplace, TA) {
 
 public task_flush_weapon_timeline() {
 #if defined HAS_CURL
+    // First: an unconfirmed announce means every batch below lands under a match_id
+    // the AC cannot resolve, so re-announcing is the precondition for the rest.
+    ac_announce_reannounce_if_unconfirmed();
+
     send_ac_weapon_timeline_batch();
     // Same cadence, same task: a second timer would drift against this one and
     // make two payloads describing the same interval disagree about its bounds.
