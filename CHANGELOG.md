@@ -6,6 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.174] - 2026-09-24
+
+### Fixed
+
+- **A lost match announce was permanent and left nothing in the log to name it.**
+  `send_ac_match_announce` was one `curl_easy_perform` per half at a 3s timeout with no
+  retry and no latch, and it reported through `ac_callback`, shared with every other AC
+  POST. That callback logs `AC_CURL_ERROR` / `AC_HTTP_ERROR` with neither the endpoint nor
+  the match id, so a dropped announce produced no `ktp_ac_match_index` row *and* no line
+  anyone could correlate against it. Sessions then linked to a neighbouring match or to
+  nothing, and the only evidence was months of already-corrupted linkage.
+  - **Diagnostics first.** The announce now reports through its own
+    `ac_announce_callback`. Every outcome — curl error, non-2xx, and success — logs
+    `AC_ANNOUNCE_FAILED` / `AC_ANNOUNCE_OK` carrying `match_id=`, `endpoint=` and
+    `attempt=`. The `curl_easy_init` failure path, which never reaches a callback, names
+    them too.
+  - **Re-announce rides the existing 30s weapon-timeline flush**, not a private backoff.
+    An unconfirmed announce is re-sent on each flush until a 2xx latches it, the match id
+    changes, or `AC_ANNOUNCE_MAX_ATTEMPTS` (40, ~20 minutes) is spent — which logs
+    `AC_ANNOUNCE_GIVEUP`. `/api/match/announce` is an idempotent upsert
+    (`ON DUPLICATE KEY UPDATE`), so a duplicate costs one row update.
+  - Chosen over a short exponential backoff because the measured loss is not per-packet.
+    Re-derived 2026-09-24: of 28 sessions with a server endpoint and no overlapping index
+    row, 9 fall on 2026-09-14 and 7 on 2026-09-21 — 16 of 28 on two evenings. A
+    three-attempt backoff expires inside an outage of that shape; a 30s carrier that runs
+    for the life of the match does not.
+  - The announce budget is dropped in `clear_match_id`, the funnel every teardown exit
+    already routes through, so a pending id can never be re-POSTed against a later match.
+    A contained `.testmatch` never arms it: the suppression return precedes every write.
+  - `tests/config_parse/test_ac_announce_retry.py` pins the diagnostics and the retry
+    contract from source; six mutations of the fix each fail exactly one of its tests.
+
+### Known issue (not fixed here — needs an API-side change)
+
+- `ended_at` is NULL on 43 of 1365 `ktp_ac_match_index` rows (re-derived 2026-09-24).
+  `plugin_end` does not send the match-end, so any restart mid-match leaks one
+  permanently. The plugin cannot close a row it is being unloaded out of; the fix belongs
+  in the AC API (age out an unclosed row, or close it on the next announce for that
+  endpoint). Unrelated to the announce loss above.
+
 ## [0.10.173] - 2026-09-13
 
 ### Fixed
