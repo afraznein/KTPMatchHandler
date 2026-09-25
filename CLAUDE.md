@@ -107,6 +107,15 @@ When starting a 12man, player selects "1.3 Community Discord" option:
 - OT stays on same map via `SetHookChainArg()` to modify map in-place (v0.10.34+)
 - Match ID format: `{timestamp}-{shortHostname}` (e.g., `1768174986-ATL2`)
 - Tactical pauses disabled (v0.10.35) - only `.tech` allowed
+- `lookup_cfg_for_map()` matches a map to a config by PREFIX, not by equality, and
+  takes the FIRST row in `ktp_maps.ini` order that matches — `containi(lower, key) == 0`
+  after the `.bsp` suffix is stripped and the name lowercased.
+  - So removing a `[dod_x]` section also removes a silent fallback for every `dod_x*`
+    variant on disk, and a new map whose stem extends an existing key inherits that
+    key's config instead of getting none. Check what a chosen stem resolves to before
+    shipping it.
+  - Section ORDER is therefore load-bearing twice over: it is also the order
+    `.changemap` renders, which `ktp_maps.ini` states in its own heading.
 
 ## Match Flow
 
