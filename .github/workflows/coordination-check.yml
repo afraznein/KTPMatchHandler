@@ -14,7 +14,7 @@ on:
 # andsmit9/ktp-coordination failed at STARTUP here, with no steps and no logs.
 jobs:
   check:
-    uses: afraznein/KTPInfrastructure/.github/workflows/coordination-check-reusable.yml@4e6b0527c1ac09f9aa4ca7aabbdcf4830047182f
+    uses: afraznein/KTPInfrastructure/.github/workflows/coordination-check-reusable.yml@635e5d86b268691fb9d536e1944308e33b6cffde
     with:
       repo_name: KTPMatchHandler
     secrets:
