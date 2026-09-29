@@ -7,6 +7,8 @@ score restore that lands before then is undone by the restart itself.
 from pathlib import Path
 import re
 
+from ._pawn_sim import Sim
+
 
 SOURCE = Path(__file__).resolve().parents[2] / "KTPMatchHandler.sma"
 HELPER = "ktp_clan_restart_wait_secs"
@@ -37,13 +39,9 @@ def _delay_expr(body: str, task: str) -> str:
 
 
 def _wait_for(margin_define: str, clan_timer: float) -> float:
-    """Evaluate the helper's arithmetic as written in the source."""
-    body = _body("stock", HELPER)
-    assert 'get_cvar_float("mp_clan_timer")' in body
-    assert "floatclamp(" in body and "CLAN_TIMER_MAX_SECS" in body
-    assert "floatmax(countdown + margin, CLAN_RESTART_WAIT_FLOOR_SECS)" in body
-    countdown = min(max(clan_timer, 0.0), _define("CLAN_TIMER_MAX_SECS"))
-    return max(countdown + _define(margin_define), _define("CLAN_RESTART_WAIT_FLOOR_SECS"))
+    """Run the helper as written in the source, with mp_clan_timer set."""
+    sim = Sim(clan_timer=clan_timer)
+    return sim.call(HELPER, [_define(margin_define)])
 
 
 def _delay_variable_uses_helper(body: str, expr: str, margin_define: str) -> None:

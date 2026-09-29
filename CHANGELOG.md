@@ -31,15 +31,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     AMXX checks tasks every 0.1s and runs the due ones in slot order, so the 0.1s Phase 1
     task can run before the 0.05s config task and read the pre-config `mp_clan_timer`
     (20 on the local stack, which made the 0.10.175 fallback fire at 21s).
+  - Only a `RoundState=0` that arrives no more than 1s short of `mp_clan_timer` after the
+    wait is armed counts as the clan restart's reset. Warmup rounds keep winning (3/4/5) and
+    resetting (0) through the countdown, and 0.10.176 as first cut took the first of those
+    as the reset, so a warmup round's `RoundState=1` could still take the match live ~4s
+    before the clan restart. Rejected ones log `event=ROUNDLIVE_RESET_IGNORED`. With a
+    timer under a second the reset can land before the wait is armed; go-live is then left
+    to the fallback, which fires inside the first round's freeze.
   - **Behaviour change: the freeze-time stats pause is active for the first time.**
     Between a round win and the next round start, DODX stats are paused and
-    `KTP_ROUND_FREEZE` / `KTP_ROUND_LIVE` reach HLStatsX, whose `round_live` gate then
-    stops tagging freeze-time events with the match id. Neither has ever happened in
-    production before.
+    `KTP_ROUND_FREEZE` / `KTP_ROUND_LIVE` reach HLStatsX. Neither has ever happened in
+    production before, and the current daemon does more with them than stop tagging
+    freeze-time events with the match id: it **drops** `ktp_flag_state_events` rows that
+    arrive during a freeze (`Flag state ignored outside live match context`), including the
+    round reset's, and tags damage buffered before the freeze with no match id when it is
+    flushed inside one.
+  - **Deploy precondition: the KTPHLStatsX change on `ne/round-freeze-producer-context`,
+    which fixes both, must be live on the daemon BEFORE this plugin reaches the fleet.**
+    This plugin without it loses flag-state history and damage attribution every round.
   - A freeze pause always has a way out: `RoundState=1`, a 30s watchdog
     (`event=ROUND_FREEZE_WATCHDOG`) if that never comes, and every match teardown,
     because `ktp_match_teardown_notify` now clears it. Half 1 end, `.forcereset` and every
-    map load already unpaused.
+    map load already unpaused. The watchdog also writes `KTP_ROUND_LIVE`: HLStatsX saw the
+    freeze, and once the watchdog has set the round live the late `RoundState=1` changes
+    nothing, so without it the daemon stayed at `round_live=0` for the rest of the round
+    (the rest of the half, on its last round). Teardown does not need one, because
+    `KTP_MATCH_END` / `KTP_HALF_END` drop the daemon's match context.
   - Every `RoundState` is logged as `event=ROUNDSTATE state= ... since_arm=`, so the
     values the DLL sends, and how long after the restart the round goes live, can be read
     off a live server.

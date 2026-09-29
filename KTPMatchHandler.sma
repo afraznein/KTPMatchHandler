@@ -1762,10 +1762,14 @@ public task_delayed_score_restore() {
 #define SCORE_RESTORE_MARGIN_SECS 2.0
 #define CLAN_RESTART_WAIT_FLOOR_SECS 2.0
 #define CLAN_TIMER_MAX_SECS 255.0   // the countdown HUD message carries it in one byte
+#define CLAN_RESET_EARLY_SECS 1.0   // slack for the arm landing a task tick after the countdown starts
+
+stock Float:ktp_clan_timer_secs() {
+    return floatclamp(get_cvar_float("mp_clan_timer"), 0.0, CLAN_TIMER_MAX_SECS);
+}
 
 stock Float:ktp_clan_restart_wait_secs(Float:margin) {
-    new Float:countdown = floatclamp(get_cvar_float("mp_clan_timer"), 0.0, CLAN_TIMER_MAX_SECS);
-    return floatmax(countdown + margin, CLAN_RESTART_WAIT_FLOOR_SECS);
+    return floatmax(ktp_clan_timer_secs() + margin, CLAN_RESTART_WAIT_FLOOR_SECS);
 }
 
 stock Float:ktp_arm_roundlive_fallback(Float:delay) {
@@ -1831,22 +1835,31 @@ stock schedule_match_start_log(const matchId[], const map[], const halfText[]) {
 }
 
 // =============== Round-State Filtering for Stats Accuracy ===============
-// RoundState: BYTE state. 1 = round live; anything else is a freeze (0 = the pre-round
-// after a restart, 3/4 = a side won the round), during which DODX stats are paused.
+// RoundState: BYTE. 1 comes only from RoundUnfreeze; 0 from a round reset (TeamWon,
+// StartClanMatch, GoodToGo); 3 Allies / 4 Axis / 5 draw from a round result
+// (CScoreEvent::Use, TimerExpired). Every non-1 is a freeze and pauses DODX stats.
 public evt_RoundState() {
     new roundState = read_data(1);
     log_ktp("event=ROUNDSTATE state=%d match_live=%d round_live=%d awaiting=%d since_arm=%.1f",
             roundState, g_matchLive ? 1 : 0, g_roundLive ? 1 : 0, g_awaitingRoundLive ? 1 : 0,
             g_awaitingRoundLive ? get_gametime() - g_roundLiveArmedAt : -1.0);
 
-    // A RoundState=1 during the countdown belongs to the warmup round, not the match:
-    // the restart first resets the round, and the next 1 is go-live.
+    // Warmup rounds keep winning and resetting through the countdown, so only a 0 once it
+    // has run out is the clan restart, and the 1 after it is go-live. A reset that beats the
+    // arm (a timer under a second) leaves go-live to the fallback, inside the round's freeze.
     if (g_awaitingRoundLive) {
         if (roundState != 1) {
             if (!g_roundResetSeen) {
+                new Float:sinceArm = get_gametime() - g_roundLiveArmedAt;
+                if (roundState != 0 || sinceArm < ktp_clan_timer_secs() - CLAN_RESET_EARLY_SECS) {
+                    log_ktp("event=ROUNDLIVE_RESET_IGNORED reason=warmup_round state=%d since_arm=%.1f match_id=%s",
+                            roundState, sinceArm, g_delayedMatchId);
+                    return PLUGIN_CONTINUE;
+                }
                 g_roundResetSeen = true;
                 ktp_arm_roundlive_fallback(ROUNDLIVE_AFTER_RESET_SECS);
-                log_ktp("event=ROUNDLIVE_RESET_SEEN state=%d match_id=%s", roundState, g_delayedMatchId);
+                log_ktp("event=ROUNDLIVE_RESET_SEEN state=%d since_arm=%.1f match_id=%s",
+                        roundState, sinceArm, g_delayedMatchId);
             }
             return PLUGIN_CONTINUE;
         }
@@ -1868,7 +1881,7 @@ public evt_RoundState() {
                 dodx_set_stats_paused(0);
             }
             #endif
-            log_message("KTP_ROUND_LIVE (matchid ^"%s^")", g_matchId);
+            ktp_log_round_live();
             log_ktp("event=ROUND_LIVE match_id=%s", g_matchId);
         }
 
@@ -1900,11 +1913,18 @@ public evt_RoundState() {
 public task_round_freeze_watchdog() {
     if (g_roundLive || !g_matchLive || g_awaitingRoundLive) return;
     ktp_clear_round_freeze();
+    // HLStatsX saw the freeze, and g_roundLive now swallows the late RoundState=1.
+    ktp_log_round_live();
     log_ktp("event=ROUND_FREEZE_WATCHDOG match_id=%s after=%.0fs", g_matchId, ROUND_FREEZE_WATCHDOG_SECS);
 }
 
+stock ktp_log_round_live() {
+    log_message("KTP_ROUND_LIVE (matchid ^"%s^")", g_matchId);
+}
+
 // Ends a round-freeze stats pause. Every match teardown routes through here via
-// ktp_match_teardown_notify, so no exit can leave a freeze pause behind.
+// ktp_match_teardown_notify, so no exit can leave a freeze pause behind. It tells
+// HLStatsX nothing: KTP_MATCH_END / KTP_HALF_END drop the daemon's round state anyway.
 stock ktp_clear_round_freeze() {
     remove_task(g_taskRoundFreezeWatchdogId);
     g_roundLive = true;
@@ -4943,8 +4963,8 @@ public plugin_init() {
     g_inOvertime = false;
     g_otRound = 0;
 
-    // Reset DODX stats pause — g_bStatsPaused (C++ global) survives map change,
-    // but Pawn g_roundLive resets to true. Unconditional unpause ensures clean state.
+    // A changelevel keeps both g_bStatsPaused (C++) and every Pawn global, g_roundLive
+    // included, so a pause from the last map would still hold. The next go-live resets both.
     #if defined HAS_DODX
     dodx_set_stats_paused(0);
     #endif
