@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.175"
+#define PLUGIN_VERSION "0.10.176"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -458,9 +458,6 @@ new g_lastEmbedScore[3];      // Last scores sent to Discord embed (avoid redund
 new g_pendingScoreAllies = 0; // Pending score to restore to Allies (for deferred restoration)
 new g_pendingScoreAxis = 0;   // Pending score to restore to Axis (for deferred restoration)
 
-// ---------- Score Broadcast State ----------
-new bool:g_skipTeamScoreAdjust = false;  // Skip msg_TeamScore adjustment (used during direct broadcast)
-
 // ---------- Overtime State ----------
 new bool:g_inOvertime = false;      // Currently in overtime
 new g_otRound = 0;                  // Current OT round (1, 2, 3...)
@@ -753,6 +750,10 @@ new g_taskRestartHalfStatsId = 55623;       // Task ID for deferred restarthalf 
 new g_taskRestartHalfDiscordId = 55624;     // Task ID for deferred restarthalf Discord (phase 2, 0.2s)
 new g_taskPendingPhaseId = 55625;           // Task ID for deferred enter_pending_phase after confirm
 new g_taskRoundLiveTimeoutId = 55626;      // Task ID for roundlive timeout fallback
+new g_taskRoundFreezeWatchdogId = 55634;   // Task ID for the round-freeze stats-pause watchdog
+new Float:g_roundLiveArmedAt = 0.0;        // Gametime the go-live wait was armed (for the RoundState log)
+new bool:g_roundResetSeen = false;         // The clan restart's round reset arrived during the go-live wait
+#define ROUND_FREEZE_WATCHDOG_SECS 30.0
 new g_taskContinuationAnnounceId = 55629;  // Task ID for deferred 2nd-half/OT announce (clients reconnect window)
 new g_taskContinuationReminderId = 55630;  // Task ID base for early ".ready" chat reminders (uses +1 for 2nd reminder)
 new g_taskWeaponFlushId = 55632;           // Task ID for repeating AC weapon-timeline flush (55631 reserved: reminder base +1)
@@ -778,73 +779,9 @@ stock log_ktp(const fmt[], any:...) {
 }
 
 // ================= MATCH SCORE TRACKING =================
-
-// Hook TeamScore message
-// DoD format: BYTE teamIndex (1=Allies, 2=Axis), SHORT score
-// Note: DoD uses team INDEX, not team NAME like CS/HL
-public msg_TeamScore() {
-    // Read team index (DoD sends BYTE for team ID, not string)
-    new teamId = get_msg_arg_int(1);
-    new score = get_msg_arg_int(2);
-    new originalScore = score;
-
-    // Validate team ID (1=Allies, 2=Axis)
-    if (teamId != 1 && teamId != 2)
-        return PLUGIN_CONTINUE;
-
-    // ALWAYS track scores — even during intermission (g_matchLive may be false
-    // but TeamScore still fires with final scores needed for halftime save).
-    // The heavy operations (adjustment, localinfo write) are gated below.
-    // v0.10.107 fix: this line was below the !g_matchLive gate in v0.10.106
-    g_matchScore[teamId] = originalScore;
-
-    // Skip adjustment and localinfo save when no match is live
-    if (!g_matchLive) return PLUGIN_CONTINUE;
-
-    // OBSERVE (0.10.143): g_matchScore stores the raw message value above,
-    // but game-sent h2 messages carry 2nd-half-only scores while our direct
-    // broadcasts (g_skipTeamScoreAdjust) carry grand totals — the cell's
-    // meaning depends on the last writer. One live h2 flag cap through this
-    // log settles whether downstream consumers double-count or see a
-    // transient; do not change the adjustment until then.
-    if (g_currentHalf == 2 && !g_inOvertime) {
-        log_ktp("event=TEAMSCORE_H2_OBSERVE team=%d raw=%d skip_adjust=%d h1=%d-%d",
-                teamId, originalScore, g_skipTeamScoreAdjust ? 1 : 0,
-                g_firstHalfScore[1], g_firstHalfScore[2]);
-    }
-
-    // =============== 2ND HALF SCORE ADJUSTMENT ===============
-    // In 2nd half, modify game-sent TeamScore messages to add 1st half scores
-    // This makes the scoreboard show grand totals instead of just 2nd half scores
-    // Teams swap sides: Team1 was Allies (1st) -> now Axis, Team2 was Axis (1st) -> now Allies
-    // SKIP if g_skipTeamScoreAdjust is set (our direct broadcasts already have correct totals)
-    // !g_inOvertime is belt-and-braces here and above — OT carries its own half code now.
-    if (g_currentHalf == 2 && !g_inOvertime && !g_skipTeamScoreAdjust) {
-        new baseScore = 0;
-        if (teamId == 1) {
-            baseScore = g_firstHalfScore[2];
-        } else if (teamId == 2) {
-            baseScore = g_firstHalfScore[1];
-        }
-
-        if (baseScore > 0) {
-            new adjustedScore = score + baseScore;
-            set_msg_arg_int(2, ARG_SHORT, adjustedScore);
-            score = adjustedScore;
-        }
-    }
-    // ===========================================================
-
-    // If the regulation 1st half is live, persist scores for 2nd half restoration.
-    // OT rounds carry their own half code and deliberately do not land here.
-    if (g_currentHalf == 1) {
-        new buf[16];
-        format_scores(buf, charsmax(buf), g_matchScore[1], g_matchScore[2]);
-        set_localinfo(LOCALINFO_H1_SCORES, buf);
-    }
-
-    return PLUGIN_CONTINUE;
-}
+// Scores come from gamerules (update_match_scores_from_dodx), never from TeamScore
+// messages: register_message is not dispatched in extension mode, and the game's
+// TeamScore is already the grand total once the 2nd half restores the h1 score.
 
 // ================= GAME END DETECTION =================
 // NOTE: The logevent-based game end detection has been REMOVED.
@@ -1589,14 +1526,11 @@ stock save_ot_state_to_localinfo() {
 // This avoids the server crashes caused by AMX message natives for TeamScore
 stock broadcast_team_score(teamId, score) {
     #if defined HAS_DODX
-    // Set flag to skip msg_TeamScore hook adjustment (we're broadcasting the correct total already)
-    g_skipTeamScoreAdjust = true;
     if (dodx_broadcast_team_score(teamId, score)) {
         log_ktp("event=BROADCAST_SCORE team=%d score=%d", teamId, score);
     } else {
         log_ktp("event=BROADCAST_SCORE_FAIL team=%d score=%d reason=dodx_native_failed", teamId, score);
     }
-    g_skipTeamScoreAdjust = false;
     #else
     log_ktp("event=BROADCAST_SCORE_SKIP team=%d score=%d reason=no_dodx", teamId, score);
     #endif
@@ -1821,8 +1755,10 @@ public task_delayed_score_restore() {
 }
 
 // The clan restart lands when the mp_clan_timer countdown ends, so outwait the live cvar.
-// The countdown ending IS go-live here, so the round-live margin is live play with stats paused.
-#define ROUNDLIVE_FALLBACK_MARGIN_SECS 1.0
+// The fallback has to outlast the restart's round reset so a working RoundState sees it;
+// after the reset the round goes live a few seconds later, so it is re-armed from there.
+#define ROUNDLIVE_FALLBACK_MARGIN_SECS 3.0
+#define ROUNDLIVE_AFTER_RESET_SECS 15.0
 #define SCORE_RESTORE_MARGIN_SECS 2.0
 #define CLAN_RESTART_WAIT_FLOOR_SECS 2.0
 #define CLAN_TIMER_MAX_SECS 255.0   // the countdown HUD message carries it in one byte
@@ -1830,6 +1766,12 @@ public task_delayed_score_restore() {
 stock Float:ktp_clan_restart_wait_secs(Float:margin) {
     new Float:countdown = floatclamp(get_cvar_float("mp_clan_timer"), 0.0, CLAN_TIMER_MAX_SECS);
     return floatmax(countdown + margin, CLAN_RESTART_WAIT_FLOOR_SECS);
+}
+
+stock Float:ktp_arm_roundlive_fallback(Float:delay) {
+    remove_task(g_taskRoundLiveTimeoutId);
+    set_task(delay, "task_roundlive_timeout", g_taskRoundLiveTimeoutId);
+    return delay;
 }
 
 // Schedule delayed score restoration (called from match start for 2nd half)
@@ -1889,12 +1831,33 @@ stock schedule_match_start_log(const matchId[], const map[], const halfText[]) {
 }
 
 // =============== Round-State Filtering for Stats Accuracy ===============
-// RoundState message: BYTE state (1=round live, other=freeze/pre-round)
-// When round is frozen, pause DODX stats to prevent phantom kills from being counted.
-public msg_RoundState() {
-    new roundState = get_msg_arg_int(1);
+// RoundState: BYTE state. 1 = round live; anything else is a freeze (0 = the pre-round
+// after a restart, 3/4 = a side won the round), during which DODX stats are paused.
+public evt_RoundState() {
+    new roundState = read_data(1);
+    log_ktp("event=ROUNDSTATE state=%d match_live=%d round_live=%d awaiting=%d since_arm=%.1f",
+            roundState, g_matchLive ? 1 : 0, g_roundLive ? 1 : 0, g_awaitingRoundLive ? 1 : 0,
+            g_awaitingRoundLive ? get_gametime() - g_roundLiveArmedAt : -1.0);
+
+    // A RoundState=1 during the countdown belongs to the warmup round, not the match:
+    // the restart first resets the round, and the next 1 is go-live.
+    if (g_awaitingRoundLive) {
+        if (roundState != 1) {
+            if (!g_roundResetSeen) {
+                g_roundResetSeen = true;
+                ktp_arm_roundlive_fallback(ROUNDLIVE_AFTER_RESET_SECS);
+                log_ktp("event=ROUNDLIVE_RESET_SEEN state=%d match_id=%s", roundState, g_delayedMatchId);
+            }
+            return PLUGIN_CONTINUE;
+        }
+        if (!g_roundResetSeen) {
+            log_ktp("event=ROUND_LIVE_IGNORED reason=before_clan_restart match_id=%s", g_delayedMatchId);
+            return PLUGIN_CONTINUE;
+        }
+    }
 
     if (roundState == 1) {
+        remove_task(g_taskRoundFreezeWatchdogId);
         // Round going live
         if (!g_roundLive && g_matchLive) {
             g_roundLive = true;
@@ -1925,10 +1888,29 @@ public msg_RoundState() {
             }
             #endif
             log_message("KTP_ROUND_FREEZE (matchid ^"%s^")", g_matchId);
-            log_ktp("event=ROUND_FREEZE match_id=%s", g_matchId);
+            log_ktp("event=ROUND_FREEZE match_id=%s state=%d", g_matchId, roundState);
+            // A freeze whose RoundState=1 never comes must not pause the rest of the half.
+            remove_task(g_taskRoundFreezeWatchdogId);
+            set_task(ROUND_FREEZE_WATCHDOG_SECS, "task_round_freeze_watchdog", g_taskRoundFreezeWatchdogId);
         }
     }
     return PLUGIN_CONTINUE;
+}
+
+public task_round_freeze_watchdog() {
+    if (g_roundLive || !g_matchLive || g_awaitingRoundLive) return;
+    ktp_clear_round_freeze();
+    log_ktp("event=ROUND_FREEZE_WATCHDOG match_id=%s after=%.0fs", g_matchId, ROUND_FREEZE_WATCHDOG_SECS);
+}
+
+// Ends a round-freeze stats pause. Every match teardown routes through here via
+// ktp_match_teardown_notify, so no exit can leave a freeze pause behind.
+stock ktp_clear_round_freeze() {
+    remove_task(g_taskRoundFreezeWatchdogId);
+    g_roundLive = true;
+    #if defined HAS_DODX
+    if (g_hasDodxStatsNatives) dodx_set_stats_paused(0);
+    #endif
 }
 
 // One authoritative initial-activation boundary for both RoundState=1 and its
@@ -2003,11 +1985,11 @@ public task_roundlive_match_context() {
         g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
 }
 
-// Go-live at the end of the clan countdown. RoundState=1 would cancel it, but is not delivered in extension mode.
+// Fallback go-live: RoundState=1 cancels this; it fires only if that signal never arrives.
 public task_roundlive_timeout() {
     if (!g_awaitingRoundLive) return;
 
-    log_amx("[KTP] Clan countdown over, round live (no RoundState signal)");
+    log_amx("[KTP] WARNING: no RoundState=1 by the end of the clan countdown, going live anyway");
     log_ktp("event=ROUNDLIVE_TIMEOUT match_id=%s", g_delayedMatchId);
 
     g_roundLive = true;  // Assume live to avoid permanent pause
@@ -3609,6 +3591,9 @@ stock ktp_apply_shot_detail(bool: live) {
 
 stock ktp_match_teardown_notify(const matchId[], const map[], const flushType[],
                                 const statusKey[] = "", const statusValue[] = "") {
+    // Before the id check: a freeze pause must not outlive the match even when
+    // there is no id to close.
+    ktp_clear_round_freeze();
     if (!matchId[0]) return;
 
     #if defined HAS_DODX
@@ -5255,20 +5240,10 @@ public plugin_init() {
     register_clcmd("say_team .h2restart", "cmd_restarthalf");
     register_clcmd("say_team /h2restart", "cmd_restarthalf");
 
-    // Register TeamScore message hook for match score tracking (DoD: byte TeamID, short Score)
-    new msgTeamScore = get_user_msgid("TeamScore");
-    if (msgTeamScore > 0) {
-        register_message(msgTeamScore, "msg_TeamScore");
-        log_ktp("event=TEAMSCORE_MSG_REGISTERED msgid=%d", msgTeamScore);
-    }
-
-    // Register RoundState message hook for round-freeze stats filtering
-    // RoundState: BYTE state (1=round live, other=freeze)
-    new msgRoundState = get_user_msgid("RoundState");
-    if (msgRoundState > 0) {
-        register_message(msgRoundState, "msg_RoundState");
-        log_ktp("event=ROUNDSTATE_MSG_REGISTERED msgid=%d", msgRoundState);
-    }
+    // register_event, not register_message: in extension mode only events are
+    // dispatched (KTPAMXX MessageHook_Handler). register_event dedups per map.
+    new roundStateEvent = register_event("RoundState", "evt_RoundState", "a");
+    log_ktp("event=ROUNDSTATE_EVENT_REGISTERED handle=%d", roundStateEvent);
 
     // NOTE: Logevent-based game end detection has been REMOVED.
     // The changelevel hook (RH_Host_Changelevel_f) now handles all match state finalization.
@@ -10015,6 +9990,15 @@ public task_apply_match_config_and_start() {
 
     if (restoreScores) schedule_score_restoration();
 
+    // AMXX checks tasks every 0.1s and runs the due ones in slot order, so Phase 1
+    // can arm the fallback before this config set mp_clan_timer. The countdown
+    // starts here, so re-arm from here.
+    if (g_awaitingRoundLive && !g_roundResetSeen) {
+        new Float:timeout = ktp_arm_roundlive_fallback(
+            ktp_clan_restart_wait_secs(ROUNDLIVE_FALLBACK_MARGIN_SECS));
+        log_ktp("event=ROUNDLIVE_FALLBACK_REARMED reason=post_config timeout=%.1fs", timeout);
+    }
+
     // Phase 0 seeded g_techBudget[] from the pre-config cache 50ms ago. If the
     // map config just changed ktp_tech_budget_seconds, re-seed — but only a
     // fresh match with untouched budgets (budget is per-match; a consumed
@@ -10089,11 +10073,13 @@ public task_deferred_stats() {
         remove_task(g_taskSetMatchIdId);
         remove_task(g_taskMatchStartLogId);
 
-        // 6. Go-live. RoundState never reaches this plugin in extension mode, so the
-        // end of the mp_clan_timer countdown is the go-live signal and this task is it.
-        new Float:roundLiveTimeout = ktp_clan_restart_wait_secs(ROUNDLIVE_FALLBACK_MARGIN_SECS);
-        remove_task(g_taskRoundLiveTimeoutId);
-        set_task(roundLiveTimeout, "task_roundlive_timeout", g_taskRoundLiveTimeoutId);
+        // 6. Go-live is the first RoundState=1 after the clan restart's round reset,
+        // with a fallback for a signal that never arrives.
+        g_roundResetSeen = false;
+        remove_task(g_taskRoundFreezeWatchdogId);
+        g_roundLiveArmedAt = get_gametime();
+        new Float:roundLiveTimeout = ktp_arm_roundlive_fallback(
+            ktp_clan_restart_wait_secs(ROUNDLIVE_FALLBACK_MARGIN_SECS));
 
         log_ktp("event=STATS_PAUSED_AWAITING_ROUNDLIVE match_id=%s timeout=%.1fs", g_matchId, roundLiveTimeout);
     }

@@ -184,7 +184,7 @@ def test_next_full_testmatch_reenables_dodx_at_round_live():
     test_ready = _public_body("task_testmatch_ready")
     ready = _public_body("cmd_ready")
     deferred = _public_body("task_deferred_stats")
-    round_state = _public_body("msg_RoundState")
+    round_state = _public_body("evt_RoundState")
     timeout = _public_body("task_roundlive_timeout")
 
     assert "cmd_ready(id);" in test_ready
@@ -237,7 +237,7 @@ def test_next_testmatch_discards_delayed_native_state_before_any_emit_or_resume(
 def test_new_testmatch_collects_after_reset_at_normal_round_live_boundary():
     """The discard boundary must not leave the replacement match quiescent."""
     deferred = _public_body("task_deferred_stats")
-    round_state = _public_body("msg_RoundState")
+    round_state = _public_body("evt_RoundState")
     timeout = _public_body("task_roundlive_timeout")
     context = _public_body("task_roundlive_match_context")
     activation = _stock_body("ktp_activate_initial_roundlive_stats")
@@ -335,7 +335,7 @@ def _exercise_activation_path(path_body: str) -> _ActivationModel:
 
 
 def test_roundstate_activation_model_clears_delayed_stats_then_collects_new_match():
-    round_live = _public_body("msg_RoundState").split("} else {", 1)[0]
+    round_live = _public_body("evt_RoundState").split("} else {", 1)[0]
     model = _exercise_activation_path(round_live)
     assert model.operations == ["reset", "context", "resume"]
 

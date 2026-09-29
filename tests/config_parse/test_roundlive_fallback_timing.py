@@ -55,11 +55,20 @@ def _delay_variable_uses_helper(body: str, expr: str, margin_define: str) -> Non
 
 def test_every_roundlive_timeout_is_armed_from_the_clan_timer():
     arms = re.findall(r'set_task\(\s*([^,]+),\s*"task_roundlive_timeout"', _text())
-    assert arms, "the round-live fallback is never armed"
-    body = _body("public", "task_deferred_stats")
-    expr = _delay_expr(body, "task_roundlive_timeout")
-    assert arms == [expr], f"fallback armed outside task_deferred_stats: {arms}"
-    _delay_variable_uses_helper(body, expr, "ROUNDLIVE_FALLBACK_MARGIN_SECS")
+    assert arms == ["delay"], f"fallback armed outside ktp_arm_roundlive_fallback: {arms}"
+    assert _delay_expr(_body("stock", "ktp_arm_roundlive_fallback"), "task_roundlive_timeout") == "delay"
+
+    deferred = _body("public", "task_deferred_stats")
+    assert re.search(
+        rf"ktp_arm_roundlive_fallback\(\s*{HELPER}\(ROUNDLIVE_FALLBACK_MARGIN_SECS\)\)", deferred
+    ), "Phase 1 does not arm the fallback from the clan timer"
+
+    # Phase 1 can run before the config task in the same 0.1s task check, so the
+    # config task re-arms it from the value the map config just set.
+    apply = _body("public", "task_apply_match_config_and_start")
+    rearm = apply.index("ktp_arm_roundlive_fallback(")
+    assert apply.index("exec_map_config();") < rearm
+    assert f"{HELPER}(ROUNDLIVE_FALLBACK_MARGIN_SECS)" in apply[rearm:]
 
 
 def test_score_restore_is_scheduled_from_the_clan_timer():
@@ -76,20 +85,21 @@ def test_waits_exceed_the_countdown_across_the_dll_range():
 
 def test_waits_at_the_fleet_clan_timer():
     # Every match config sets mp_clan_timer 10 (the aim map-start configs set 0).
-    assert 10.0 < _wait_for("ROUNDLIVE_FALLBACK_MARGIN_SECS", 10.0) <= 12.0
+    # The fallback outlasts the restart's round reset, which lands as the countdown ends.
+    assert 11.0 <= _wait_for("ROUNDLIVE_FALLBACK_MARGIN_SECS", 10.0) <= 15.0
     assert _wait_for("SCORE_RESTORE_MARGIN_SECS", 10.0) == 12.0
 
 
 def test_absurd_clan_timer_is_bounded():
     ceiling = _define("CLAN_TIMER_MAX_SECS") + _define("SCORE_RESTORE_MARGIN_SECS")
     assert _wait_for("SCORE_RESTORE_MARGIN_SECS", 100000.0) == ceiling
-    assert _wait_for("ROUNDLIVE_FALLBACK_MARGIN_SECS", -5.0) == _define(
+    assert _wait_for("SCORE_RESTORE_MARGIN_SECS", -5.0) == _define(
         "CLAN_RESTART_WAIT_FLOOR_SECS"
     )
 
 
 def test_real_round_live_signal_cancels_the_fallback():
-    body = _body("public", "msg_RoundState")
+    body = _body("public", "evt_RoundState")
     live = body.split("} else {", 1)[0]
     assert live.index("remove_task(g_taskRoundLiveTimeoutId);") < live.index(
         "task_roundlive_match_context();"

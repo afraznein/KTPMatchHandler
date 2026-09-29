@@ -45,13 +45,15 @@ instinct disagree, the rule wins — each one was paid for with a production inc
 - Score writes during map change crash: never call `dodx_set_team_score()` directly
   in a changelevel window — set `g_pendingScoreAllies/Axis` and use
   `schedule_score_restoration()` (applies on next flag touch).
-- **`msg_TeamScore` must record into `g_matchScore` above any `!g_matchLive` early
-  exit.** The scores that get persisted for the second half arrive during DoD's
-  intermission — after the match is no longer live — so hoisting the liveness guard
-  to the top of the handler as a hot-path win makes every halftime save 0-0. Only
-  the adjustment and the localinfo write may be gated on liveness. The mirror-image
-  trap: `save_first_half_scores()` must not re-read DODX at halftime, because DODX
-  has already zeroed its own counters by the time changelevel processing runs.
+- **`register_message` never runs in extension mode; use `register_event`.** KTPAMXX
+  installs its ReHLDS message hook only for events (`MessageHook_Handler`), so a
+  `register_message` handler registers, can log that it registered, and is never
+  called. `msg_RoundState` and `msg_TeamScore` sat dead that way while
+  their registration lines logged on every map. Read args with `read_data(n)`; an
+  event cannot rewrite a message, so there is no replacement for `set_msg_arg_*`.
+- Match scores come from gamerules (`update_match_scores_from_dodx`), and the 2nd
+  half's gamerules score already includes the h1 score restored at go-live. Do not
+  add h1 to a game-sent TeamScore: that double-counts.
 
 ## Engine behaviour that reads as a plugin bug
 
