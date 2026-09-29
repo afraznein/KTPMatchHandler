@@ -75,7 +75,7 @@ def test_waits_exceed_the_countdown_across_the_dll_range():
 
 
 def test_waits_at_the_fleet_clan_timer():
-    # Every KTP config sets mp_clan_timer 10.
+    # Every match config sets mp_clan_timer 10 (the aim map-start configs set 0).
     assert 10.0 < _wait_for("ROUNDLIVE_FALLBACK_MARGIN_SECS", 10.0) <= 12.0
     assert _wait_for("SCORE_RESTORE_MARGIN_SECS", 10.0) == 12.0
 
@@ -94,3 +94,24 @@ def test_real_round_live_signal_cancels_the_fallback():
     assert live.index("remove_task(g_taskRoundLiveTimeoutId);") < live.index(
         "task_roundlive_match_context();"
     )
+
+
+def test_cmd_ready_arms_the_score_restore_after_the_map_config():
+    ready = _body("public", "cmd_ready")
+    assert "schedule_score_restoration()" not in ready, (
+        "cmd_ready schedules the restore before the map config sets mp_clan_timer"
+    )
+    assert ready.count("g_scoreRestoreAfterConfig = true;") == 2  # OT and 2nd half
+    reset = ready.index("g_scoreRestoreAfterConfig = false;")
+    assert reset < ready.index('"task_apply_match_config_and_start"'), (
+        "the flag must be cleared before the config task is armed"
+    )
+
+    apply = _body("public", "task_apply_match_config_and_start")
+    consumed = apply.index("g_scoreRestoreAfterConfig = false;")
+    assert consumed < apply.index("if (!g_matchLive) return;"), (
+        "an aborted config task must still consume the flag"
+    )
+    schedule = apply.index("if (restoreScores) schedule_score_restoration();")
+    assert apply.index("exec_map_config();") < schedule
+    assert apply.rindex("server_exec();") < schedule
