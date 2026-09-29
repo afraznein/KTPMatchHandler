@@ -6,6 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.176] - 2026-09-29
+
+### Fixed
+
+- **The `RoundState` handler never ran, so go-live waited on a fallback timer and
+  freeze time was never excluded from stats.** It was hooked with `register_message`,
+  which KTPAMXX does not dispatch in extension mode: the hook registered and logged
+  `ROUNDSTATE_MSG_REGISTERED` on every map, and `event=ROUND_LIVE` / `event=ROUND_FREEZE`
+  were never logged on any instance. It is now `register_event("RoundState", ..., "a")`,
+  which runs through the same message hook dodx uses, and reads the state with
+  `read_data(1)`.
+  - **Behaviour change: go-live now happens on the real `RoundState=1`.** Measured on the
+    local bot stack at `mp_clan_timer 10`: the clan restart sends `RoundState=0` exactly
+    10.0s after the wait is armed, and the round goes live with `RoundState=1` 5.0s after
+    that, so go-live moves about 4s later than 0.10.175's timer put it. A `RoundState=1`
+    that arrives before the reset belongs to the warmup round and is ignored
+    (`event=ROUND_LIVE_IGNORED`); on the stack one arrived 2-4s into every countdown and,
+    ungated, took the match live 13s early.
+  - The fallback timer stays for a signal that never comes: `mp_clan_timer + 3s` (it must
+    outlast the reset), then 15s from the reset once that is seen
+    (`event=ROUNDLIVE_RESET_SEEN`).
+  - The fallback is re-armed from the config task (`event=ROUNDLIVE_FALLBACK_REARMED`).
+    AMXX checks tasks every 0.1s and runs the due ones in slot order, so the 0.1s Phase 1
+    task can run before the 0.05s config task and read the pre-config `mp_clan_timer`
+    (20 on the local stack, which made the 0.10.175 fallback fire at 21s).
+  - Only a `RoundState=0` that arrives no more than 1s short of `mp_clan_timer` after the
+    wait is armed counts as the clan restart's reset. Warmup rounds keep winning (3/4/5) and
+    resetting (0) through the countdown, and 0.10.176 as first cut took the first of those
+    as the reset, so a warmup round's `RoundState=1` could still take the match live ~4s
+    before the clan restart. Rejected ones log `event=ROUNDLIVE_RESET_IGNORED`. With a
+    timer under a second the reset can land before the wait is armed; go-live is then left
+    to the fallback, which fires inside the first round's freeze.
+  - **Behaviour change: the freeze-time stats pause is active for the first time.**
+    Between a round win and the next round start, DODX stats are paused and
+    `KTP_ROUND_FREEZE` / `KTP_ROUND_LIVE` reach HLStatsX. Neither has ever happened in
+    production before, and the current daemon does more with them than stop tagging
+    freeze-time events with the match id: it **drops** `ktp_flag_state_events` rows that
+    arrive during a freeze (`Flag state ignored outside live match context`), including the
+    round reset's, and tags damage buffered before the freeze with no match id when it is
+    flushed inside one.
+  - **Deploy precondition: the KTPHLStatsX change on `ne/round-freeze-producer-context`,
+    which fixes both, must be live on the daemon BEFORE this plugin reaches the fleet.**
+    This plugin without it loses flag-state history and damage attribution every round.
+  - A freeze pause always has a way out: `RoundState=1`, a 30s watchdog
+    (`event=ROUND_FREEZE_WATCHDOG`) if that never comes, and every match teardown,
+    because `ktp_match_teardown_notify` now clears it. Half 1 end, `.forcereset` and every
+    map load already unpaused. The watchdog also writes `KTP_ROUND_LIVE`: HLStatsX saw the
+    freeze, and once the watchdog has set the round live the late `RoundState=1` changes
+    nothing, so without it the daemon stayed at `round_live=0` for the rest of the round
+    (the rest of the half, on its last round). Teardown does not need one, because
+    `KTP_MATCH_END` / `KTP_HALF_END` drop the daemon's match context.
+  - Every `RoundState` is logged as `event=ROUNDSTATE state= ... since_arm=`, so the
+    values the DLL sends, and how long after the restart the round goes live, can be read
+    off a live server.
+
+### Removed
+
+- **`msg_TeamScore` and its `register_message`.** Dead for the same reason
+  (`TEAMSCORE_H2_OBSERVE` never logged), and wrong if it had ever run: it added the
+  1st-half score to game-sent 2nd-half scores, but gamerules already holds the h1 score
+  from the 2nd-half restore, so the scoreboard would have shown h1 twice. Scores come
+  from gamerules (`update_match_scores_from_dodx`) and the periodic save writes
+  `_ktp_h1`. `g_skipTeamScoreAdjust`, which only existed for it, is gone too.
+
 ## [0.10.175] - 2026-09-29
 
 ### Fixed
