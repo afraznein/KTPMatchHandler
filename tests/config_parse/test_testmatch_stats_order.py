@@ -31,7 +31,7 @@ def _public_body(name: str) -> str:
 def _stock_with_args_body(name: str) -> str:
     text = SOURCE.read_text(encoding="utf-8")
     match = re.search(
-        rf"stock {name}\([^)]*\) \{{(?P<body>.*?)\n\}}", text, re.DOTALL
+        rf"stock (?:bool:|Float:)?{name}\([^)]*\) \{{(?P<body>.*?)\n\}}", text, re.DOTALL
     )
     assert match is not None, f"missing stock {name}"
     return match.group("body")
@@ -189,7 +189,8 @@ def test_next_full_testmatch_reenables_dodx_at_round_live():
 
     assert "cmd_ready(id);" in test_ready
     assert 'set_task(0.1, "task_deferred_stats"' in ready
-    assert "dodx_set_stats_paused(1);" in deferred
+    assert "ktp_await_initial_roundlive(g_deferredHalfText);" in deferred
+    assert "dodx_set_stats_paused(1);" in _stock_with_args_body("ktp_await_initial_roundlive")
 
     round_live, round_frozen = round_state.split("} else {", 1)
     assert "dodx_set_stats_paused(0);" in round_live
@@ -230,7 +231,7 @@ def test_next_testmatch_discards_delayed_native_state_before_any_emit_or_resume(
     assert "dodx_flush_all_stats();" in production_branch
 
     prelive = deferred.index('ktp_reset_test_native_state("prelive");')
-    pause = deferred.index("dodx_set_stats_paused(1);")
+    pause = deferred.index("ktp_await_initial_roundlive(g_deferredHalfText);")
     assert prelive < pause
 
 
@@ -243,8 +244,9 @@ def test_new_testmatch_collects_after_reset_at_normal_round_live_boundary():
     activation = _stock_body("ktp_activate_initial_roundlive_stats")
 
     assert deferred.index('ktp_reset_test_native_state("prelive");') < deferred.index(
-        "g_awaitingRoundLive = true;"
+        "ktp_await_initial_roundlive(g_deferredHalfText);"
     )
+    assert "g_awaitingRoundLive = true;" in _stock_with_args_body("ktp_await_initial_roundlive")
     assert "task_roundlive_match_context();" in round_state.split("} else {", 1)[0]
     assert "task_roundlive_match_context();" in timeout
     assert "ktp_activate_initial_roundlive_stats();" in context

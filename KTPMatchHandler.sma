@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.176"
+#define PLUGIN_VERSION "0.10.177"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -1777,6 +1777,34 @@ stock Float:ktp_arm_roundlive_fallback(Float:delay) {
     set_task(delay, "task_roundlive_timeout", g_taskRoundLiveTimeoutId);
     return delay;
 }
+
+#if defined HAS_DODX
+// Every clan countdown leaves through here: a half start and .restarthalf alike.
+// Stats stay paused until evt_RoundState or the fallback takes the round live.
+stock ktp_await_initial_roundlive(const halfText[]) {
+    dodx_set_stats_paused(1);
+    g_roundLive = false;
+
+    copy(g_delayedMatchId, charsmax(g_delayedMatchId), g_matchId);
+    copy(g_delayedMap, charsmax(g_delayedMap), g_currentMap);
+    copy(g_delayedHalf, charsmax(g_delayedHalf), halfText);
+
+    g_awaitingRoundLive = true;
+    g_matchStartLogFired = false;
+    remove_task(g_taskSetMatchIdId);
+    remove_task(g_taskMatchStartLogId);
+
+    // Go-live is the first RoundState=1 after the clan restart's round reset.
+    g_roundResetSeen = false;
+    remove_task(g_taskRoundFreezeWatchdogId);
+    g_roundLiveArmedAt = get_gametime();
+    new Float:roundLiveTimeout = ktp_arm_roundlive_fallback(
+        ktp_clan_restart_wait_secs(ROUNDLIVE_FALLBACK_MARGIN_SECS));
+
+    log_ktp("event=STATS_PAUSED_AWAITING_ROUNDLIVE match_id=%s half=%s timeout=%.1fs",
+            g_matchId, halfText, roundLiveTimeout);
+}
+#endif
 
 // Schedule delayed score restoration (called from match start for 2nd half)
 stock schedule_score_restoration() {
@@ -8954,6 +8982,15 @@ stock execute_restart_half(id, const name[], const sid[], const ip[]) {
     }
     #endif
 
+    // The restarted half goes live the way a half start does. HLStatsX still holds
+    // this match open, so it needs the freeze too or it tags every countdown kill.
+    #if defined HAS_DODX
+    if (g_hasDodxStatsNatives) {
+        ktp_await_initial_roundlive("2nd half");
+        log_message("KTP_ROUND_FREEZE (matchid ^"%s^")", g_matchId);
+    }
+    #endif
+
     // Trigger round restart (synchronous — must happen immediately)
     server_cmd("mp_clan_restartround 1");
     server_exec();
@@ -10076,32 +10113,8 @@ public task_deferred_stats() {
         }
         #endif
 
-        // 3. Pause stats until round goes live (RoundState=1)
-        // This prevents round-freeze kills from being counted during the countdown
-        dodx_set_stats_paused(1);
-        g_roundLive = false;
-
-        // 4. Store match context for deferred fire on round-live
-        copy(g_delayedMatchId, charsmax(g_delayedMatchId), g_matchId);
-        copy(g_delayedMap, charsmax(g_delayedMap), g_currentMap);
-        copy(g_delayedHalf, charsmax(g_delayedHalf), g_deferredHalfText);
-
-        // 5. Wait for RoundState=1 to set match context and log KTP_MATCH_START
-        // This replaces the old fixed 1.4s/2.0s delays with event-driven timing
-        g_awaitingRoundLive = true;
-        g_matchStartLogFired = false;  // Reset one-shot guard for new match start
-        remove_task(g_taskSetMatchIdId);
-        remove_task(g_taskMatchStartLogId);
-
-        // 6. Go-live is the first RoundState=1 after the clan restart's round reset,
-        // with a fallback for a signal that never arrives.
-        g_roundResetSeen = false;
-        remove_task(g_taskRoundFreezeWatchdogId);
-        g_roundLiveArmedAt = get_gametime();
-        new Float:roundLiveTimeout = ktp_arm_roundlive_fallback(
-            ktp_clan_restart_wait_secs(ROUNDLIVE_FALLBACK_MARGIN_SECS));
-
-        log_ktp("event=STATS_PAUSED_AWAITING_ROUNDLIVE match_id=%s timeout=%.1fs", g_matchId, roundLiveTimeout);
+        // 3. Countdown kills must not count: pause until the round goes live.
+        ktp_await_initial_roundlive(g_deferredHalfText);
     }
     #endif
 }

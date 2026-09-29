@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.177] - 2026-09-29
+
+### Fixed
+
+- **Kills in the `.restarthalf` countdown no longer count for the match.** The restart
+  reset the scoreboard and the stats, then left stats collecting through the whole
+  `mp_clan_timer` countdown with the match id still set, so every kill in it landed in the
+  restarted half's stats. HLStatsX's match context stayed open too, so it tagged the same
+  kills with the match id. This is the countdown bug 0.10.175/0.10.176 fixed for the half
+  and OT starts, on the one path they did not cover.
+  - `.restarthalf` now goes live the same way a half start does, through one shared stock
+    (`ktp_await_initial_roundlive`): stats pause at the trigger, go-live is the clan
+    restart's `RoundState=1` (or the fallback timer if it never comes), and only then do
+    stats resume and the match context and death baseline get set.
+  - At the trigger it also logs `KTP_ROUND_FREEZE`, so HLStatsX stops tagging kills. At
+    go-live the half's `KTP_MATCH_START` is logged again with the same match id and half;
+    the daemon treats a repeat as a no-op apart from reopening tagging, and `ktp_matches`
+    keeps the half's original `start_time`.
+  - Also fixed on the way: a restart during a round freeze no longer leaves the freeze
+    watchdog armed, and the restarted half now re-baselines player deaths at go-live
+    like every other half start (before this, deaths from the abandoned half skewed the
+    score-save check).
+  - Not changed: the `ktp_match_start` forward (HLTV keeps recording the same demo), the
+    AC announce and the score restore timing. Stats from the abandoned part of the half
+    are still flushed under the match id, as they were before.
+
+---
+
 ## [0.10.176] - 2026-09-29
 
 ### Fixed

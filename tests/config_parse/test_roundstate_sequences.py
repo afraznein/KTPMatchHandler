@@ -1,8 +1,8 @@
 """Play RoundState sequences through the plugin's own handler code.
 
 _pawn_sim runs evt_RoundState, the go-live fallback, the freeze watchdog and the
-arming statements of task_deferred_stats straight out of KTPMatchHandler.sma, on a
-clock. Timings follow the local bot stack at mp_clan_timer 10: the clan restart's
+go-live arming helper task_deferred_stats calls straight out of KTPMatchHandler.sma,
+on a clock. Timings follow the local bot stack at mp_clan_timer 10: the clan restart's
 RoundState=0 lands 10s after the arm and its RoundState=1 5s after that.
 """
 from __future__ import annotations
@@ -36,8 +36,9 @@ def _live(source):
     return sim
 
 
-def test_arming_fragment_is_unique(source):
-    assert source.raw.count("// 3. Pause stats until round goes live") == 1
+def test_a_half_start_arms_through_the_shared_helper(source):
+    assert source.function("ktp_await_initial_roundlive") is not None
+    assert source.code.count("ktp_await_initial_roundlive(g_deferredHalfText);") == 1
 
 
 def test_a_warmup_round_in_the_countdown_is_not_go_live(source):
