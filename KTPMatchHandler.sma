@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.174"
+#define PLUGIN_VERSION "0.10.175"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -727,6 +727,9 @@ new g_prePauseInitiatorId = 0;              // Player ID of pause initiator (for
 new g_taskPrePauseId = 55610;               // Task ID for pre-pause countdown
 new g_taskScoreSaveId = 55612;              // Task ID for periodic score saves to localinfo
 new g_taskScoreRestoreId = 55613;           // Task ID for delayed score restoration after round restart
+// Set by cmd_ready, consumed by task_apply_match_config_and_start: the restore delay must read
+// the mp_clan_timer the map config sets, not the one in effect when .ready lands.
+new bool:g_scoreRestoreAfterConfig = false;
 new g_taskMatchStartLogId = 55614;          // Task ID for delayed KTP_MATCH_START logging to HLStatsX
 new bool:g_matchStartLogFired = false;      // One-shot guard: prevents task_delayed_match_start_log from firing multiple times
 new g_taskHalftimeWatchdogId = 55615;       // Task ID for halftime changelevel watchdog
@@ -1817,14 +1820,25 @@ public task_delayed_score_restore() {
     }
 }
 
+// The clan restart lands when the mp_clan_timer countdown ends, so outwait the live cvar.
+// The countdown ending IS go-live here, so the round-live margin is live play with stats paused.
+#define ROUNDLIVE_FALLBACK_MARGIN_SECS 1.0
+#define SCORE_RESTORE_MARGIN_SECS 2.0
+#define CLAN_RESTART_WAIT_FLOOR_SECS 2.0
+#define CLAN_TIMER_MAX_SECS 255.0   // the countdown HUD message carries it in one byte
+
+stock Float:ktp_clan_restart_wait_secs(Float:margin) {
+    new Float:countdown = floatclamp(get_cvar_float("mp_clan_timer"), 0.0, CLAN_TIMER_MAX_SECS);
+    return floatmax(countdown + margin, CLAN_RESTART_WAIT_FLOOR_SECS);
+}
+
 // Schedule delayed score restoration (called from match start for 2nd half)
 stock schedule_score_restoration() {
     remove_task(g_taskScoreRestoreId);
-    // Wait for mp_clan_timer countdown to complete before restoring
-    // mp_clan_timer is typically 10s, so 12s ensures round restart is done
-    // If we restore during the countdown, the game resets scores when round actually restarts
-    set_task(12.0, "task_delayed_score_restore", g_taskScoreRestoreId);
-    log_ktp("event=SCORE_RESTORE_SCHEDULED delay=12s");
+    // Restoring during the countdown is undone when the round actually restarts.
+    new Float:delay = ktp_clan_restart_wait_secs(SCORE_RESTORE_MARGIN_SECS);
+    set_task(delay, "task_delayed_score_restore", g_taskScoreRestoreId);
+    log_ktp("event=SCORE_RESTORE_SCHEDULED delay=%.1fs", delay);
 }
 
 // Delayed KTP_MATCH_START logging for HLStatsX
@@ -1943,7 +1957,7 @@ stock ktp_activate_initial_roundlive_stats() {
 
     // Pin pdata deaths + the dodx observed counter to 0 for everyone at
     // the go-live instant. dodx_reset_all_stats zeroes the observed
-    // counters ~1s before the clan restart actually executes, so death
+    // counters a full clan countdown before the restart executes, so death
     // events in that window (and warmup deaths the restart leaves in
     // pdata) skew the SAVE validation gate for the whole match.
     // dodx_set_user_deaths re-baselines both sides atomically.
@@ -1989,11 +2003,11 @@ public task_roundlive_match_context() {
         g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
 }
 
-// Timeout fallback: if RoundState=1 never fires within 5s, fire context anyway
+// Go-live at the end of the clan countdown. RoundState=1 would cancel it, but is not delivered in extension mode.
 public task_roundlive_timeout() {
     if (!g_awaitingRoundLive) return;
 
-    log_amx("[KTP] WARNING: RoundState=1 timeout — firing match context without round-live signal");
+    log_amx("[KTP] Clan countdown over, round live (no RoundState signal)");
     log_ktp("event=ROUNDLIVE_TIMEOUT match_id=%s", g_delayedMatchId);
 
     g_roundLive = true;  // Assume live to avoid permanent pause
@@ -4895,6 +4909,7 @@ public plugin_init() {
     g_changeLevelHandled = false;
     g_changeLevelHandledTime = 0.0;
     g_pfnChangeLevelProcessed = false;  // per-intermission debounce; extension-mode globals persist, so clear it per map here
+    g_scoreRestoreAfterConfig = false;  // its consumer task did not survive the map change
 
     // Same reason: the shot-diagnostics flag is match-scoped, and a server that
     // came up mid-anything must not inherit an on-state from before. Fails
@@ -9226,7 +9241,7 @@ stock execute_setstate(id, const name[], const sid[], const ip[], half, allies, 
     // Scoreboard: immediate write when gamerules is valid; otherwise fall back
     // to the deferred pending-score path (never a bare dodx_set_team_score in a
     // changelevel window). Unlike execute_restart_half the deferred write is
-    // NOT armed unconditionally — there is no round restart here, so a 12s
+    // NOT armed unconditionally — there is no round restart here, so a delayed
     // re-broadcast would revert any flag capped in the interim.
     #if defined HAS_DODX
     if (dodx_has_gamerules()) {
@@ -9558,11 +9573,12 @@ public cmd_ready(id) {
         // config/restart work on a profile-frame of its own (visible as [KTP_SPIKE]
         // with no corresponding KTP_OPCODE, which cleanly identifies it).
         //
-        // The 0.05s delay is invisible to players — the round restart countdown
-        // is ~1s, so a 50ms shift between .rdy response and countdown start is
-        // not perceptible. Phase 1 (stats flush, 0.1s) and Phase 2 (Discord +
-        // roster, 0.2s) still fire after this in the intended order.
+        // The 0.05s delay is invisible to players: a 50ms shift between the .rdy
+        // response and the countdown start is not perceptible. Phase 1 (stats
+        // flush, 0.1s) and Phase 2 (Discord + roster, 0.2s) still fire after this
+        // in the intended order.
         remove_task(g_taskMatchConfigApplyId);
+        g_scoreRestoreAfterConfig = false;
         set_task(0.05, "task_apply_match_config_and_start", g_taskMatchConfigApplyId);
 
         // Build captain fields (no team-tag inference)
@@ -9662,7 +9678,7 @@ public cmd_ready(id) {
                 // Use deferred restoration to avoid crashes
                 g_pendingScoreAllies = alliesScore;
                 g_pendingScoreAxis = axisScore;
-                schedule_score_restoration();
+                g_scoreRestoreAfterConfig = true;
 
                 announce_all(">>> Scoreboard updated with grand totals <<<");
             }
@@ -9714,8 +9730,8 @@ public cmd_ready(id) {
                 g_pendingScoreAllies = g_firstHalfScore[2];  // Allies = Team 2's 1st half
                 g_pendingScoreAxis = g_firstHalfScore[1];    // Axis = Team 1's 1st half
 
-                // Schedule delayed restoration to handle round restart resetting scores
-                schedule_score_restoration();
+                // Delayed restoration, armed after the map config (round restart resets scores)
+                g_scoreRestoreAfterConfig = true;
 
                 // Chat announcement only - HUD will be shown by the match start HUD below
                 announce_all(">>> Scoreboard updated with 1st half scores <<<");
@@ -9819,8 +9835,8 @@ public cmd_ready(id) {
 
         // =============== Deferred match start (3-phase) ===============
         // Heavy work is spread across multiple frames to avoid stalling the
-        // player's command frame. The round restart countdown is ~1s, so 0.1-0.2s
-        // delays are invisible to players.
+        // player's command frame. The mp_clan_timer countdown hides 0.1-0.2s
+        // delays from players.
         //
         // Phase 0 (this frame):  State changes, unpause, announcements, HUD
         // Phase 1 (0.1s):        Stats flush/reset, match ID setup
@@ -9949,6 +9965,9 @@ public task_enter_pending_phase() {
 // the caller still mutates g_inOvertime/g_otRound after the set_task (a refused
 // continuation clears both), and reading the post-guard values is what we want.
 public task_apply_match_config_and_start() {
+    new bool:restoreScores = g_scoreRestoreAfterConfig;
+    g_scoreRestoreAfterConfig = false;
+
     // Guard: if match was reset/aborted in the 0.05s window, abort
     if (!g_matchLive) return;
 
@@ -9994,6 +10013,8 @@ public task_apply_match_config_and_start() {
     new prevBudgetSecs = g_techBudgetSecs;
     ktp_sync_config_from_cvars();
 
+    if (restoreScores) schedule_score_restoration();
+
     // Phase 0 seeded g_techBudget[] from the pre-config cache 50ms ago. If the
     // map config just changed ktp_tech_budget_seconds, re-seed — but only a
     // fresh match with untouched budgets (budget is per-match; a consumed
@@ -10021,7 +10042,7 @@ public task_apply_match_config_and_start() {
 
 // =============== Deferred match start — Phase 1 (0.1s after cmd_ready) ===============
 // Stats flush/reset + match ID setup. Separated from cmd_ready to avoid stalling
-// the player's command frame. The round restart countdown is ~1s so this is invisible.
+// the player's command frame. The mp_clan_timer countdown hides this delay.
 public task_deferred_stats() {
     // Guard: if match was reset in the 0.1s window, abort
     if (!g_matchLive) return;
@@ -10068,11 +10089,13 @@ public task_deferred_stats() {
         remove_task(g_taskSetMatchIdId);
         remove_task(g_taskMatchStartLogId);
 
-        // 6. Safety timeout: if RoundState=1 never fires, fire context after 5s
+        // 6. Go-live. RoundState never reaches this plugin in extension mode, so the
+        // end of the mp_clan_timer countdown is the go-live signal and this task is it.
+        new Float:roundLiveTimeout = ktp_clan_restart_wait_secs(ROUNDLIVE_FALLBACK_MARGIN_SECS);
         remove_task(g_taskRoundLiveTimeoutId);
-        set_task(5.0, "task_roundlive_timeout", g_taskRoundLiveTimeoutId);
+        set_task(roundLiveTimeout, "task_roundlive_timeout", g_taskRoundLiveTimeoutId);
 
-        log_ktp("event=STATS_PAUSED_AWAITING_ROUNDLIVE match_id=%s", g_matchId);
+        log_ktp("event=STATS_PAUSED_AWAITING_ROUNDLIVE match_id=%s timeout=%.1fs", g_matchId, roundLiveTimeout);
     }
     #endif
 }

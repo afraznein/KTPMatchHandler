@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.175] - 2026-09-29
+
+### Fixed
+
+- **Kills and deaths from the last seconds of the warmup countdown were counted as match
+  stats.** After `mp_clan_restartround 1` the plugin pauses stats and waits for
+  `RoundState=1` to mark the round live, with a fallback timer in case that signal never
+  comes. The fallback was a fixed 5s, but the DoD clan restart runs `mp_clan_timer`
+  seconds and every match config sets 10. So the fallback always won: `KTP_MATCH_START`, the
+  stats unpause, the match context and the death baseline all landed about 5s before the
+  round went live, and anything that happened in the rest of the countdown was recorded
+  under the match id. On 2026-09-20 (`1789953039-NY2`) that was four warmup deaths,
+  including one from teamkill damage.
+  - Measured across all 24 instances: `event=ROUND_LIVE` and `event=ROUND_FREEZE` have
+    never been logged, while `ROUNDLIVE_TIMEOUT` fires on nearly every match start. The
+    `RoundState` hook registers but its handler does not run, so the fallback is the only
+    path that activates a half.
+  - The fallback now waits `mp_clan_timer` plus 1s, read from the live cvar when it is
+    armed. The countdown is clamped to 0-255 (the countdown HUD message carries it in one
+    byte) and the wait never drops below 2s. The margin is kept short because, with no
+    round-live signal, the end of the countdown is go-live and the margin is live play
+    with stats still paused.
+  - `STATS_PAUSED_AWAITING_ROUNDLIVE` now logs the chosen `timeout=`.
+  - The delayed score restore uses the same derivation with a 2s margin, so it stays in
+    step with the cvar. At `mp_clan_timer 10` it is still 12s; `SCORE_RESTORE_SCHEDULED`
+    logs the value instead of a hardcoded `12s`. For the 2nd half and OT it is now armed
+    from the deferred config task after the map config runs, so it reads the
+    `mp_clan_timer` that config sets rather than the one in effect when `.ready` landed.
+  - The per-half `RoundState=1 timeout` warning in the AMXX log is now an ordinary line:
+    it is the normal go-live path. The `event=ROUNDLIVE_TIMEOUT` plugin-log line is
+    unchanged.
+  - **Visible effect:** the recorded match start moves about 6s later, to the real round
+    start, and nothing from the countdown counts toward match stats.
+  - `tests/config_parse/test_roundlive_fallback_timing.py` pins both delays to the cvar
+    and fails on the previous code.
+
 ## [0.10.174] - 2026-09-24
 
 ### Fixed
