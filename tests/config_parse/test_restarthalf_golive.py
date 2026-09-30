@@ -39,6 +39,7 @@ def _restarted(source, clan_timer=10.0):
 def test_countdown_kills_are_not_counted_and_the_half_goes_live_on_the_round(source):
     sim = _restarted(source)
     assert sim.paused, "stats still collecting at the restart trigger"
+    sim.advance(T + 0.2)
     assert sim.daemon_round_live() == 0, "HLStatsX still tagging kills after the restart"
 
     # The interrupted round plays on through the countdown, and wins and resets.
@@ -68,6 +69,15 @@ def test_the_restart_flushes_and_resets_inside_the_pause(source):
     assert len(flush) == 1 and len(reset) == 1
     assert flush[0][0] <= reset[0][0] < T + 10.0
     assert reset[0][3], "the reset ran with stats collecting"
+
+
+def test_hlstatsx_freezes_only_after_the_abandoned_segment_is_flushed(source):
+    sim = _restarted(source)
+    assert sim.daemon_round_live() == 1, "frozen before the flush: its weaponstats land untagged"
+    sim.advance(T + 1.0)
+    order = [s for s in sim.order if s == "dodx_flush_all_stats" or s.startswith("KTP_ROUND_FREEZE")]
+    assert order == ["dodx_flush_all_stats", 'KTP_ROUND_FREEZE (matchid "KTP-TEST-1")']
+    assert sim.daemon_round_live() == 0
 
 
 def test_the_score_restore_lands_between_the_clan_reset_and_go_live(source):

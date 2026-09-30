@@ -20,7 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
     (`ktp_await_initial_roundlive`): stats pause at the trigger, go-live is the clan
     restart's `RoundState=1` (or the fallback timer if it never comes), and only then do
     stats resume and the match context and death baseline get set.
-  - At the trigger it also logs `KTP_ROUND_FREEZE`, so HLStatsX stops tagging kills. At
+  - Right after the abandoned segment's stats are flushed (0.1s after the trigger) it also
+    logs `KTP_ROUND_FREEZE`, so HLStatsX stops tagging kills. Logging it any earlier would
+    leave that flush's weaponstats untagged. At
     go-live the half's `KTP_MATCH_START` is logged again with the same match id and half;
     the daemon treats a repeat as a no-op apart from reopening tagging, and `ktp_matches`
     keeps the half's original `start_time`.

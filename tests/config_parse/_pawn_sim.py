@@ -374,6 +374,7 @@ class Sim:
         self._funcs = {}
         self.since = 0.0          # hl() and ktp() ignore lines logged before this
         self.calls = []           # (time, name, args, paused) for RECORDED natives
+        self.order = []           # recorded natives and HLStatsX lines, in call order
 
     # ---- driving ----
     def arm_go_live(self, match_id: str = "KTP-TEST-1"):
@@ -422,6 +423,7 @@ class Sim:
     def native(self, name, args):
         if name in RECORDED:
             self.calls.append((self.now, name, list(args), self.paused))
+            self.order.append(name)
         if name == "safe_sid":
             return args[0]
         if name == "dodx_has_gamerules":
@@ -437,6 +439,7 @@ class Sim:
             return 0
         if name == "log_message":
             self.hl_log.append((self.now, pawn_format(args[0], args[1:])))
+            self.order.append(self.hl_log[-1][1])
             return 0
         if name == "log_amx":
             return 0

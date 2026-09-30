@@ -8983,11 +8983,10 @@ stock execute_restart_half(id, const name[], const sid[], const ip[]) {
     #endif
 
     // The restarted half goes live the way a half start does. HLStatsX still holds
-    // this match open, so it needs the freeze too or it tags every countdown kill.
+    // this match open; task_restarthalf_stats freezes it once the flush is logged.
     #if defined HAS_DODX
     if (g_hasDodxStatsNatives) {
         ktp_await_initial_roundlive("2nd half");
-        log_message("KTP_ROUND_FREEZE (matchid ^"%s^")", g_matchId);
     }
     #endif
 
@@ -9027,6 +9026,9 @@ public task_restarthalf_stats() {
     if (g_hasDodxStatsNatives) {
         new flushed = dodx_flush_all_stats();
         log_ktp("event=RESTARTHALF_STATS_FLUSHED players=%d", flushed);
+
+        // Freeze only after the flush, so the abandoned segment's weaponstats stay tagged.
+        log_message("KTP_ROUND_FREEZE (matchid ^"%s^")", g_matchId);
 
         new reset = dodx_reset_all_stats();
         log_ktp("event=RESTARTHALF_STATS_RESET players=%d", reset);
