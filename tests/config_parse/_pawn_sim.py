@@ -6,8 +6,8 @@ play a sequence of RoundState messages through the real logic instead of greppin
 for the lines it hopes are there.
 
 Supported: if/else, return, `new` locals, expression statements, assignment,
-&& || ! ?: comparisons and arithmetic, calls, string indexing, tags (ignored),
-#if defined / #else / #endif. Anything else raises, so a handler that grows a loop
+&& || ! ?: comparisons and arithmetic, calls, string indexing, cell arrays a test
+seeds as lists, tags (ignored), #if defined / #else / #endif, #pragma (ignored). Anything else raises, so a handler that grows a loop
 fails loudly here rather than being half-simulated.
 """
 from __future__ import annotations
@@ -19,7 +19,13 @@ from pathlib import Path
 SOURCE = Path(__file__).resolve().parents[2] / "KTPMatchHandler.sma"
 DEFINED = {"HAS_DODX"}
 # Pawn stocks that wrap engine output; the simulator records them instead.
-AS_NATIVE = {"log_ktp", "ktp_activate_initial_roundlive_stats"}
+AS_NATIVE = {"log_ktp", "ktp_activate_initial_roundlive_stats", "update_match_scores_from_dodx",
+             "announce_all", "safe_sid", "clear_saved_scores", "task_delayed_score_restore"}
+# Natives with no effect on round state: recorded in Sim.calls with the pause flag.
+RECORDED = {"ktp_activate_initial_roundlive_stats", "update_match_scores_from_dodx",
+            "announce_all", "clear_saved_scores", "task_delayed_score_restore", "server_cmd",
+            "server_exec", "dodx_set_team_score", "dodx_flush_all_stats", "dodx_reset_all_stats",
+            "ktp_unpause_now"}
 
 
 # ---------------------------------------------------------------- source ----
@@ -58,6 +64,9 @@ def _preprocess(text: str) -> str:
             continue
         if s.startswith("#if"):
             raise NotImplementedError(f"preprocessor: {s}")
+        if s.startswith("#pragma"):
+            lines.append("")
+            continue
         if s == "#else":
             stack[-1] = not stack[-1]
             lines.append("")
@@ -79,7 +88,7 @@ class Source:
             for m in re.finditer(r"^#define (\w+) (-?[\d.]+)\b", self.code, re.M)
         }
         self.globals = {}
-        for m in re.finditer(r"^new (?:bool:|Float:)?(g_\w+)(\[[^\]]*\])?(?: = ([^;]+))?;",
+        for m in re.finditer(r"^new (?:bool:|Float:)?\s*(g_\w+)(\[[^\]]*\])?(?: = ([^;]+))?;",
                              self.code, re.M):
             name, array, init = m.groups()
             if array:
@@ -364,13 +373,17 @@ class Sim:
         self._event_arg = None
         self._funcs = {}
         self.since = 0.0          # hl() and ktp() ignore lines logged before this
+        self.calls = []           # (time, name, args, paused) for RECORDED natives
+        self.order = []           # recorded natives and HLStatsX lines, in call order
 
     # ---- driving ----
     def arm_go_live(self, match_id: str = "KTP-TEST-1"):
-        """Run task_deferred_stats' own arming statements: pause, then wait for go-live."""
+        """Arm go-live the way task_deferred_stats does: pause, then wait for the round."""
         self.g.update(g_matchLive=True, g_matchId=match_id)
-        self._exec(self.src.fragment("// 3. Pause stats until round goes live",
-                                     "event=STATS_PAUSED_AWAITING_ROUNDLIVE"), {})
+        self.call("ktp_await_initial_roundlive", [self.g["g_deferredHalfText"]])
+
+    def called(self, name: str):
+        return [c for c in self.calls if c[1] == name]
 
     def advance(self, to: float):
         while self.tasks and self.tasks[0][0] <= to:
@@ -408,6 +421,15 @@ class Sim:
 
     # ---- natives ----
     def native(self, name, args):
+        if name in RECORDED:
+            self.calls.append((self.now, name, list(args), self.paused))
+            self.order.append(name)
+        if name == "safe_sid":
+            return args[0]
+        if name == "dodx_has_gamerules":
+            return 1
+        if name in RECORDED and name != "ktp_activate_initial_roundlive_stats":
+            return 0
         if name == "read_data":
             return self._event_arg
         if name == "get_gametime":
@@ -417,6 +439,7 @@ class Sim:
             return 0
         if name == "log_message":
             self.hl_log.append((self.now, pawn_format(args[0], args[1:])))
+            self.order.append(self.hl_log[-1][1])
             return 0
         if name == "log_amx":
             return 0
@@ -516,6 +539,8 @@ class Sim:
             return self._eval(node[2] if self._truth(self._eval(node[1], local)) else node[3], local)
         if kind == "index":
             base, idx = self._eval(node[1], local), self._eval(node[2], local)
+            if isinstance(base, list):
+                return base[idx]
             return ord(base[idx]) if idx < len(base) else 0
         if kind == "bin":
             op = node[1]
@@ -530,6 +555,12 @@ class Sim:
                     "/": lambda: a / b, "%": lambda: a % b}[op]()
         if kind == "assign":
             op, target, value = node[1], node[2], self._eval(node[3], local)
+            if target[0] == "index" and op == "=":
+                cells = self._eval(target[1], local)
+                if not isinstance(cells, list):
+                    raise NotImplementedError("assignment into a string")
+                cells[self._eval(target[2], local)] = value
+                return value
             if target[0] != "var":
                 raise NotImplementedError("assignment to a non-variable")
             if op == "+=":

@@ -88,12 +88,12 @@ def test_only_known_sites_pause_stats():
         owners.add(owner)
     # freeze, the go-live wait (resumed by RoundState=1 or its timeout), and the
     # test-mode end, which is meant to stay paused until the next .testmatch.
-    assert owners == {"evt_RoundState", "task_deferred_stats", "cmd_test_end_match"}, owners
+    assert owners == {"evt_RoundState", "ktp_await_initial_roundlive", "cmd_test_end_match"}, owners
 
 
 def test_go_live_wait_clears_a_stale_freeze_watchdog():
-    deferred = _body("public", "task_deferred_stats")
-    assert deferred.index("remove_task(g_taskRoundFreezeWatchdogId);") < deferred.index(
+    await_live = _body("stock", "ktp_await_initial_roundlive")
+    assert await_live.index("remove_task(g_taskRoundFreezeWatchdogId);") < await_live.index(
         "ktp_arm_roundlive_fallback("
     )
 
@@ -109,5 +109,5 @@ def test_go_live_waits_for_the_clan_restart_round_reset():
     assert "g_roundResetSeen = true;" in gate
     assert "ktp_arm_roundlive_fallback(ROUNDLIVE_AFTER_RESET_SECS);" in gate
     # Each go-live wait starts without a reset seen.
-    deferred = _body("public", "task_deferred_stats")
-    assert deferred.index("g_roundResetSeen = false;") < deferred.index("ktp_arm_roundlive_fallback(")
+    await_live = _body("stock", "ktp_await_initial_roundlive")
+    assert await_live.index("g_roundResetSeen = false;") < await_live.index("ktp_arm_roundlive_fallback(")

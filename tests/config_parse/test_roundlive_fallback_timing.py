@@ -56,10 +56,11 @@ def test_every_roundlive_timeout_is_armed_from_the_clan_timer():
     assert arms == ["delay"], f"fallback armed outside ktp_arm_roundlive_fallback: {arms}"
     assert _delay_expr(_body("stock", "ktp_arm_roundlive_fallback"), "task_roundlive_timeout") == "delay"
 
-    deferred = _body("public", "task_deferred_stats")
+    await_live = _body("stock", "ktp_await_initial_roundlive")
     assert re.search(
-        rf"ktp_arm_roundlive_fallback\(\s*{HELPER}\(ROUNDLIVE_FALLBACK_MARGIN_SECS\)\)", deferred
-    ), "Phase 1 does not arm the fallback from the clan timer"
+        rf"ktp_arm_roundlive_fallback\(\s*{HELPER}\(ROUNDLIVE_FALLBACK_MARGIN_SECS\)\)", await_live
+    ), "the go-live wait does not arm the fallback from the clan timer"
+    assert "ktp_await_initial_roundlive(g_deferredHalfText);" in _body("public", "task_deferred_stats")
 
     # Phase 1 can run before the config task in the same 0.1s task check, so the
     # config task re-arms it from the value the map config just set.
