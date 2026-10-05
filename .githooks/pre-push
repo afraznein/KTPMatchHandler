@@ -1,0 +1,5 @@
+#!/bin/sh
+# core.hooksPath shadows .git/hooks, so hand off to the pre-push gate scripts/install-hooks.sh put there.
+legacy="$(git rev-parse --git-common-dir)/hooks/pre-push"
+[ -x "$legacy" ] || exit 0
+exec "$legacy" "$@"
