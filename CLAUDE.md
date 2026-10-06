@@ -165,6 +165,20 @@ Admin Commands:
 - .forcereset - Clear all match state (ADMIN_RCON, requires confirmation)
 ```
 
+### Two repeating HUDs precede a live match, and both are baked into the demo
+
+Pre-start and pending each arm their own 1-second repeating HUD tick with no cap,
+so everything before `KTP_MATCH_START` is unskippable for anyone editing an HLTV
+demo. ⚠️ **A long lead-in is almost always PENDING, not pre-start** — measured over
+585 completed pre-starts across all 24 instances (2026-08-17 → 09-28), pre-start
+runs p50 24 s / p90 145 s while pending runs p50 115 s / p90 282 s. The match that
+prompted the original complaint had a **7-second** pre-start.
+
+➡️ **So attribute a long lead-in by measuring both phases, never by trusting the one
+the report names.** Pre-start exits only on `.confirm` from both teams, `.cancel`,
+`.forcereset` or a `changelevel`, so an abandoned session reads as a multi-hour
+pre-start nobody sat through — exclude those before quoting a percentile.
+
 ### Tech pause budget
 
 `.pause`/`.tac` are DISABLED — only `.tech` is allowed. Tech pauses use a team budget (default 300s
