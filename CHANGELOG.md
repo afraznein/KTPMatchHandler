@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.178] - 2026-10-16
+
+### Changed
+
+- **The bare word `cancel` is no longer a match command.** `.cancel` and `/cancel` are
+  unchanged; `say cancel` and `say_team cancel` are no longer registered.
+
+  A player typing `cancel` in chat cancelled a live 12man. The twelve players restarted on
+  the same map as `.ktp`, so the match was recorded as a league fixture, and putting it right
+  meant reclassifying eight rows across four tables — `ktp_ac_match_index` stores the type as
+  a string while `ktp_matches` and the team-score tables store the plugin's numeric code, so
+  a partial fix would have left four tables still asserting a league fixture. The repair also
+  left no record in the database that a reclassification had happened at all, which is its own
+  open question.
+
+  Nothing advertised the bare form: every match-cancel string in the plugin and the console
+  help already name `.cancel`. Bare aliases remain for read-only commands such as `status`,
+  where a stray chat message costs nothing.
+
+  The 12man Queue-ID prompt still aborts on the bare word. It never went through this
+  registration — the generic `say` hook captures chat while the prompt is open and
+  `handle_13_queue_id_input` matches `cancel`, `abort` or `.cancel` itself. Removing the
+  registration also ends a double dispatch there: with the prompt open, the word previously
+  reached both the prompt's abort and `cmd_cancel`.
+
+---
+
 ## [0.10.177] - 2026-09-29
 
 ### Fixed

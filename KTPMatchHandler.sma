@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.177"
+#define PLUGIN_VERSION "0.10.178"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -5203,10 +5203,10 @@ public plugin_init() {
     register_clcmd("say .status",         "cmd_status");
     register_clcmd("say_team .status",    "cmd_status");
 
+    // No bare "cancel": a player typing the word in conversation cancelled a live
+    // 12man, and the recovery was a reclassification across four tables.
     register_clcmd("say /cancel",       "cmd_cancel");
     register_clcmd("say_team /cancel",  "cmd_cancel");
-    register_clcmd("say cancel",        "cmd_cancel");
-    register_clcmd("say_team cancel",   "cmd_cancel");
     register_clcmd("say .cancel",       "cmd_cancel");
     register_clcmd("say_team .cancel",  "cmd_cancel");
 
