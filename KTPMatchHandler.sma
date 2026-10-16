@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.178"
+#define PLUGIN_VERSION "0.10.179"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -4659,6 +4659,15 @@ public OnPausedHUDUpdate() {
 }
 
 // ================= Pre-Start HUD =================
+
+// Recipients for the pre-match HUDs. The HLTV proxy is an ordinary client, so a
+// ShowSyncHudMsg to 0 records the lobby text into every demo the proxy takes.
+stock hud_human_targets(targets[MAX_PLAYERS]) {
+    new num;
+    get_players(targets, num, "ch");   // connected humans; skips the proxy and bots
+    return num;
+}
+
 public pending_hud_tick() {
     if (!g_matchPending) { remove_task(g_taskPendingHudId); return; }
 
@@ -4702,14 +4711,18 @@ public pending_hud_tick() {
     format_waiting_line(waitingLine, charsmax(waitingLine));
 
     set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 1.2, 0.0, 0.0, -1);
-    ClearSyncHud(0, g_hudSync);
-    ShowSyncHudMsg(0, g_hudSync,
-        "KTP %s Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type .rdy when ready.%s",
-        matchLabel, pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need, waitingLine);
+    new humans[MAX_PLAYERS];
+    new numHumans = hud_human_targets(humans);
+    for (new i = 0; i < numHumans; i++) {
+        ClearSyncHud(humans[i], g_hudSync);
+        ShowSyncHudMsg(humans[i], g_hudSync,
+            "KTP %s Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type .rdy when ready.%s",
+            matchLabel, pauseInfo, alliesReady, alliesPlayers, techA, axisReady, axisPlayers, techX, need, waitingLine);
+    }
 }
 
 // Show pending HUD during pause (called from OnPausedHUDUpdate hook)
-// This runs every frame, so pause timer updates in real-time
+// Driven by that hook and real time because AMXX tasks do not run during a pause.
 stock show_pending_hud_during_pause() {
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
@@ -4747,6 +4760,8 @@ stock show_pending_hud_during_pause() {
     format_waiting_line(waitingLine, charsmax(waitingLine));
 
     set_hudmessage(0, 255, 140, 0.01, 0.12, 0, 0.0, 0.1, 0.0, 0.0, -1);
+    // Broadcast, unlike the other pending HUDs: the caster's overlay feed carries no
+    // pause countdown or pause-type label, and OnPausedHUDUpdate bounds this to 1/s.
     ClearSyncHud(0, g_hudSync);
     ShowSyncHudMsg(0, g_hudSync,
         "KTP %s Pending%s^nAllies: %d/%d ready (tech:%ds)^nAxis: %d/%d ready (tech:%ds)^nNeed %d/team - Type .rdy when ready.%s",
@@ -4755,16 +4770,17 @@ stock show_pending_hud_during_pause() {
 
 // Show continuation HUD for 2nd half or OT pending (1.2s hold time for task tick)
 stock show_continuation_pending_hud(alliesReady, alliesPlayers, axisReady, axisPlayers, need, const pauseInfo[]) {
-    show_continuation_pending_hud_internal(alliesReady, alliesPlayers, axisReady, axisPlayers, need, pauseInfo, 1.2);
+    show_continuation_pending_hud_internal(alliesReady, alliesPlayers, axisReady, axisPlayers, need, pauseInfo, 1.2, false);
 }
 
 // Show continuation HUD for 2nd half or OT pending (0.1s hold time for pause hook)
+// Keeps the proxy for the same reason show_pending_hud_during_pause does.
 stock show_continuation_pending_hud_fast(alliesReady, alliesPlayers, axisReady, axisPlayers, need, const pauseInfo[]) {
-    show_continuation_pending_hud_internal(alliesReady, alliesPlayers, axisReady, axisPlayers, need, pauseInfo, 0.1);
+    show_continuation_pending_hud_internal(alliesReady, alliesPlayers, axisReady, axisPlayers, need, pauseInfo, 0.1, true);
 }
 
 // Internal: Build and show the continuation pending HUD
-stock show_continuation_pending_hud_internal(alliesReady, alliesPlayers, axisReady, axisPlayers, need, const pauseInfo[], Float:holdTime) {
+stock show_continuation_pending_hud_internal(alliesReady, alliesPlayers, axisReady, axisPlayers, need, const pauseInfo[], Float:holdTime, bool:includeProxy) {
     new header[64], scoreLine[96], readyLine[96];
 
     if (g_inOvertime) {
@@ -4798,10 +4814,20 @@ stock show_continuation_pending_hud_internal(alliesReady, alliesPlayers, axisRea
 
     // Yellow color for continuation pending, centered
     set_hudmessage(255, 255, 0, -1.0, 0.15, 0, 0.0, holdTime, 0.0, 0.0, -1);
-    ClearSyncHud(0, g_hudSync);
     // pauseInfo before waitingLine: if a long roster overflows the HUD cap, the
     // waiting list truncates rather than the pause timer.
-    ShowSyncHudMsg(0, g_hudSync, "%s^n%s^n^n%s%s%s", header, scoreLine, readyLine, pauseInfo, waitingLine);
+    if (includeProxy) {
+        ClearSyncHud(0, g_hudSync);
+        ShowSyncHudMsg(0, g_hudSync, "%s^n%s^n^n%s%s%s", header, scoreLine, readyLine, pauseInfo, waitingLine);
+        return;
+    }
+
+    new humans[MAX_PLAYERS];
+    new numHumans = hud_human_targets(humans);
+    for (new i = 0; i < numHumans; i++) {
+        ClearSyncHud(humans[i], g_hudSync);
+        ShowSyncHudMsg(humans[i], g_hudSync, "%s^n%s^n^n%s%s%s", header, scoreLine, readyLine, pauseInfo, waitingLine);
+    }
 }
 
 public prestart_hud_tick() {
@@ -4811,17 +4837,21 @@ public prestart_hud_tick() {
     get_match_type_label(matchLabel, charsmax(matchLabel));
 
     set_hudmessage(255, 210, 0, 0.01, 0.12, 0, 0.0, 1.2, 0.0, 0.0, -1);
-    ClearSyncHud(0, g_hudSync);
     // Render confirmer names live so a mid-confirm rename isn't shown stale.
     new alliesWho[80], axisWho[80];
     resolve_who_live(g_confirmAlliesBy, alliesWho, charsmax(alliesWho));
     resolve_who_live(g_confirmAxisBy, axisWho, charsmax(axisWho));
-    ShowSyncHudMsg(0, g_hudSync,
-        "KTP Pre-Start (%s): Waiting for .confirm^n%s: %s^n%s: %s^nCommands: .confirm, .prestatus, .cancel",
-        matchLabel,
-        g_teamName[1], g_preConfirmAllies ? alliesWho : "—",
-        g_teamName[2], g_preConfirmAxis   ? axisWho   : "—"
-    );
+    new humans[MAX_PLAYERS];
+    new numHumans = hud_human_targets(humans);
+    for (new i = 0; i < numHumans; i++) {
+        ClearSyncHud(humans[i], g_hudSync);
+        ShowSyncHudMsg(humans[i], g_hudSync,
+            "KTP Pre-Start (%s): Waiting for .confirm^n%s: %s^n%s: %s^nCommands: .confirm, .prestatus, .cancel",
+            matchLabel,
+            g_teamName[1], g_preConfirmAllies ? alliesWho : "—",
+            g_teamName[2], g_preConfirmAxis   ? axisWho   : "—"
+        );
+    }
 }
 
 // Deferred 2nd-half/OT announce: fires the full restoration banner block at
