@@ -6,6 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.179] - 2026-10-16
+
+### Changed
+
+- **The pre-match HUDs are no longer recorded into HLTV demos.** The pre-start, ready-up
+  and 2nd-half/OT pending HUDs now go to connected humans only. `ShowSyncHudMsg(0, ...)`
+  sends to every client and the HLTV proxy is a client, so the proxy recorded the lobby
+  text into every demo it took — the plugin cannot detect a recording, because recording
+  happens proxy-side.
+
+  All three repeating sites are covered, not just the pre-start one. Over 585 completed
+  pre-starts the pre-start phase is the short one and ready-up is several times longer,
+  so a change scoped to `prestart_hud_tick` alone would have left most of the baked-in
+  text in place.
+
+  Recipients come from `get_players(..., "ch")`, which is the filter already used
+  elsewhere in this plugin for "connected humans": it drops HLTV proxies and bots.
+  Human spectators still receive these HUDs, and clearing at go-live still goes to
+  every client, so a proxy holding a leftover pause-path HUD is still cleared.
+
+- **The pause-path pending HUD deliberately still broadcasts.** `show_pending_hud_during_pause`,
+  and the continuation HUD reached from it, keep going to the proxy. The caster's OBS feed
+  (`/api/hq`) exposes `timerFrozen` and carries no pause countdown and no
+  TECHNICAL/TACTICAL label, so suppressing this one would take information off the
+  broadcast that nothing else supplies. `show_continuation_pending_hud_internal` is shared
+  by the task tick and the pause hook, so the choice is now an explicit argument rather
+  than something inferred from the hold time.
+
+  No rate limiter was needed for it: `OnPausedHUDUpdate` already throttles its whole body
+  to one update per second, so the proxy was never receiving this per server frame. The
+  comment on `show_pending_hud_during_pause` claiming it "runs every frame" predated that
+  throttle and has been corrected to the fact that still holds — it is driven by the pause
+  hook and real time because AMXX tasks do not run during a pause.
+
+- Not changed: the HLTV proxies' own 60-second delay (an anti-ghosting requirement, and
+  proxy-side buffering that no usermsg recipient change can affect), the live-match
+  TACTICAL/TECHNICAL pause HUD in `show_pause_hud_message` (same caster-feed reasoning as
+  the pause path above), and the 12man Queue-ID prompt. That prompt is a `show_hudmessage`
+  on a different HUD channel, and its input capture is the generic `say` hook
+  (`handle_say_command` → `handle_13_queue_id_input`), which touches none of these sites.
+
+  README was also brought back to the current version: all four of its version sites were
+  still on 0.10.177, having been missed by the 0.10.178 bump.
+
+---
+
 ## [0.10.178] - 2026-10-16
 
 ### Changed
