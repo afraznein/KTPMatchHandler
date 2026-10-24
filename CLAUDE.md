@@ -165,11 +165,31 @@ Admin Commands:
 - .forcereset - Clear all match state (ADMIN_RCON, requires confirmation)
 ```
 
-### Two repeating HUDs precede a live match, and both are baked into the demo
+### The pre-match HUDs are no longer baked into the demo — except under a pause
 
-Pre-start and pending each arm their own 1-second repeating HUD tick with no cap,
-so everything before `KTP_MATCH_START` is unskippable for anyone editing an HLTV
-demo. ⚠️ **A long lead-in is almost always PENDING, not pre-start** — measured over
+🔻 **FIXED in 0.10.179 (#55, fielded 2026-10-23) — this section asserted the
+pre-fix state and is corrected in place.** `prestart_hud_tick`, `pending_hud_tick`
+and `show_continuation_pending_hud_internal` now send through `get_players(..., "ch")`,
+which drops HLTV proxies and bots in one call, so the 1-second re-arm no longer
+reaches the proxy and no longer lands in the recording.
+
+✅ **Measured by effect on the demos themselves, not from the version banner:**
+the literal pre-start HUD text occurs **192** times in the last pre-swap half
+(`12man_1.3-7102-ATL1_h1`, 2026-10-23 00:31) and **21** times in a second pre-swap
+half on another host, against **0** in four post-swap halves across ATL1, DAL1 and
+NY1 — with a nonsense-token control at 0 in every file, so the zero is a
+measurement and not a blind probe.
+
+⚠️ **THE ONE CASE THAT STILL BAKES: a PAUSED pre-match.** AMXX tasks do not run
+during a pause, so a paused ready-up is served by the pause hook rather than the
+task tick, and that path still broadcasts to recipient `0` by ruling — deliberately,
+so the caster keeps the pause countdown and the TECHNICAL/TACTICAL label, which his
+own feed (`/api/hq`) does not carry. ⛔ **So a long lead-in that was PAUSED is not
+covered by #55**, and the four post-swap demos above carry no pause, so they do not
+test it. 🔑 **`show_pause_hud_message` is a FIFTH `ShowSyncHudMsg(0, …)` site**,
+also left broadcasting — re-derive the count rather than reading it here.
+
+🔑 **Still true and still load-bearing: ⚠️ a long lead-in is almost always PENDING, not pre-start** — measured over
 585 completed pre-starts across all 24 instances (2026-08-17 → 09-28), pre-start
 runs p50 24 s / p90 145 s while pending runs p50 115 s / p90 282 s. The match that
 prompted the original complaint had a **7-second** pre-start.
