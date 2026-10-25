@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.180] - 2026-10-24
+
+### Fixed
+
+- **A chat command can no longer become a 1.3 Community Queue ID.** While the 12man captain
+  is entering the Queue ID, every chat line from them is captured, and the sanitizer strips
+  the leading `.`. On 2026-10-24 on ATL1 the captain typed `.confirm` twice (the confirm
+  prompt read "Type it again to confirm"), the Queue ID became `confirm`, and the match ran
+  as `1.3-confirm-NY1`. No fixture carries that id, so the stats daemon opened no match
+  interval and refused every capture line of the match: 9,187 position samples, 4,730 shots,
+  1,183 life boundaries and every other stream, logged as "found 0 event-time match
+  intervals". Input starting with `.` or `/` is now refused with a message and the flow keeps
+  waiting (`event=13COMMUNITY_QUEUE_ID_REJECTED_COMMAND`); `.cancel`/`cancel` still cancel.
+  The confirm prompt now reads "Type the same Queue ID again to confirm (not .confirm)".
+
+---
+
 ## [0.10.179] - 2026-10-16
 
 ### Changed

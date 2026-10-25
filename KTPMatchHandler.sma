@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.179"
+#define PLUGIN_VERSION "0.10.180"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -8095,6 +8095,18 @@ stock handle_13_queue_id_input(id, const input[]) {
         return PLUGIN_HANDLED;
     }
 
+    // A chat command is never a Queue ID. The captain is the only player whose chat
+    // this flow captures, and the sanitizer below strips the '.', so ".confirm" typed
+    // twice became the Queue ID "confirm" and the match ran as 1.3-confirm-NY1: no
+    // fixture can carry that id, and the stats daemon refused every capture line of
+    // the match ("found 0 event-time match intervals", 2026-10-24 ATL1). The confirm
+    // prompt invited it ("Type it again to confirm"). Refuse and keep waiting.
+    if (input[0] == '.' || input[0] == '/') {
+        client_print(id, print_chat, "[KTP] '%s' is a command, not a Queue ID. Type the Queue ID from the queue bot (or 'cancel').", input);
+        log_ktp("event=13COMMUNITY_QUEUE_ID_REJECTED_COMMAND input_state=%d captain_id=%d", g_13InputState, id);
+        return PLUGIN_HANDLED;
+    }
+
     // Sanitize input - only allow alphanumeric, dash, underscore
     new sanitized[32];
     new outPos = 0;
@@ -8134,7 +8146,7 @@ stock handle_13_queue_id_input(id, const input[]) {
         show_hudmessage(0, "12man QUEUE ID: %s^n^n(Awaiting confirmation...)", sanitized);
 
         client_print(id, print_chat, "[KTP] Queue ID received: %s", sanitized);
-        client_print(id, print_chat, "[KTP] Type it again to confirm:");
+        client_print(id, print_chat, "[KTP] Type the same Queue ID again to confirm (not .confirm):");
 
         g_13InputState = 2; // Move to confirmation state
 
