@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.181] - 2026-11-04
+
+### Added
+
+- **Who has a live anti-cheat session is announced when a match goes live.** The deferred
+  match-start phase now reads `GET /api/ac/server-roster` for this server's endpoint and
+  prints the result to everyone: a count, the players with a live AC session, and the
+  players whose session is live but capture blind. `captureBlind` is a third state, so it
+  gets its own line rather than being folded into the first.
+
+  **It prints who IS live and never who is not.** Naming a player who is not running the
+  client in open chat is accusation-adjacent; the live list gives captains the same
+  information and labels nobody. Absence is also not proof — the heartbeat is a 30s beat
+  behind a 90s TTL, so a client started in the last minute reads as absent, and the last
+  chat line says so.
+
+  **Report only, on every path.** It cannot refuse, delay or alter a `.ready` or a go-live:
+  a missing `ac.ini`, a curl failure, a non-2xx, an unparseable body, a body that does not
+  echo this endpoint and a match that ended inside the request window each return after
+  logging, and the first four say so once in chat so silence is never read as "nobody is
+  live". No cvar, no new config key and no new secret — it reuses the `ac.ini`
+  `api_base_url` / `server_secret` transport and the persistent `X-Server-Secret` slist.
+
+  **Non-vacuity control.** An empty roster and a broken call look identical from the session
+  count alone, so the reading is only believed when the body echoes the endpoint this
+  server sent AND carries a usable `ttlSeconds` AND carries a `sessions` array — two
+  independent markers a failed or misrouted call cannot produce. `event=AC_ROSTER_PARSE`
+  records those markers beside the counts, so a genuine zero (`endpoint_echo=match`,
+  `ttl=90`, `sessions=0`) is distinguishable from a call that never landed; sessions present
+  with none resolving to a player on a team gets its own `event=AC_ROSTER_NONE_MATCHED`
+  line, because that is the universe-digit identity failure returning rather than a
+  compliance reading.
+
+  Matching folds the universe digit on both sides. GoldSrc always renders `STEAM_0` while
+  the client can report `STEAM_1` for the same account, which is how a heartbeating player
+  was once read as not running the AC at all. An id with no account part never matches.
+
+---
+
 ## [0.10.180] - 2026-10-24
 
 ### Fixed

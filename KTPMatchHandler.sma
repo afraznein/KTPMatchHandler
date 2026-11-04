@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.180"
+#define PLUGIN_VERSION "0.10.181"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -142,6 +142,13 @@ new bool:g_acAnnounceConfirmed;      // latch: a 2xx came back, stop re-announci
 // ~20 min of 30s carriers. The measured loss clusters on whole evenings, not on
 // single packets, so this bounds an outage rather than a retransmit.
 #define AC_ANNOUNCE_MAX_ATTEMPTS 40
+// Live-session roster read at go-live. Report only — nothing here can refuse a
+// `.ready` or a go-live on any path.
+new g_acRosterMatchId[64];           // match_id the in-flight roster GET belongs to
+// Sized for a full server at the widest plausible clientVersion; a body that fills
+// it is reported as truncated rather than read as a short roster.
+#define AC_ROSTER_BODY_SIZE 6144
+new g_acRosterBody[AC_ROSTER_BODY_SIZE];
 // Widest match-type key the AC wire vocabulary can hold, plus EOS.
 #define AC_MATCH_TYPE_SIZE 16
 // Worst-case body: every field at full width. matchId is g_matchId[64] and the
@@ -3042,6 +3049,257 @@ stock ac_announce_state_reset() {
     g_acAnnounceMatchId[0] = EOS;
     g_acAnnounceAttempts = 0;
     g_acAnnounceConfirmed = false;
+    // Rides the same reset: an in-flight roster GET whose match is gone must not
+    // print its answer into the next match.
+    g_acRosterMatchId[0] = EOS;
+}
+
+// ================= AC live-session roster at go-live =================
+// Who has a LIVE anti-cheat session on this server, read once when the match goes
+// live and printed to everyone. A REPORT, not a gate: every path below returns
+// without touching match state, and nothing here can refuse a go-live.
+//
+// Deliberately prints only who IS live. Naming who is not is accusation-adjacent,
+// and the live list gives captains the same information while labelling nobody.
+
+// The universe digit is not account identity. GoldSrc always renders STEAM_0 while
+// the AC client can report STEAM_1 for the same account, which once read a live
+// player as not running the client at all. An id with no account part yields an
+// empty tail, which never matches — an unparseable string is not evidence of identity.
+stock ac_steam_tail(const sid[], out[], maxlen) {
+    out[0] = EOS;
+    new colon = contain(sid, ":");
+    if (colon == -1) return;
+    copy(out, maxlen, sid[colon + 1]);
+}
+
+// ttlSeconds from the roster body, or -1 when it is absent or unparseable. One of
+// the two independent markers that say the response really came from this endpoint.
+stock ac_roster_parse_ttl() {
+    new at = contain(g_acRosterBody, "^"ttlSeconds^":");
+    if (at == -1) return -1;
+    at += 14;
+    if (!isdigit(g_acRosterBody[at])) return -1;
+    new digits[12], n = 0;
+    while (isdigit(g_acRosterBody[at + n]) && n < charsmax(digits)) {
+        digits[n] = g_acRosterBody[at + n];
+        n++;
+    }
+    digits[n] = EOS;
+    return str_to_num(digits);
+}
+
+// True while the match that asked for this roster is still the live one.
+stock bool:ac_roster_match_is_current() {
+    return g_matchLive && g_matchId[0] && g_acRosterMatchId[0] && equal(g_matchId, g_acRosterMatchId);
+}
+
+// Said out loud so an absent announcement is never read as "nobody is live".
+stock ac_roster_announce_unavailable() {
+    if (!ac_roster_match_is_current()) return;
+    announce_all("Anti-cheat check at go-live: no reading taken (roster unavailable). The match is unaffected.");
+}
+
+// One labelled list, wrapped across chat lines. announce_all's buffer is 192 and a
+// full team of long names overruns a single line.
+stock ac_roster_announce_names(const label[], const ids[], count) {
+    new line[160], name[32];
+    new idx = 0;
+    for (new i = 0; i < count; i++) {
+        get_user_name(ids[i], name, charsmax(name));
+        if (idx > 0 && idx + strlen(name) + 2 > 140) {
+            announce_all("%s %s", label, line);
+            idx = 0;
+            line[0] = EOS;
+        }
+        if (idx > 0) idx += formatex(line[idx], charsmax(line) - idx, ", ");
+        idx += formatex(line[idx], charsmax(line) - idx, "%s", name);
+    }
+    if (idx > 0) announce_all("%s %s", label, line);
+}
+
+// Parse the roster body, resolve it against the players on teams, and print.
+stock ac_roster_render(httpCode, bytes) {
+    new bool:truncated = (bytes >= AC_ROSTER_BODY_SIZE - 1);
+
+    // Non-vacuity control. An empty roster and a broken call are indistinguishable
+    // from the session count alone, so the reading is only believed when the body
+    // echoes OUR endpoint and carries a usable TTL and a sessions array. Two
+    // independent markers, neither of which a failed or misrouted call produces.
+    new echoWant[80];
+    formatex(echoWant, charsmax(echoWant), "^"serverEndpoint^":^"%s^"", g_acServerEndpoint);
+    new bool:echoOk = (contain(g_acRosterBody, echoWant) != -1);
+    new bool:sessionsOk = (contain(g_acRosterBody, "^"sessions^":[") != -1);
+    new ttl = ac_roster_parse_ttl();
+
+    if (!echoOk || !sessionsOk || ttl <= 0) {
+        log_ktp("event=AC_ROSTER_UNPARSED match_id=%s endpoint=%s http=%d bytes=%d truncated=%s endpoint_echo=%s sessions_marker=%s ttl=%d",
+            g_acRosterMatchId, g_acServerEndpoint, httpCode, bytes,
+            truncated ? "yes" : "no", echoOk ? "match" : "mismatch",
+            sessionsOk ? "present" : "absent", ttl);
+        ac_roster_announce_unavailable();
+        return;
+    }
+
+    new participants[MAX_PLAYERS], pnum;
+    get_match_participants(participants, pnum);
+
+    new onTeams[MAX_PLAYERS], onTeamsNum = 0;
+    new unresolvable = 0;
+    for (new i = 0; i < pnum; i++) {
+        new side = get_user_team(participants[i]);
+        if (side != 1 && side != 2) continue;
+        onTeams[onTeamsNum++] = participants[i];
+        new sid[44], tail[40];
+        get_user_authid(participants[i], sid, charsmax(sid));
+        ac_steam_tail(sid, tail, charsmax(tail));
+        if (!tail[0]) unresolvable++;
+    }
+
+    new liveIds[MAX_PLAYERS], liveNum = 0;
+    new blindIds[MAX_PLAYERS], blindNum = 0;
+    new sessions = 0;
+    new cursor = 0;
+
+    for (;;) {
+        new rel = contain(g_acRosterBody[cursor], "^"steamId^":^"");
+        if (rel == -1) break;
+        new at = cursor + rel + 11;
+
+        new sid[44], n = 0;
+        while (g_acRosterBody[at + n] && g_acRosterBody[at + n] != '"' && n < charsmax(sid)) {
+            sid[n] = g_acRosterBody[at + n];
+            n++;
+        }
+        sid[n] = EOS;
+        sessions++;
+
+        new next = at + n;
+        // Bound the flag search to this session object, or a later entry's flag
+        // reads onto this player. Terminate in place and restore; copying out
+        // cannot bound it, because clientVersion is client-supplied and unbounded.
+        new nextRel = contain(g_acRosterBody[next], "^"steamId^":^"");
+        new boundAt = (nextRel == -1) ? -1 : next + nextRel;
+        new saved = 0;
+        if (boundAt != -1) {
+            saved = g_acRosterBody[boundAt];
+            g_acRosterBody[boundAt] = EOS;
+        }
+        new bool:blind = (contain(g_acRosterBody[next], "^"captureBlind^":true") != -1);
+        if (boundAt != -1) g_acRosterBody[boundAt] = saved;
+
+        new sessionTail[40];
+        ac_steam_tail(sid, sessionTail, charsmax(sessionTail));
+        if (sessionTail[0]) {
+            for (new i = 0; i < onTeamsNum; i++) {
+                new playerSid[44], playerTail[40];
+                get_user_authid(onTeams[i], playerSid, charsmax(playerSid));
+                ac_steam_tail(playerSid, playerTail, charsmax(playerTail));
+                if (playerTail[0] && equal(sessionTail, playerTail)) {
+                    if (blind) blindIds[blindNum++] = onTeams[i];
+                    else liveIds[liveNum++] = onTeams[i];
+                    break;
+                }
+            }
+        }
+
+        cursor = next;
+    }
+
+    new matched = liveNum + blindNum;
+
+    // The control line. A real zero reads endpoint_echo=match with a usable ttl and
+    // sessions=0; a call that failed or was misrouted never reaches this line at all.
+    log_ktp("event=AC_ROSTER_PARSE match_id=%s endpoint=%s http=%d bytes=%d truncated=%s endpoint_echo=match sessions_marker=present ttl=%d sessions=%d matched=%d blind=%d on_teams=%d unresolvable_ids=%d",
+        g_acRosterMatchId, g_acServerEndpoint, httpCode, bytes,
+        truncated ? "yes" : "no", ttl, sessions, matched, blindNum, onTeamsNum, unresolvable);
+
+    // Sessions present but none resolved to a player on a team is the universe-digit
+    // class of failure returning, not a compliance reading.
+    if (sessions > 0 && matched == 0) {
+        log_ktp("event=AC_ROSTER_NONE_MATCHED match_id=%s sessions=%d on_teams=%d unresolvable_ids=%d",
+            g_acRosterMatchId, sessions, onTeamsNum, unresolvable);
+    }
+
+    if (!ac_roster_match_is_current()) {
+        log_ktp("event=AC_ROSTER_DISCARDED reason=match_changed requested='%s' current='%s'",
+            g_acRosterMatchId, g_matchId);
+        return;
+    }
+
+    announce_all("Anti-cheat check at go-live: %d of %d players on teams have a live AC session.",
+        matched, onTeamsNum);
+    if (liveNum > 0) ac_roster_announce_names("AC live:", liveIds, liveNum);
+    if (blindNum > 0) ac_roster_announce_names("AC live, capture blind:", blindIds, blindNum);
+    if (truncated) announce_all("The roster reply was longer than this list can hold, so the list above may be short.");
+    announce_all("Not being listed is not proof: the roster refreshes every 30s, so a client started in the last minute can read as absent.");
+}
+
+public ac_roster_callback(CURL:curl, CURLcode:code) {
+    if (code != CURLE_OK) {
+        new error[128];
+        curl_easy_strerror(code, error, charsmax(error));
+        log_ktp("event=AC_ROSTER_FAILED reason=curl curl_code=%d error='%s' match_id=%s endpoint=%s",
+            _:code, error, g_acRosterMatchId, g_acServerEndpoint);
+        curl_easy_cleanup(curl);
+        ac_roster_announce_unavailable();
+        return;
+    }
+
+    new httpCode;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, httpCode);
+    if (httpCode < 200 || httpCode >= 300) {
+        log_ktp("event=AC_ROSTER_FAILED reason=http http=%d match_id=%s endpoint=%s",
+            httpCode, g_acRosterMatchId, g_acServerEndpoint);
+        curl_easy_cleanup(curl);
+        ac_roster_announce_unavailable();
+        return;
+    }
+
+    g_acRosterBody[0] = EOS;
+    new bytes = curl_get_response_body(curl, g_acRosterBody, charsmax(g_acRosterBody));
+    curl_easy_cleanup(curl);
+    ac_roster_render(httpCode, bytes);
+    // g_acCurlHeaders is persistent — never free here (async-safety, same principle as g_curlHeaders).
+}
+
+// Read the live-session roster for THIS server. No budget, no retry and no latch:
+// the answer is only interesting at the moment the match goes live, and a retry
+// would print a second reading minutes into the first round.
+stock send_ac_roster_report(const matchId[]) {
+#if defined KTP_TEST_MODE
+    if (g_testMatchActive) {
+        log_ktp("event=TESTMATCH_OUTBOUND_SUPPRESSED sink=ac_roster match_id=%s", matchId);
+        return;
+    }
+#endif
+    if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !matchId[0] || !g_acServerEndpoint[0]) {
+        log_ktp("event=AC_ROSTER_SKIP reason='not_configured' api_url_set=%s secret_set=%s endpoint_set=%s match_id='%s'",
+            g_acApiBaseUrl[0] ? "yes" : "no", g_acServerSecret[0] ? "yes" : "no",
+            g_acServerEndpoint[0] ? "yes" : "no", matchId);
+        return;
+    }
+
+    new url[320];
+    formatex(url, charsmax(url), "%s/api/ac/server-roster?server_endpoint=%s",
+        g_acApiBaseUrl, g_acServerEndpoint);
+
+    new CURL:curl = curl_easy_init();
+    if (!curl) {
+        log_ktp("event=AC_ROSTER_FAILED reason='curl_init_failed' match_id=%s endpoint=%s",
+            matchId, g_acServerEndpoint);
+        return;
+    }
+
+    copy(g_acRosterMatchId, charsmax(g_acRosterMatchId), matchId);
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_acCurlHeaders);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
+
+    log_ktp("event=AC_ROSTER_SEND match_id=%s endpoint=%s", matchId, g_acServerEndpoint);
+    curl_easy_perform(curl, "ac_roster_callback");
 }
 
 // Mark a match ended on the KTPAntiCheat API. Idempotent — only updates rows with ended_at IS NULL.
@@ -10252,6 +10510,8 @@ public task_deferred_discord_fwd() {
         // half/OT start. Clears any stale ended_at so the row stays active across halves.
         #if defined HAS_CURL
         send_ac_match_announce(g_matchId);
+        // Report-only: who has a live AC session as this period goes live.
+        send_ac_roster_report(g_matchId);
         #endif
     }
 
