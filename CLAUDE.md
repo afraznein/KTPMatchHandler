@@ -189,6 +189,18 @@ covered by #55**, and the four post-swap demos above carry no pause, so they do 
 test it. 🔑 **`show_pause_hud_message` is a FIFTH `ShowSyncHudMsg(0, …)` site**,
 also left broadcasting — re-derive the count rather than reading it here.
 
+🔴 **AND A DEMO CANNOT PROVE THAT PAUSED BROADCAST DID NOT HAPPEN — it
+reaches the recording only SOMETIMES.** Across four paused halves only **2**
+recorded the pause HUD at all, and never more than **once**, despite multi-minute
+pauses whose text changes every second — one real 2m19s live pause carries the
+pause CHAT in its demo and reads **0** for the HUD. The proxy nearly stops
+sampling frames while the server is paused.
+⛔ **So a single demo reading 0 for a pause-era HUD marker is NOT evidence of
+absence**, and because the broadcast above is deliberate, reading that 0 as
+*fixed* inverts the finding.
+➡️ **Repeat the capture across several paused halves, or measure the server
+side instead — one capture is inconclusive by construction.**
+
 🔑 **Still true and still load-bearing: ⚠️ a long lead-in is almost always PENDING, not pre-start** — measured over
 585 completed pre-starts across all 24 instances (2026-08-17 → 09-28), pre-start
 runs p50 24 s / p90 145 s while pending runs p50 115 s / p90 282 s. The match that
