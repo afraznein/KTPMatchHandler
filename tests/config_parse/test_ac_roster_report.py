@@ -116,7 +116,7 @@ def test_an_unavailable_reading_is_said_out_loud() -> None:
 
 # ------------------------------------------------------- the non-vacuity control
 
-def test_a_zero_is_only_believed_behind_two_independent_markers() -> None:
+def test_a_zero_is_only_believed_behind_the_marker_gate() -> None:
     body = _function_body("stock ac_roster_render(")
     assert 'formatex(echoWant, charsmax(echoWant), "^"serverEndpoint^":^"%s^"", g_acServerEndpoint)' in body, (
         "the echo marker must be built from THIS server's endpoint"
@@ -140,6 +140,7 @@ def test_the_control_line_carries_the_markers_beside_the_counts() -> None:
         "endpoint_echo=",
         "sessions_marker=",
         "ttl=",
+        "objects=",
         "sessions=",
         "matched=",
         "on_teams=",
@@ -201,6 +202,7 @@ def test_the_wire_tags_are_the_keys_the_endpoint_emits() -> None:
 def _object_end(body: str, frm: int) -> int:
     """Python mirror of ac_roster_object_end."""
     in_str = False
+    depth = 0
     i = frm
     while i < len(body):
         c = body[i]
@@ -212,10 +214,17 @@ def _object_end(body: str, frm: int) -> int:
                 in_str = False
         elif c == '"':
             in_str = True
+        elif c == "{":
+            depth += 1
         elif c == "}":
-            return i
+            if depth == 0:
+                return i
+            depth -= 1
         i += 1
     return i
+
+
+_OBJECTS: list[int] = []
 
 
 def _parse(body: str) -> list[tuple[str, bool]]:
@@ -225,12 +234,15 @@ def _parse(body: str) -> list[tuple[str, bool]]:
     sid_tag = _define("AC_ROSTER_SID_TAG")
     arr_tag = _define("AC_ROSTER_SESSIONS_TAG")
     a = body.find(arr_tag)
-    p = 0 if a == -1 else a + len(arr_tag)
+    if a == -1:
+        return []
+    p = a + len(arr_tag)
     out = []
     while p < len(body) and body[p] != "]":
         if body[p] != "{":
             p += 1
             continue
+        _OBJECTS.append(p)
         start = p + 1
         end = _object_end(body, start)
         obj = body[start:end]
@@ -470,3 +482,61 @@ def test_test_mode_takes_no_outbound_reading() -> None:
     suppressed = body.index("TESTMATCH_OUTBOUND_SUPPRESSED")
     assert suppressed < body.index("curl_easy_init()")
     assert suppressed < body.index("g_acRosterMatchId")
+
+
+def test_objects_walked_is_counted_separately_from_ids_read() -> None:
+    """sessions=0 with objects>0 is the id key moving on the wire. Counting only
+    the ids read makes that case print every marker green beside a zero."""
+    body = _function_body("stock ac_roster_render(")
+    assert re.search(r"if\s*\(\s*g_acRosterBody\[p\]\s*!=\s*'\{'\s*\)\s*\{\s*p\+\+;\s*continue;\s*\}\s*objects\+\+;", body), (
+        "objects must be counted for every object walked, before any id parse"
+    )
+    assert body.index("objects++;") < body.index("if (!sid[0]) continue;"), (
+        "a skipped id must still have counted its object"
+    )
+    assert re.search(r"if\s*\(\s*objects\s*>\s*0\s*&&\s*sessions\s*==\s*0\s*\)", body)
+    assert "AC_ROSTER_NO_IDS" in _log_events(body)
+
+
+def test_a_renamed_id_key_is_distinguishable_from_an_empty_roster() -> None:
+    """The mirror: the objects are still walked, so the counts disagree."""
+    wire = _SESSIONS.replace('"steamId"', '"steam_id"')
+    _OBJECTS.clear()
+    read = _parse(_envelope(wire))
+    assert read == [], "a respelled key must yield no ids"
+    assert len(_OBJECTS) == 3, "and must still count three objects walked"
+
+
+def test_a_nested_object_does_not_close_the_session_window_early() -> None:
+    """The window is depth-bounded, so a field added after a nested object is still
+    inside it — including captureBlind, whose control cannot fire on a key that
+    fell outside the window rather than failing to match."""
+    body = _function_body("stock ac_roster_object_end(")
+    assert "depth++" in body and re.search(r"if\s*\(\s*!depth\s*\)\s*return i;", body), (
+        "the closing brace must only end the object at depth zero"
+    )
+    wire = (
+        '{"steamId":"STEAM_0:0:11111111","capture":{"mode":"off"},"captureBlind":true}'
+    )
+    _OBJECTS.clear()
+    assert _parse(_envelope(wire)) == [("STEAM_0:0:11111111", True)]
+
+
+def test_a_missing_sessions_array_is_not_scanned_from_zero() -> None:
+    """A scan from zero finds the ROOT brace, so the first window is the envelope
+    and the parse is wrong rather than empty. The gate above makes this
+    unreachable; a fallback that would be wrong is worse than none."""
+    body = _function_body("stock ac_roster_render(")
+    assert "? 0 :" not in body, "no fallback may start the walk at the body root"
+    assert re.search(
+        r"if\s*\(\s*p\s*==\s*-1\s*\)\s*\{\s*ac_roster_announce_unavailable\(\);\s*return;\s*\}",
+        body,
+    ), "an absent array must take the same fail-open path as the marker gate"
+
+
+def test_no_roster_helper_is_defined_and_never_called() -> None:
+    """amxxpc does not warn on an unused stock, so a dead predicate compiles clean
+    and reads as the canonical one the next caller should reach for."""
+    src = _strip_comments(SOURCE)
+    for name in set(re.findall(r"^stock (?:bool:)?(ac_roster_\w+)\(", src, re.M)):
+        assert len(re.findall(name + r"\(", src)) > 1, f"{name} is never called"

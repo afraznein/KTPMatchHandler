@@ -3084,9 +3084,12 @@ stock ac_steam_tail(const sid[], out[], maxlen) {
 
 // Index of the brace that closes the session object starting at `from`, or the
 // terminator. String-aware, because clientVersion is client-supplied and JSON does
-// not escape a brace inside a string — only a quote.
+// not escape a brace inside a string — only a quote. Depth-aware so a nested
+// object closes its own brace instead of ending the window early, which would put
+// every field after it outside the window and silence the captureBlind control too.
 stock ac_roster_object_end(from) {
     new bool:inStr = false;
+    new depth = 0;
     for (new i = from; ; i++) {
         new c = g_acRosterBody[i];
         if (!c) return i;
@@ -3098,7 +3101,11 @@ stock ac_roster_object_end(from) {
             else if (c == '"') inStr = false;
         }
         else if (c == '"') inStr = true;
-        else if (c == '}') return i;
+        else if (c == '{') depth++;
+        else if (c == '}') {
+            if (!depth) return i;
+            depth--;
+        }
     }
     return from;
 }
@@ -3135,10 +3142,6 @@ stock bool:ac_roster_not_current_reason(out[], maxlen) {
     return false;
 }
 
-stock bool:ac_roster_match_is_current() {
-    new reason[24];
-    return !ac_roster_not_current_reason(reason, charsmax(reason));
-}
 
 // Said out loud so an absent announcement is never read as "nobody is live" — and
 // a suppressed notice is logged, or a teardown-time failure leaves no record that
@@ -3230,6 +3233,7 @@ stock ac_roster_render(httpCode, bytes) {
     new liveIds[MAX_PLAYERS], liveNum = 0;
     new blindIds[MAX_PLAYERS], blindNum = 0;
     new sessions = 0;
+    new objects = 0;
     new blindUnparsed = 0;
     new sidTag[] = AC_ROSTER_SID_TAG;
 
@@ -3239,13 +3243,21 @@ stock ac_roster_render(httpCode, bytes) {
     // would have named one player capture blind because his neighbour was.
     new arrTag[] = AC_ROSTER_SESSIONS_TAG;
     new p = contain(g_acRosterBody, arrTag);
-    p = (p == -1) ? 0 : p + strlen(arrTag);
+    // The marker gate above already returned on a missing array. Falling back to a
+    // scan from zero would find the ROOT brace and read one session's worth of the
+    // wrong window — a fallback that is wrong is worse than none.
+    if (p == -1) {
+        ac_roster_announce_unavailable();
+        return;
+    }
+    p += strlen(arrTag);
 
     while (g_acRosterBody[p] && g_acRosterBody[p] != ']') {
         if (g_acRosterBody[p] != '{') {
             p++;
             continue;
         }
+        objects++;
         new objStart = p + 1;
         new objEnd = ac_roster_object_end(objStart);
 
@@ -3303,14 +3315,23 @@ stock ac_roster_render(httpCode, bytes) {
 
     new matched = liveNum + blindNum;
 
-    // The control line. A real zero reads endpoint_echo=match with a usable ttl and
-    // sessions=0; a call that failed or was misrouted never reaches this line at all.
-    // blind_unparsed is the same test for the flag: blind=0 means nobody is blind
-    // only while it reads 0 too.
-    log_ktp("event=AC_ROSTER_PARSE match_id=%s endpoint=%s http=%d bytes=%d truncated=%s endpoint_echo=match sessions_marker=present ttl=%d sessions=%d matched=%d blind=%d blind_unparsed=%d on_teams=%d unresolvable_ids=%d",
+    // The control line. A real zero reads endpoint_echo=match with a usable ttl,
+    // objects=0 and sessions=0; a call that failed or was misrouted never reaches
+    // this line at all. Each count carries its own control: objects against sessions
+    // for the id key, and blind_unparsed for the flag — blind=0 means nobody is
+    // blind only while that reads 0 too.
+    log_ktp("event=AC_ROSTER_PARSE match_id=%s endpoint=%s http=%d bytes=%d truncated=%s endpoint_echo=match sessions_marker=present ttl=%d objects=%d sessions=%d matched=%d blind=%d blind_unparsed=%d on_teams=%d unresolvable_ids=%d",
         g_acRosterMatchId, g_acServerEndpoint, httpCode, bytes,
-        truncated ? "yes" : "no", ttl, sessions, matched, blindNum, blindUnparsed,
+        truncated ? "yes" : "no", ttl, objects, sessions, matched, blindNum, blindUnparsed,
         onTeamsNum, unresolvable);
+
+    // Objects walked but not one id read. The id key moving on the wire lands here,
+    // and nothing else does — blind_unparsed misses it, because the flag parses
+    // fine in an object whose id does not.
+    if (objects > 0 && sessions == 0) {
+        log_ktp("event=AC_ROSTER_NO_IDS match_id=%s objects=%d blind_unparsed=%d",
+            g_acRosterMatchId, objects, blindUnparsed);
+    }
 
     if (blindUnparsed > 0) {
         log_ktp("event=AC_ROSTER_BLIND_UNPARSED match_id=%s sessions=%d blind_unparsed=%d",

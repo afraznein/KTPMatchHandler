@@ -45,10 +45,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   three checks on one fact — that this route produced this body — not three independent
   facts, and what they rule out is a failed or misrouted call. `event=AC_ROSTER_PARSE`
   records them beside the counts, so a genuine zero (`endpoint_echo=match`, `ttl=90`,
-  `sessions=0`) is distinguishable from a call that never landed; sessions present with
-  none resolving to a player on a team gets its own `event=AC_ROSTER_NONE_MATCHED` line,
-  because that is the universe-digit identity failure returning rather than a compliance
-  reading.
+  `objects=0`, `sessions=0`) is distinguishable from a call that never landed; sessions
+  present with none resolving to a player on a team gets its own
+  `event=AC_ROSTER_NONE_MATCHED` line, because that is the universe-digit identity failure
+  returning rather than a compliance reading.
+
+  Each count in that chain carries its own control, because each one has a different way of
+  reading zero when it should not. `objects` is the entries walked in the array and
+  `sessions` is the ids actually read, so a respelled id key on the wire leaves
+  `objects=12 sessions=0` and `event=AC_ROSTER_NO_IDS` rather than a zero with every marker
+  green — and `blind_unparsed` does not catch that case, since the flag parses fine in an
+  object whose id does not.
 
   The `captureBlind` flag gets the same discipline, because it is the one marker that fails
   *reassuringly*: if the wire spelling ever moves, every player reads as not blind and the
@@ -58,9 +65,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `blind_unparsed=0` as well.
 
   **Attribution is bound to the session object, not to field order.** Each entry is parsed
-  between its own braces, with a string-aware scan, so `captureBlind` is read from the
-  object it belongs to wherever the API chooses to emit it — and a brace or an escaped quote
-  inside the client-supplied `clientVersion` cannot end the object early. An earlier
+  between its own braces, with a string-aware and depth-aware scan, so `captureBlind` is
+  read from the object it belongs to wherever the API chooses to emit it — and neither a
+  brace or an escaped quote inside the client-supplied `clientVersion` nor a nested object
+  can end the window early. An earlier
   revision anchored the window on the *next* `steamId`, which would have named one player
   capture blind because his neighbour was, silently, the moment that field moved.
 
