@@ -149,6 +149,10 @@ new g_acRosterMatchId[64];           // match_id the in-flight roster GET belong
 // it is reported as truncated rather than read as a short roster.
 #define AC_ROSTER_BODY_SIZE 6144
 new g_acRosterBody[AC_ROSTER_BODY_SIZE];
+// Wire keys the roster reply is parsed on. Named so the advance past one is
+// strlen of the same literal that found it.
+#define AC_ROSTER_SID_TAG "^"steamId^":^""
+#define AC_ROSTER_TTL_TAG "^"ttlSeconds^":"
 // Widest match-type key the AC wire vocabulary can hold, plus EOS.
 #define AC_MATCH_TYPE_SIZE 16
 // Worst-case body: every field at full width. matchId is g_matchId[64] and the
@@ -3076,9 +3080,14 @@ stock ac_steam_tail(const sid[], out[], maxlen) {
 // ttlSeconds from the roster body, or -1 when it is absent or unparseable. One of
 // the two independent markers that say the response really came from this endpoint.
 stock ac_roster_parse_ttl() {
-    new at = contain(g_acRosterBody, "^"ttlSeconds^":");
+    // strlen, not a literal width: a hand-counted offset here lands on the SECOND
+    // digit and reads 90 as 0, which fails the marker check and silently retires
+    // the whole report.
+    new tag[16];
+    copy(tag, charsmax(tag), AC_ROSTER_TTL_TAG);
+    new at = contain(g_acRosterBody, tag);
     if (at == -1) return -1;
-    at += 14;
+    at += strlen(tag);
     if (!isdigit(g_acRosterBody[at])) return -1;
     new digits[12], n = 0;
     while (isdigit(g_acRosterBody[at + n]) && n < charsmax(digits)) {
@@ -3145,11 +3154,14 @@ stock ac_roster_render(httpCode, bytes) {
     get_match_participants(participants, pnum);
 
     new onTeams[MAX_PLAYERS], onTeamsNum = 0;
+    new bool:listed[MAX_PLAYERS];
     new unresolvable = 0;
     for (new i = 0; i < pnum; i++) {
         new side = get_user_team(participants[i]);
         if (side != 1 && side != 2) continue;
-        onTeams[onTeamsNum++] = participants[i];
+        onTeams[onTeamsNum] = participants[i];
+        listed[onTeamsNum] = false;
+        onTeamsNum++;
         new sid[44], tail[40];
         get_user_authid(participants[i], sid, charsmax(sid));
         ac_steam_tail(sid, tail, charsmax(tail));
@@ -3160,11 +3172,13 @@ stock ac_roster_render(httpCode, bytes) {
     new blindIds[MAX_PLAYERS], blindNum = 0;
     new sessions = 0;
     new cursor = 0;
+    new sidTag[16];
+    copy(sidTag, charsmax(sidTag), AC_ROSTER_SID_TAG);
 
     for (;;) {
-        new rel = contain(g_acRosterBody[cursor], "^"steamId^":^"");
+        new rel = contain(g_acRosterBody[cursor], sidTag);
         if (rel == -1) break;
-        new at = cursor + rel + 11;
+        new at = cursor + rel + strlen(sidTag);
 
         new sid[44], n = 0;
         while (g_acRosterBody[at + n] && g_acRosterBody[at + n] != '"' && n < charsmax(sid)) {
@@ -3178,7 +3192,7 @@ stock ac_roster_render(httpCode, bytes) {
         // Bound the flag search to this session object, or a later entry's flag
         // reads onto this player. Terminate in place and restore; copying out
         // cannot bound it, because clientVersion is client-supplied and unbounded.
-        new nextRel = contain(g_acRosterBody[next], "^"steamId^":^"");
+        new nextRel = contain(g_acRosterBody[next], sidTag);
         new boundAt = (nextRel == -1) ? -1 : next + nextRel;
         new saved = 0;
         if (boundAt != -1) {
@@ -3192,10 +3206,14 @@ stock ac_roster_render(httpCode, bytes) {
         ac_steam_tail(sid, sessionTail, charsmax(sessionTail));
         if (sessionTail[0]) {
             for (new i = 0; i < onTeamsNum; i++) {
+                // One entry per player, so two sessions on one account cannot name
+                // him twice or push `matched` past the number of players on teams.
+                if (listed[i]) continue;
                 new playerSid[44], playerTail[40];
                 get_user_authid(onTeams[i], playerSid, charsmax(playerSid));
                 ac_steam_tail(playerSid, playerTail, charsmax(playerTail));
                 if (playerTail[0] && equal(sessionTail, playerTail)) {
+                    listed[i] = true;
                     if (blind) blindIds[blindNum++] = onTeams[i];
                     else liveIds[liveNum++] = onTeams[i];
                     break;
