@@ -402,7 +402,14 @@ def test_the_object_scan_is_string_aware() -> None:
     """JSON escapes a quote inside a string but not a brace, and clientVersion is
     client-supplied, so a naive brace scan ends the object early."""
     body = _function_body("stock ac_roster_object_end(")
-    assert "inStr" in body
+    # The predicate text, not just the name: gutting the branch to `if (false)`
+    # leaves every `inStr` mention in place and disables the tracking.
+    assert "if (inStr) {" in body
+    assert "inStr = true" in body and "inStr = false" in body
+    assert body.index("if (inStr) {") < body.index("c == '}'"), (
+        "the brace test must sit in the else of the string test, or a brace inside "
+        "a string ends the object"
+    )
     assert r"c == '\'" in body, (
         "the backslash case must be handled or an escaped quote ends the string early"
     )
