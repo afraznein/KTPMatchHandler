@@ -6,6 +6,78 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.181] - 2026-11-04
+
+### Added
+
+- **Who has a live anti-cheat session is announced when a match goes live.** The deferred
+  match-start phase now reads `GET /api/ac/server-roster` for this server's endpoint and
+  prints the result to everyone: a count, the players with a live AC session, and the
+  players whose session is live but capture blind. `captureBlind` is a third state, so it
+  gets its own line rather than being folded into the first.
+
+  **It prints who IS live and never who is not.** Naming a player who is not running the
+  client in open chat is accusation-adjacent; the live list gives captains the same
+  information and labels nobody. Absence is also not proof — the heartbeat is a 30s beat
+  behind a 90s TTL, so a client started in the last minute reads as absent, and the last
+  chat line says so.
+
+  **Report only, on every path.** It cannot refuse, delay or alter a `.ready` or a go-live:
+  a missing `ac.ini`, a failed `curl_easy_init`, a curl failure, a non-2xx, an unparseable
+  body, a body that does not echo this endpoint, and a match that ended inside the request
+  window each return after logging. A curl failure, a non-2xx and an unparseable or
+  misrouted body also say so once in chat, so silence is never read as "nobody is live";
+  the other three are deliberately silent in chat — an unconfigured server should not
+  narrate, and the discard has nobody left to tell. No cvar, no new config key and no new
+  secret — it reuses the `ac.ini` `api_base_url` / `server_secret` transport and the
+  persistent `X-Server-Secret` slist.
+
+  **The chat lists are capped.** `client_print(0, ...)` is not a broadcast — it is one
+  reliable per-client usermsg per line — and a reliable overflow drops the player with
+  "Reliable channel overflowed". A report that kicked somebody at go-live would be worse
+  than any failure this feature is allowed to have, so each list spends at most two lines
+  and counts the remainder as `(+N more)`. Two lines carry a full team; only a
+  24-plus-player scrim ever sees the suffix.
+
+  **Non-vacuity control.** An empty roster and a broken call look identical from the session
+  count alone, so the reading is only believed when the body echoes the endpoint this
+  server sent AND carries a usable `ttlSeconds` AND carries a `sessions` array. Those are
+  three checks on one fact — that this route produced this body — not three independent
+  facts, and what they rule out is a failed or misrouted call. `event=AC_ROSTER_PARSE`
+  records them beside the counts, so a genuine zero (`endpoint_echo=match`, `ttl=90`,
+  `objects=0`, `sessions=0`) is distinguishable from a call that never landed; sessions
+  present with none resolving to a player on a team gets its own
+  `event=AC_ROSTER_NONE_MATCHED` line, because that is the universe-digit identity failure
+  returning rather than a compliance reading.
+
+  Each count in that chain carries its own control, because each one has a different way of
+  reading zero when it should not. `objects` is the entries walked in the array and
+  `sessions` is the ids actually read, so a respelled id key on the wire leaves
+  `objects=12 sessions=0` and `event=AC_ROSTER_NO_IDS` rather than a zero with every marker
+  green — and `blind_unparsed` does not catch that case, since the flag parses fine in an
+  object whose id does not.
+
+  The `captureBlind` flag gets the same discipline, because it is the one marker that fails
+  *reassuringly*: if the wire spelling ever moves, every player reads as not blind and the
+  chat output is a clean-looking all-clear. Both literals are tested, and a session whose
+  key is present while neither matches increments `blind_unparsed` on that same line plus
+  an `event=AC_ROSTER_BLIND_UNPARSED`. So `blind=0` means nobody is blind only while
+  `blind_unparsed=0` as well.
+
+  **Attribution is bound to the session object, not to field order.** Each entry is parsed
+  between its own braces, with a string-aware and depth-aware scan, so `captureBlind` is
+  read from the object it belongs to wherever the API chooses to emit it — and neither a
+  brace or an escaped quote inside the client-supplied `clientVersion` nor a nested object
+  can end the window early. An earlier
+  revision anchored the window on the *next* `steamId`, which would have named one player
+  capture blind because his neighbour was, silently, the moment that field moved.
+
+  Matching folds the universe digit on both sides. GoldSrc always renders `STEAM_0` while
+  the client can report `STEAM_1` for the same account, which is how a heartbeating player
+  was once read as not running the AC at all. An id with no account part never matches.
+
+---
+
 ## [0.10.180] - 2026-10-24
 
 ### Fixed

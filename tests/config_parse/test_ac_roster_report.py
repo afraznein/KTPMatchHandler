@@ -1,0 +1,542 @@
+"""Source-contract tests for the go-live anti-cheat roster report.
+
+The report answers one question in game — who has a LIVE anti-cheat session as
+the match goes live — and it has two properties that source can prove without a
+live match, both of which are easy to lose in a later edit.
+
+It must stay a REPORT.  Phase 7 enforcement is blocked on AC adoption, and a
+refusal wired in here is a cvar flip away from breaking every match on the
+fleet, so no failure path may return anything a caller could act on.
+
+And its zero must be a measurement.  An empty roster and a call that never
+landed produce the same session count, so the reading is believed only when the
+body echoes the endpoint this server sent and carries a usable TTL and a
+sessions array — two markers a failed or misrouted call cannot produce.
+"""
+from __future__ import annotations
+
+import re
+
+from .conftest import REPO_ROOT
+
+
+SOURCE = (REPO_ROOT / "KTPMatchHandler.sma").read_text(encoding="utf-8")
+
+
+def _function_body(signature_prefix: str) -> str:
+    """Source of one Pawn function, from its signature to the closing column-0 brace."""
+    start = SOURCE.index(signature_prefix)
+    end = SOURCE.index("\n}", start)
+    return SOURCE[start:end]
+
+
+def _strip_comments(body: str) -> str:
+    """Code only. A prose mention of a native is not a call to it."""
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    return re.sub(r"//.*", "", body)
+
+
+def _log_events(body: str) -> set[str]:
+    """The event= names this function body emits through log_ktp."""
+    return {
+        match.group(1)
+        for fmt in re.findall(r'log_ktp\(\s*"((?:\^"|[^"\n])*)"', body)
+        for match in [re.search(r"event=(\S+)", fmt)]
+        if match
+    }
+
+
+# ------------------------------------------------------------------ it reports
+
+def test_the_roster_read_fires_beside_the_match_announce() -> None:
+    """Same deferred go-live phase, so the reading is of the moment it describes."""
+    body = _function_body("public task_deferred_discord_fwd(")
+    assert "send_ac_roster_report(g_matchId)" in body
+    assert body.index("send_ac_match_announce(g_matchId)") < body.index(
+        "send_ac_roster_report(g_matchId)"
+    ), "the announce creates the match row the roster reading is read against"
+
+
+def test_the_report_is_read_only_over_http() -> None:
+    """A POST field here would make a report into a write."""
+    body = _function_body("stock send_ac_roster_report(")
+    assert "CURLOPT_COPYPOSTFIELDS" not in body
+    assert "CURLOPT_POSTFIELDS" not in body
+    assert "/api/ac/server-roster?server_endpoint=" in body
+
+
+def test_nothing_in_the_report_can_refuse_a_go_live() -> None:
+    """Phase 7 is blocked on adoption; an enforcement knob must not appear here."""
+    region = _strip_comments(SOURCE[
+        SOURCE.index("// ================= AC live-session roster at go-live") :
+        SOURCE.index('log_ktp("event=AC_ROSTER_SEND')
+    ])
+    for forbidden in (
+        "ktp_ac_enforce",
+        "register_cvar",
+        "create_cvar",
+        "PLUGIN_HANDLED",
+        "server_cmd",
+        "kick",
+    ):
+        assert forbidden not in region, (
+            f"{forbidden!r} appears in the roster report; this is a report, not the "
+            "Phase 7 enforcement gate"
+        )
+
+
+def test_every_failure_path_returns_after_logging() -> None:
+    """Config absent, curl error, non-2xx, unparseable body, match gone."""
+    assert "AC_ROSTER_SKIP" in _log_events(_function_body("stock send_ac_roster_report("))
+
+    send = _function_body("stock send_ac_roster_report(")
+    assert "reason='curl_init_failed'" in send
+
+    callback = _function_body("public ac_roster_callback(")
+    assert "reason=curl" in callback, "a transport failure must name itself"
+    assert "reason=http" in callback, "a non-2xx must name itself"
+    assert callback.count("curl_easy_cleanup(curl)") >= 3, (
+        "every exit from the callback leaks the handle otherwise"
+    )
+
+    render = _function_body("stock ac_roster_render(")
+    assert "AC_ROSTER_UNPARSED" in _log_events(render)
+    assert "AC_ROSTER_DISCARDED" in _log_events(render)
+
+
+def test_an_unavailable_reading_is_said_out_loud() -> None:
+    """Silence would otherwise read as 'nobody is live', which is the wrong answer."""
+    body = _function_body("stock ac_roster_announce_unavailable(")
+    assert "announce_all(" in body
+    callback = _function_body("public ac_roster_callback(")
+    assert callback.count("ac_roster_announce_unavailable()") == 2, (
+        "both the curl-error and the non-2xx exits need it"
+    )
+
+
+# ------------------------------------------------------- the non-vacuity control
+
+def test_a_zero_is_only_believed_behind_the_marker_gate() -> None:
+    body = _function_body("stock ac_roster_render(")
+    assert 'formatex(echoWant, charsmax(echoWant), "^"serverEndpoint^":^"%s^"", g_acServerEndpoint)' in body, (
+        "the echo marker must be built from THIS server's endpoint"
+    )
+    assert "ac_roster_parse_ttl()" in body
+    assert "AC_ROSTER_SESSIONS_TAG" in body
+    assert re.search(r"if\s*\(\s*!echoOk\s*\|\|\s*!sessionsOk\s*\|\|\s*ttl\s*<=\s*0\s*\)", body), (
+        "the markers must gate the rendering, not merely be logged beside it"
+    )
+
+
+def test_the_control_line_carries_the_markers_beside_the_counts() -> None:
+    """A reader must be able to tell a real zero from a call that never landed."""
+    body = _function_body("stock ac_roster_render(")
+    parse = next(
+        fmt
+        for fmt in re.findall(r'log_ktp\(\s*"((?:\^"|[^"\n])*)"', body)
+        if "event=AC_ROSTER_PARSE" in fmt
+    )
+    for field in (
+        "endpoint_echo=",
+        "sessions_marker=",
+        "ttl=",
+        "objects=",
+        "sessions=",
+        "matched=",
+        "on_teams=",
+        "bytes=",
+        "truncated=",
+    ):
+        assert field in parse, f"AC_ROSTER_PARSE omits {field!r}"
+
+
+def test_sessions_present_but_none_matched_gets_its_own_line() -> None:
+    """That is the universe-digit identity failure returning, not a compliance reading."""
+    body = _function_body("stock ac_roster_render(")
+    assert re.search(r"if\s*\(\s*sessions\s*>\s*0\s*&&\s*matched\s*==\s*0\s*\)", body)
+    assert "AC_ROSTER_NONE_MATCHED" in _log_events(body)
+
+
+def test_the_body_terminator_is_forced_not_trusted() -> None:
+    """Every scan walks to an EOS, so a native that filled the buffer exactly would
+    let one run past the array."""
+    body = _function_body("public ac_roster_callback(")
+    assert "g_acRosterBody[AC_ROSTER_BODY_SIZE - 1] = EOS" in body
+    assert body.index("curl_get_response_body") < body.index(
+        "g_acRosterBody[AC_ROSTER_BODY_SIZE - 1] = EOS"
+    ), "the terminator must be forced after the copy, not before it"
+
+
+def test_a_truncated_body_is_not_read_as_a_short_roster() -> None:
+    body = _function_body("stock ac_roster_render(")
+    assert re.search(r"bytes\s*>=\s*AC_ROSTER_BODY_SIZE\s*-\s*1", body)
+    assert "truncated" in body
+
+
+# -------------------------------------------------------------- parse mechanics
+
+def _define(name: str) -> str:
+    """The string a #define in the source expands to, with Pawn's ^" unescaped."""
+    raw = re.search(rf'#define\s+{name}\s+"(.*)"\s*$', SOURCE, re.M)
+    assert raw, f"#define {name} not found"
+    return raw.group(1).replace('^"', '"')
+
+
+def test_the_parse_advances_are_derived_from_the_tag_not_counted() -> None:
+    """A hand-counted width read ttlSeconds 90 as 0, which retires the whole report."""
+    ttl = _function_body("stock ac_roster_parse_ttl(")
+    assert "at += strlen(tag)" in ttl
+    assert not re.search(r"at\s*\+=\s*\d+", ttl), f"hand-counted advance in {ttl!r}"
+
+    render = _function_body("stock ac_roster_render(")
+    assert "+ strlen(sidTag)" in render
+    assert not re.search(r"rel\s*\+\s*\d+", render), "hand-counted advance past the id tag"
+
+
+def test_the_wire_tags_are_the_keys_the_endpoint_emits() -> None:
+    """Tripwire on KTPAntiCheat.Api/Endpoints/AcEndpoints.cs GET /api/ac/server-roster."""
+    assert _define("AC_ROSTER_SID_TAG") == '"steamId":"'
+    assert _define("AC_ROSTER_TTL_TAG") == '"ttlSeconds":'
+
+
+def _object_end(body: str, frm: int) -> int:
+    """Python mirror of ac_roster_object_end."""
+    in_str = False
+    depth = 0
+    i = frm
+    while i < len(body):
+        c = body[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            if depth == 0:
+                return i
+            depth -= 1
+        i += 1
+    return i
+
+
+_OBJECTS: list[int] = []
+
+
+def _parse(body: str) -> list[tuple[str, bool]]:
+    """Python mirror of the object walk in ac_roster_render — the algorithm, not
+    proof the Pawn runs. What it pins is that bounding on the session OBJECT makes
+    attribution independent of the order the API emits its fields in."""
+    sid_tag = _define("AC_ROSTER_SID_TAG")
+    arr_tag = _define("AC_ROSTER_SESSIONS_TAG")
+    a = body.find(arr_tag)
+    if a == -1:
+        return []
+    p = a + len(arr_tag)
+    out = []
+    while p < len(body) and body[p] != "]":
+        if body[p] != "{":
+            p += 1
+            continue
+        _OBJECTS.append(p)
+        start = p + 1
+        end = _object_end(body, start)
+        obj = body[start:end]
+        rel = obj.find(sid_tag)
+        sid = ""
+        if rel != -1:
+            at = rel + len(sid_tag)
+            sid = obj[at:obj.index('"', at)]
+        if sid:
+            out.append((sid, '"captureBlind":true' in obj))
+        p = end + 1
+    return out
+
+
+_SESSIONS = (
+    '{"steamId":"STEAM_0:0:11111111","clientVersion":"1.4.2",'
+    '"lastSeenSecondsAgo":5,"captureBlind":false},'
+    '{"steamId":"STEAM_0:1:22222222","clientVersion":"1.4.2",'
+    '"lastSeenSecondsAgo":12,"captureBlind":true},'
+    '{"steamId":"STEAM_0:0:33333333","clientVersion":"1.4.2",'
+    '"lastSeenSecondsAgo":31,"captureBlind":false}'
+)
+_EXPECTED = [
+    ("STEAM_0:0:11111111", False),
+    ("STEAM_0:1:22222222", True),
+    ("STEAM_0:0:33333333", False),
+]
+
+
+def _envelope(sessions: str) -> str:
+    return (
+        '{"serverEndpoint":"203.0.113.9:27015","ttlSeconds":90,"sessions":['
+        + sessions
+        + "]}"
+    )
+
+
+def test_the_object_split_attributes_each_blind_flag_to_its_own_entry() -> None:
+    assert _parse(_envelope(_SESSIONS)) == _EXPECTED
+
+    ttl_tag = _define("AC_ROSTER_TTL_TAG")
+    body = _envelope(_SESSIONS)
+    at = body.index(ttl_tag) + len(ttl_tag)
+    assert body[at:at + 2] == "90", "the TTL advance must land on the first digit"
+
+
+def test_attribution_survives_captureBlind_moving_ahead_of_steamId() -> None:
+    """The field-order dependency this parse was reworked to remove. With the old
+    next-steamId anchor, every session read its neighbour's flag."""
+    reordered = (
+        '{"captureBlind":false,"steamId":"STEAM_0:0:11111111","clientVersion":"1.4.2",'
+        '"lastSeenSecondsAgo":5},'
+        '{"captureBlind":true,"steamId":"STEAM_0:1:22222222","clientVersion":"1.4.2",'
+        '"lastSeenSecondsAgo":12},'
+        '{"captureBlind":false,"steamId":"STEAM_0:0:33333333","clientVersion":"1.4.2",'
+        '"lastSeenSecondsAgo":31}'
+    )
+    assert _parse(_envelope(reordered)) == _EXPECTED
+
+
+def test_a_brace_inside_clientVersion_cannot_end_the_object_early() -> None:
+    """JSON escapes a quote inside a string, never a brace, and clientVersion is
+    client-supplied."""
+    hostile = (
+        '{"steamId":"STEAM_0:0:11111111","clientVersion":"1.4.2}{",'
+        '"lastSeenSecondsAgo":5,"captureBlind":true}'
+    )
+    assert _parse(_envelope(hostile)) == [("STEAM_0:0:11111111", True)]
+
+
+def test_an_escaped_quote_inside_clientVersion_does_not_desync_the_scan() -> None:
+    hostile = (
+        '{"steamId":"STEAM_0:0:11111111","clientVersion":"1.4\\"2}",'
+        '"lastSeenSecondsAgo":5,"captureBlind":true},'
+        '{"steamId":"STEAM_0:1:22222222","clientVersion":"ok",'
+        '"lastSeenSecondsAgo":5,"captureBlind":false}'
+    )
+    assert _parse(_envelope(hostile)) == [
+        ("STEAM_0:0:11111111", True),
+        ("STEAM_0:1:22222222", False),
+    ]
+
+
+def test_a_blind_flag_that_stops_matching_is_counted_not_silently_cleared() -> None:
+    """blind=0 must mean nobody is blind, not 'the wire spelling moved'. Unlike the
+    other markers this one fails reassuringly, so it needs its own counter."""
+    body = _function_body("stock ac_roster_render(")
+    assert '^"captureBlind^":false' in body, "the false literal is the control"
+    assert "blindUnparsed++" in body
+    assert re.search(
+        r"if\s*\(\s*!blindTrue\s*&&\s*!blindFalse", body
+    ), "the counter must fire only when NEITHER literal matched"
+    parse = next(
+        fmt
+        for fmt in re.findall(r'log_ktp\(\s*"((?:\^"|[^"\n])*)"', body)
+        if "event=AC_ROSTER_PARSE" in fmt
+    )
+    assert "blind_unparsed=" in parse, "the control must sit beside the count it qualifies"
+    assert "AC_ROSTER_BLIND_UNPARSED" in _log_events(body)
+
+
+def test_the_chat_lists_are_capped_so_a_report_cannot_overflow_a_client() -> None:
+    """client_print(0, ...) is one RELIABLE per-client usermsg per line, and a
+    reliable overflow drops the player. A report must not be able to kick anyone."""
+    cap = re.search(r"#define\s+AC_ROSTER_MAX_LINES\s+(\d+)", SOURCE)
+    assert cap, "#define AC_ROSTER_MAX_LINES not found"
+    assert 1 <= int(cap.group(1)) <= 3, (
+        f"a cap of {cap.group(1)} lines per list does not bound the go-live frame"
+    )
+    body = _function_body("stock ac_roster_announce_names(")
+    assert "AC_ROSTER_MAX_LINES" in body
+    assert "more)" in body, "the remainder must be counted, not dropped silently"
+
+
+def test_the_capped_line_still_fits_the_dod_chat_width() -> None:
+    """The binding cap is 190 in UTIL_ClientPrint, which truncates with no strlen
+    check -- not announce_all's 192."""
+    body = _function_body("stock ac_roster_announce_names(")
+    wrap = re.search(r"idx\s*\+\s*strlen\(name\)\s*\+\s*2\s*>\s*(\d+)", body)
+    assert wrap, "the wrap threshold is not where this test thinks it is"
+    threshold = int(wrap.group(1))
+
+    labels = re.findall(r'ac_roster_announce_names\(\s*"([^"]+)"', SOURCE)
+    longest_label = max(len(x) for x in labels)
+    suffix = len(" (+99 more)")
+    prefix = len("[KTP] ") + longest_label + len(" ") + len("\n")
+    assert threshold + suffix + prefix <= 190, (
+        f"worst-case line is {threshold + suffix + prefix} against the 190-char cap"
+    )
+
+    line = re.search(r"new line\[(\d+)\]", body)
+    assert line and threshold + suffix < int(line.group(1)), "the line buffer can truncate"
+
+
+# --------------------------------------------------------------- identity rules
+
+def test_matching_folds_the_universe_digit_on_both_sides() -> None:
+    """A STEAM_1 heartbeat read under a STEAM_0 key once reported a live player absent."""
+    tail = _function_body("stock ac_steam_tail(")
+    assert 'contain(sid, ":")' in tail
+    assert "if (colon == -1) return" in tail, (
+        "an id with no account part must yield an empty tail, never a best effort"
+    )
+
+    body = _function_body("stock ac_roster_render(")
+    assert "ac_steam_tail(sid, sessionTail" in body
+    assert "ac_steam_tail(playerSid, playerTail" in body
+    assert re.search(
+        r"playerTail\[0\]\s*&&\s*equal\(\s*sessionTail\s*,\s*playerTail\s*\)", body
+    ), "two unparseable ids must never compare equal"
+
+
+def test_the_blind_flag_is_bounded_to_the_session_OBJECT_not_to_field_order() -> None:
+    """Anchoring on the NEXT steamId made attribution depend on the API emitting
+    captureBlind after it, which JSON does not promise: moving that field would
+    name one player capture blind because his neighbour was."""
+    body = _function_body("stock ac_roster_render(")
+    assert "ac_roster_object_end(objStart)" in body
+    assert "g_acRosterBody[objEnd] = EOS" in body
+    assert "g_acRosterBody[objEnd] = saved" in body, "the body must be restored in place"
+    assert "boundAt" not in body, (
+        "the next-steamId anchor is the field-order dependency; it must be gone"
+    )
+    # Both reads are taken from the terminated object, so neither can see a sibling.
+    assert body.count("contain(g_acRosterBody[objStart]") >= 3
+
+
+def test_the_object_scan_is_string_aware() -> None:
+    """JSON escapes a quote inside a string but not a brace, and clientVersion is
+    client-supplied, so a naive brace scan ends the object early."""
+    body = _function_body("stock ac_roster_object_end(")
+    # The predicate text, not just the name: gutting the branch to `if (false)`
+    # leaves every `inStr` mention in place and disables the tracking.
+    assert "if (inStr) {" in body
+    assert "inStr = true" in body and "inStr = false" in body
+    assert body.index("if (inStr) {") < body.index("c == '}'"), (
+        "the brace test must sit in the else of the string test, or a brace inside "
+        "a string ends the object"
+    )
+    assert r"c == '\'" in body, (
+        "the backslash case must be handled or an escaped quote ends the string early"
+    )
+    assert "c == '}'" in body and "c == '\"'" in body
+
+
+def test_capture_blind_is_rendered_as_a_third_state() -> None:
+    """A boolean would hide it, and a blind session is not an absent one."""
+    body = _function_body("stock ac_roster_render(")
+    assert '^"captureBlind^":true' in body
+    assert "blindIds" in body and "liveIds" in body
+    assert re.search(r"if\s*\(\s*blindNum\s*>\s*0\s*\)\s*ac_roster_announce_names\(", body)
+    assert re.search(r"if\s*\(\s*liveNum\s*>\s*0\s*\)\s*ac_roster_announce_names\(", body)
+
+
+def test_only_the_live_are_named() -> None:
+    """Naming who is not running the client in open chat is accusation-adjacent."""
+    body = _function_body("stock ac_roster_render(")
+    labels = re.findall(r'ac_roster_announce_names\(\s*"([^"]+)"', body)
+    assert labels, "the report must name somebody"
+    for label in labels:
+        lowered = label.lower()
+        for forbidden in ("not ", "missing", "no ac", "absent", "non-compliant", "without"):
+            assert forbidden not in lowered, (
+                f"label {label!r} names the absent; the report lists who IS live and "
+                "lets absence speak"
+            )
+
+
+def test_absence_is_not_worded_as_proof() -> None:
+    """A 30s beat behind a 90s TTL means a fresh client can read absent."""
+    body = _function_body("stock ac_roster_render(")
+    announces = re.findall(r'announce_all\(\s*"([^"]+)"', body)
+    assert any("not proof" in line for line in announces), (
+        f"no caveat line among {announces}"
+    )
+
+
+# --------------------------------------------------------------------- teardown
+
+def test_the_pending_roster_id_dies_with_match_identity() -> None:
+    """An in-flight read must not print its answer into the next match."""
+    reset = _function_body("stock ac_announce_state_reset(")
+    assert "g_acRosterMatchId[0] = EOS" in reset
+    assert "ac_announce_state_reset()" in _function_body("stock clear_match_id(")
+
+    reason = _function_body("stock bool:ac_roster_not_current_reason(")
+    assert "g_matchLive" in reason
+    assert "equal(g_matchId, g_acRosterMatchId)" in reason, (
+        "the compare against the live id is what actually stops a stale answer"
+    )
+    for cause in ("match_not_live", "no_match_id", "no_pending_id", "match_changed"):
+        assert cause in reason, f"{cause} is not told apart in the log"
+
+
+def test_test_mode_takes_no_outbound_reading() -> None:
+    body = _function_body("stock send_ac_roster_report(")
+    suppressed = body.index("TESTMATCH_OUTBOUND_SUPPRESSED")
+    assert suppressed < body.index("curl_easy_init()")
+    assert suppressed < body.index("g_acRosterMatchId")
+
+
+def test_objects_walked_is_counted_separately_from_ids_read() -> None:
+    """sessions=0 with objects>0 is the id key moving on the wire. Counting only
+    the ids read makes that case print every marker green beside a zero."""
+    body = _function_body("stock ac_roster_render(")
+    assert re.search(r"if\s*\(\s*g_acRosterBody\[p\]\s*!=\s*'\{'\s*\)\s*\{\s*p\+\+;\s*continue;\s*\}\s*objects\+\+;", body), (
+        "objects must be counted for every object walked, before any id parse"
+    )
+    assert body.index("objects++;") < body.index("if (!sid[0]) continue;"), (
+        "a skipped id must still have counted its object"
+    )
+    assert re.search(r"if\s*\(\s*objects\s*>\s*0\s*&&\s*sessions\s*==\s*0\s*\)", body)
+    assert "AC_ROSTER_NO_IDS" in _log_events(body)
+
+
+def test_a_renamed_id_key_is_distinguishable_from_an_empty_roster() -> None:
+    """The mirror: the objects are still walked, so the counts disagree."""
+    wire = _SESSIONS.replace('"steamId"', '"steam_id"')
+    _OBJECTS.clear()
+    read = _parse(_envelope(wire))
+    assert read == [], "a respelled key must yield no ids"
+    assert len(_OBJECTS) == 3, "and must still count three objects walked"
+
+
+def test_a_nested_object_does_not_close_the_session_window_early() -> None:
+    """The window is depth-bounded, so a field added after a nested object is still
+    inside it — including captureBlind, whose control cannot fire on a key that
+    fell outside the window rather than failing to match."""
+    body = _function_body("stock ac_roster_object_end(")
+    assert "depth++" in body and re.search(r"if\s*\(\s*!depth\s*\)\s*return i;", body), (
+        "the closing brace must only end the object at depth zero"
+    )
+    wire = (
+        '{"steamId":"STEAM_0:0:11111111","capture":{"mode":"off"},"captureBlind":true}'
+    )
+    _OBJECTS.clear()
+    assert _parse(_envelope(wire)) == [("STEAM_0:0:11111111", True)]
+
+
+def test_a_missing_sessions_array_is_not_scanned_from_zero() -> None:
+    """A scan from zero finds the ROOT brace, so the first window is the envelope
+    and the parse is wrong rather than empty. The gate above makes this
+    unreachable; a fallback that would be wrong is worse than none."""
+    body = _function_body("stock ac_roster_render(")
+    assert "? 0 :" not in body, "no fallback may start the walk at the body root"
+    assert re.search(
+        r"if\s*\(\s*p\s*==\s*-1\s*\)\s*\{\s*ac_roster_announce_unavailable\(\);\s*return;\s*\}",
+        body,
+    ), "an absent array must take the same fail-open path as the marker gate"
+
+
+def test_no_roster_helper_is_defined_and_never_called() -> None:
+    """amxxpc does not warn on an unused stock, so a dead predicate compiles clean
+    and reads as the canonical one the next caller should reach for."""
+    src = _strip_comments(SOURCE)
+    for name in set(re.findall(r"^stock (?:bool:)?(ac_roster_\w+)\(", src, re.M)):
+        assert len(re.findall(name + r"\(", src)) > 1, f"{name} is never called"
