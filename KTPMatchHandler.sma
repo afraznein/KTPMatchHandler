@@ -3277,6 +3277,9 @@ public ac_roster_callback(CURL:curl, CURLcode:code) {
     g_acRosterBody[0] = EOS;
     new bytes = curl_get_response_body(curl, g_acRosterBody, charsmax(g_acRosterBody));
     curl_easy_cleanup(curl);
+    // Every scan below walks to an EOS rather than to a length, so the terminator
+    // is forced here instead of trusted to a native filling the buffer exactly.
+    g_acRosterBody[AC_ROSTER_BODY_SIZE - 1] = EOS;
     ac_roster_render(httpCode, bytes);
     // g_acCurlHeaders is persistent — never free here (async-safety, same principle as g_curlHeaders).
 }

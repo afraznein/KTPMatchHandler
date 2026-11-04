@@ -150,6 +150,16 @@ def test_sessions_present_but_none_matched_gets_its_own_line() -> None:
     assert "AC_ROSTER_NONE_MATCHED" in _log_events(body)
 
 
+def test_the_body_terminator_is_forced_not_trusted() -> None:
+    """Every scan walks to an EOS, so a native that filled the buffer exactly would
+    let one run past the array."""
+    body = _function_body("public ac_roster_callback(")
+    assert "g_acRosterBody[AC_ROSTER_BODY_SIZE - 1] = EOS" in body
+    assert body.index("curl_get_response_body") < body.index(
+        "g_acRosterBody[AC_ROSTER_BODY_SIZE - 1] = EOS"
+    ), "the terminator must be forced after the copy, not before it"
+
+
 def test_a_truncated_body_is_not_read_as_a_short_roster() -> None:
     body = _function_body("stock ac_roster_render(")
     assert re.search(r"bytes\s*>=\s*AC_ROSTER_BODY_SIZE\s*-\s*1", body)
