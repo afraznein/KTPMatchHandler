@@ -30,6 +30,12 @@ def _function_body(signature_prefix: str) -> str:
     return SOURCE[start:end]
 
 
+def _strip_comments(body: str) -> str:
+    """Code only. A prose mention of a native is not a call to it."""
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    return re.sub(r"//.*", "", body)
+
+
 def _log_events(body: str) -> set[str]:
     """The event= names this function body emits through log_ktp."""
     return {
@@ -61,10 +67,10 @@ def test_the_report_is_read_only_over_http() -> None:
 
 def test_nothing_in_the_report_can_refuse_a_go_live() -> None:
     """Phase 7 is blocked on adoption; an enforcement knob must not appear here."""
-    region = SOURCE[
+    region = _strip_comments(SOURCE[
         SOURCE.index("// ================= AC live-session roster at go-live") :
         SOURCE.index('log_ktp("event=AC_ROSTER_SEND')
-    ]
+    ])
     for forbidden in (
         "ktp_ac_enforce",
         "register_cvar",
@@ -116,7 +122,7 @@ def test_a_zero_is_only_believed_behind_two_independent_markers() -> None:
         "the echo marker must be built from THIS server's endpoint"
     )
     assert "ac_roster_parse_ttl()" in body
-    assert '^"sessions^":[' in body
+    assert "AC_ROSTER_SESSIONS_TAG" in body
     assert re.search(r"if\s*\(\s*!echoOk\s*\|\|\s*!sessionsOk\s*\|\|\s*ttl\s*<=\s*0\s*\)", body), (
         "the markers must gate the rendering, not merely be logged beside it"
     )
@@ -192,41 +198,171 @@ def test_the_wire_tags_are_the_keys_the_endpoint_emits() -> None:
     assert _define("AC_ROSTER_TTL_TAG") == '"ttlSeconds":'
 
 
-def test_the_session_split_attributes_each_blind_flag_to_its_own_entry() -> None:
-    """The algorithm, mirrored in Python — not proof the Pawn runs, only that
-    bounding on the next id tag is the right rule for this body shape."""
+def _object_end(body: str, frm: int) -> int:
+    """Python mirror of ac_roster_object_end."""
+    in_str = False
+    i = frm
+    while i < len(body):
+        c = body[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "}":
+            return i
+        i += 1
+    return i
+
+
+def _parse(body: str) -> list[tuple[str, bool]]:
+    """Python mirror of the object walk in ac_roster_render — the algorithm, not
+    proof the Pawn runs. What it pins is that bounding on the session OBJECT makes
+    attribution independent of the order the API emits its fields in."""
     sid_tag = _define("AC_ROSTER_SID_TAG")
-    body = (
+    arr_tag = _define("AC_ROSTER_SESSIONS_TAG")
+    a = body.find(arr_tag)
+    p = 0 if a == -1 else a + len(arr_tag)
+    out = []
+    while p < len(body) and body[p] != "]":
+        if body[p] != "{":
+            p += 1
+            continue
+        start = p + 1
+        end = _object_end(body, start)
+        obj = body[start:end]
+        rel = obj.find(sid_tag)
+        sid = ""
+        if rel != -1:
+            at = rel + len(sid_tag)
+            sid = obj[at:obj.index('"', at)]
+        if sid:
+            out.append((sid, '"captureBlind":true' in obj))
+        p = end + 1
+    return out
+
+
+_SESSIONS = (
+    '{"steamId":"STEAM_0:0:11111111","clientVersion":"1.4.2",'
+    '"lastSeenSecondsAgo":5,"captureBlind":false},'
+    '{"steamId":"STEAM_0:1:22222222","clientVersion":"1.4.2",'
+    '"lastSeenSecondsAgo":12,"captureBlind":true},'
+    '{"steamId":"STEAM_0:0:33333333","clientVersion":"1.4.2",'
+    '"lastSeenSecondsAgo":31,"captureBlind":false}'
+)
+_EXPECTED = [
+    ("STEAM_0:0:11111111", False),
+    ("STEAM_0:1:22222222", True),
+    ("STEAM_0:0:33333333", False),
+]
+
+
+def _envelope(sessions: str) -> str:
+    return (
         '{"serverEndpoint":"203.0.113.9:27015","ttlSeconds":90,"sessions":['
-        '{"steamId":"STEAM_0:0:11111111","clientVersion":"1.4.2",'
-        '"lastSeenSecondsAgo":5,"captureBlind":false},'
-        '{"steamId":"STEAM_0:1:22222222","clientVersion":"1.4.2",'
-        '"lastSeenSecondsAgo":12,"captureBlind":true},'
-        '{"steamId":"STEAM_0:0:33333333","clientVersion":"1.4.2",'
-        '"lastSeenSecondsAgo":31,"captureBlind":false}]}'
+        + sessions
+        + "]}"
     )
 
-    seen, cursor = [], 0
-    while True:
-        rel = body.find(sid_tag, cursor)
-        if rel == -1:
-            break
-        at = rel + len(sid_tag)
-        end = body.index('"', at)
-        nxt = body.find(sid_tag, end)
-        window = body[end:] if nxt == -1 else body[end:nxt]
-        seen.append((body[at:end], '"captureBlind":true' in window))
-        cursor = end
 
-    assert seen == [
-        ("STEAM_0:0:11111111", False),
-        ("STEAM_0:1:22222222", True),
-        ("STEAM_0:0:33333333", False),
-    ], seen
+def test_the_object_split_attributes_each_blind_flag_to_its_own_entry() -> None:
+    assert _parse(_envelope(_SESSIONS)) == _EXPECTED
 
     ttl_tag = _define("AC_ROSTER_TTL_TAG")
+    body = _envelope(_SESSIONS)
     at = body.index(ttl_tag) + len(ttl_tag)
     assert body[at:at + 2] == "90", "the TTL advance must land on the first digit"
+
+
+def test_attribution_survives_captureBlind_moving_ahead_of_steamId() -> None:
+    """The field-order dependency this parse was reworked to remove. With the old
+    next-steamId anchor, every session read its neighbour's flag."""
+    reordered = (
+        '{"captureBlind":false,"steamId":"STEAM_0:0:11111111","clientVersion":"1.4.2",'
+        '"lastSeenSecondsAgo":5},'
+        '{"captureBlind":true,"steamId":"STEAM_0:1:22222222","clientVersion":"1.4.2",'
+        '"lastSeenSecondsAgo":12},'
+        '{"captureBlind":false,"steamId":"STEAM_0:0:33333333","clientVersion":"1.4.2",'
+        '"lastSeenSecondsAgo":31}'
+    )
+    assert _parse(_envelope(reordered)) == _EXPECTED
+
+
+def test_a_brace_inside_clientVersion_cannot_end_the_object_early() -> None:
+    """JSON escapes a quote inside a string, never a brace, and clientVersion is
+    client-supplied."""
+    hostile = (
+        '{"steamId":"STEAM_0:0:11111111","clientVersion":"1.4.2}{",'
+        '"lastSeenSecondsAgo":5,"captureBlind":true}'
+    )
+    assert _parse(_envelope(hostile)) == [("STEAM_0:0:11111111", True)]
+
+
+def test_an_escaped_quote_inside_clientVersion_does_not_desync_the_scan() -> None:
+    hostile = (
+        '{"steamId":"STEAM_0:0:11111111","clientVersion":"1.4\\"2}",'
+        '"lastSeenSecondsAgo":5,"captureBlind":true},'
+        '{"steamId":"STEAM_0:1:22222222","clientVersion":"ok",'
+        '"lastSeenSecondsAgo":5,"captureBlind":false}'
+    )
+    assert _parse(_envelope(hostile)) == [
+        ("STEAM_0:0:11111111", True),
+        ("STEAM_0:1:22222222", False),
+    ]
+
+
+def test_a_blind_flag_that_stops_matching_is_counted_not_silently_cleared() -> None:
+    """blind=0 must mean nobody is blind, not 'the wire spelling moved'. Unlike the
+    other markers this one fails reassuringly, so it needs its own counter."""
+    body = _function_body("stock ac_roster_render(")
+    assert '^"captureBlind^":false' in body, "the false literal is the control"
+    assert "blindUnparsed++" in body
+    assert re.search(
+        r"if\s*\(\s*!blindTrue\s*&&\s*!blindFalse", body
+    ), "the counter must fire only when NEITHER literal matched"
+    parse = next(
+        fmt
+        for fmt in re.findall(r'log_ktp\(\s*"((?:\^"|[^"\n])*)"', body)
+        if "event=AC_ROSTER_PARSE" in fmt
+    )
+    assert "blind_unparsed=" in parse, "the control must sit beside the count it qualifies"
+    assert "AC_ROSTER_BLIND_UNPARSED" in _log_events(body)
+
+
+def test_the_chat_lists_are_capped_so_a_report_cannot_overflow_a_client() -> None:
+    """client_print(0, ...) is one RELIABLE per-client usermsg per line, and a
+    reliable overflow drops the player. A report must not be able to kick anyone."""
+    cap = re.search(r"#define\s+AC_ROSTER_MAX_LINES\s+(\d+)", SOURCE)
+    assert cap, "#define AC_ROSTER_MAX_LINES not found"
+    assert 1 <= int(cap.group(1)) <= 3, (
+        f"a cap of {cap.group(1)} lines per list does not bound the go-live frame"
+    )
+    body = _function_body("stock ac_roster_announce_names(")
+    assert "AC_ROSTER_MAX_LINES" in body
+    assert "more)" in body, "the remainder must be counted, not dropped silently"
+
+
+def test_the_capped_line_still_fits_the_dod_chat_width() -> None:
+    """The binding cap is 190 in UTIL_ClientPrint, which truncates with no strlen
+    check -- not announce_all's 192."""
+    body = _function_body("stock ac_roster_announce_names(")
+    wrap = re.search(r"idx\s*\+\s*strlen\(name\)\s*\+\s*2\s*>\s*(\d+)", body)
+    assert wrap, "the wrap threshold is not where this test thinks it is"
+    threshold = int(wrap.group(1))
+
+    labels = re.findall(r'ac_roster_announce_names\(\s*"([^"]+)"', SOURCE)
+    longest_label = max(len(x) for x in labels)
+    suffix = len(" (+99 more)")
+    prefix = len("[KTP] ") + longest_label + len(" ") + len("\n")
+    assert threshold + suffix + prefix <= 190, (
+        f"worst-case line is {threshold + suffix + prefix} against the 190-char cap"
+    )
+
+    line = re.search(r"new line\[(\d+)\]", body)
+    assert line and threshold + suffix < int(line.group(1)), "the line buffer can truncate"
 
 
 # --------------------------------------------------------------- identity rules
@@ -247,12 +383,30 @@ def test_matching_folds_the_universe_digit_on_both_sides() -> None:
     ), "two unparseable ids must never compare equal"
 
 
-def test_the_blind_flag_is_bounded_to_its_own_session() -> None:
-    """Unbounded, a later entry's flag reads onto this player."""
+def test_the_blind_flag_is_bounded_to_the_session_OBJECT_not_to_field_order() -> None:
+    """Anchoring on the NEXT steamId made attribution depend on the API emitting
+    captureBlind after it, which JSON does not promise: moving that field would
+    name one player capture blind because his neighbour was."""
     body = _function_body("stock ac_roster_render(")
-    assert "boundAt" in body
-    assert "g_acRosterBody[boundAt] = EOS" in body
-    assert "g_acRosterBody[boundAt] = saved" in body, "the body must be restored in place"
+    assert "ac_roster_object_end(objStart)" in body
+    assert "g_acRosterBody[objEnd] = EOS" in body
+    assert "g_acRosterBody[objEnd] = saved" in body, "the body must be restored in place"
+    assert "boundAt" not in body, (
+        "the next-steamId anchor is the field-order dependency; it must be gone"
+    )
+    # Both reads are taken from the terminated object, so neither can see a sibling.
+    assert body.count("contain(g_acRosterBody[objStart]") >= 3
+
+
+def test_the_object_scan_is_string_aware() -> None:
+    """JSON escapes a quote inside a string but not a brace, and clientVersion is
+    client-supplied, so a naive brace scan ends the object early."""
+    body = _function_body("stock ac_roster_object_end(")
+    assert "inStr" in body
+    assert r"c == '\'" in body, (
+        "the backslash case must be handled or an escaped quote ends the string early"
+    )
+    assert "c == '}'" in body and "c == '\"'" in body
 
 
 def test_capture_blind_is_rendered_as_a_third_state() -> None:
@@ -295,9 +449,13 @@ def test_the_pending_roster_id_dies_with_match_identity() -> None:
     assert "g_acRosterMatchId[0] = EOS" in reset
     assert "ac_announce_state_reset()" in _function_body("stock clear_match_id(")
 
-    current = _function_body("stock bool:ac_roster_match_is_current(")
-    assert "g_matchLive" in current
-    assert "equal(g_matchId, g_acRosterMatchId)" in current
+    reason = _function_body("stock bool:ac_roster_not_current_reason(")
+    assert "g_matchLive" in reason
+    assert "equal(g_matchId, g_acRosterMatchId)" in reason, (
+        "the compare against the live id is what actually stops a stale answer"
+    )
+    for cause in ("match_not_live", "no_match_id", "no_pending_id", "match_changed"):
+        assert cause in reason, f"{cause} is not told apart in the log"
 
 
 def test_test_mode_takes_no_outbound_reading() -> None:
