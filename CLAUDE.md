@@ -135,6 +135,16 @@ When starting a 12man, player selects "1.3 Community Discord" option:
     shipping it.
   - Section ORDER is therefore load-bearing twice over: it is also the order
     `.changemap` renders, which `ktp_maps.ini` states in its own heading.
+- **`ktp_maps.ini` is re-read at EVERY map change, not at plugin load.** `load_map_mappings()`
+  has exactly one call site, inside `public plugin_cfg()`, and it clears the table and `fopen`s
+  the file on each call. In extension mode `plugin_cfg` is fired per map by KTPAMXX's
+  `KTPAMX_ReloadPlugins()`, which `SV_ActivateServer` calls whenever the map-change flag is set
+  (`amxmodx/meta_api.cpp`) -- plugins stay loaded and only the forwards re-run.
+  - So a pool edit activates at the next map change. ~20 minutes, not the 03:00 nightly.
+  - The project `CLAUDE.md`'s *"extension mode never reloads plugins on map change"* is still
+    true and is about the `.amxx` BINARY not being re-read, so a new BUILD does need the
+    restart. A config file opened inside `plugin_cfg()` does not. Reading the first rule as
+    covering the second is what parked `dpl-679f` on a restart it did not need.
 
 ## Match Flow
 
