@@ -6,6 +6,104 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.182] - 2026-11-09
+
+### Changed
+
+- **The go-live anti-cheat reading now asks by PLAYER ID, not by server endpoint.** It
+  moves from `GET /api/ac/server-roster?server_endpoint=…` to
+  `POST /api/ac/live-sessions` with the ids of the players it is about to report on
+  (route and contract in `KTPAntiCheat.Api/Endpoints/AcEndpoints.cs`), and **no part of this path reads, sends or compares an endpoint any
+  more.**
+
+  **Why the route swap is the smaller half.** The old question was *"which clients claim
+  to be on endpoint X"*, answered off a field the client asserts and nothing verifies — a
+  client that could not tell which server it was on adopted the newest open match
+  fleet-wide and reported that endpoint as its own. One competitive go-live was told that
+  nobody on a full server was running the anti-cheat while every player on it was live.
+  An id-scoped question cannot be wrong about an endpoint it never consults, so the
+  endpoint had to leave this side too: keeping a client-side comparison would have left
+  the same defect sitting behind a correct API.
+
+- **Rows are matched back on the exact bytes that were sent**, which is what the route's
+  echo is for. Nothing here derives a canonical spelling of an account: the API folds the
+  universe digit for every reader, and a second fold on this side is a second identity
+  path that can disagree with it. The only plugin-side test on an id is whether it can be
+  sent at all — a bot and a pending id carry no account part — and that count is reported
+  as `unsendable_ids` rather than dropped silently.
+
+- **The non-vacuity control is now the row echo rather than the endpoint echo.** The
+  reading is believed only behind a usable `ttlSeconds`, a `sessions` array, **and** one
+  row per submitted id with every row echoing an id that was sent. That gate is bound to
+  the request that asked, where the endpoint echo was a client-asserted field reflected
+  back; a reply that breaks it takes the fail-open path and logs
+  `event=AC_ROSTER_ECHO_MISMATCH` instead of printing a count. A truncated reply loses
+  rows, so it lands on the same gate — the short-list caveat is no longer the whole remedy
+  for one.
+
+- **`event=AC_ROSTER_NONE_MATCHED` is gone, and its removal is the point rather than
+  tidying.** Under endpoint scoping, sessions present with nobody matched was the
+  universe-digit identity failure returning. Under id scoping every submitted id answers,
+  so a zero behind the echo gate **is** the reading — nobody on teams is running the
+  client — and a fault line there would make a correct answer look like a broken call.
+
+- **Liveness is a field now, not presence in the array**, because every submitted id comes
+  back whether live or not. `"active"` is parsed with the same treatment the blind flag
+  already had: both literals are matched, and a key that matches neither is counted as
+  `active_unparsed`. That one fails reassuringly — a moved spelling would read as nobody
+  live, which is a plausible answer rather than an obvious fault — so `event=AC_ROSTER_ACTIVE_UNPARSED`
+  exists to make its zero a measurement.
+
+- **A 4xx is logged as a definite refusal, not as an unreachable API.** Both still fail
+  open to the same chat line, so the log is the only place they can be told apart:
+  `event=AC_ROSTER_REFUSED` carries the code, the roster size and the body budget. After
+  the two bounds below a 4xx can only mean the route's contract moved, which is worth
+  seeing rather than passing off as a dropped packet.
+
+- **Both ways the new route can answer 400 are closed at the source, not swallowed.** An
+  empty roster is decided before a request is built — `event=AC_ROSTER_NO_ROSTER`, and the
+  notice is still said out loud — and the id count is bounded under the API's cap by
+  `#assert` rather than clamped at run time, because a clamp would drop a player from the
+  reading and then report the remainder as the whole team.
+
+- **The request body cannot truncate at a full roster.** `g_acLiveBody` is sized from
+  `AC_LIVE_BODY_MAX`, derived from the id capacity and the id cap, so the worst case fits
+  by construction; the per-row headroom check stays anyway, so a size changed later fails
+  loudly instead of quietly asking about fewer players than the reading claims to cover.
+  `AC_ROSTER_SEND` logs `body_bytes` against `body_max`, which is the live check on that
+  arithmetic.
+
+- **The reply buffer is sized the same way.** This route answers about every id submitted
+  rather than only the live ones, so a full server is the ordinary case — the size the
+  endpoint-scoped read needed would now push every full-server reading onto the echo gate.
+
+- **A slot is revalidated before anybody is named.** The ids and the slots that owned them
+  are captured when the request is built, and the callback re-reads each authid and
+  compares it before naming that player; slots recycle across an async boundary, and
+  `is_user_connected` only proves the slot is occupied. Mismatches are reported as
+  `slots_recycled`. The captured list is cleared with match identity, so a reply that
+  outlives its match cannot be matched against the previous roster's players.
+
+- **A server that cannot resolve its own address is now asked about rather than skipped.**
+  The old guard refused to read the roster without an endpoint; the id-scoped question
+  does not need one, so that condition is gone and coverage widens.
+
+### Notes
+
+- **Unchanged on purpose:** the reading is still a REPORT — nothing in this path can refuse
+  a `.ready` or a go-live — the request budget and timeout are the same, it still prints
+  who IS live and never who is not, and the fail-open behaviour and the roster-cache shape
+  are untouched.
+- **A known gap is inherited rather than worked around.** The API folds `STEAM_1:` while
+  accepting the wider accepted range, so an id outside the folded range keys on itself; it
+  is pinned by a test on the API side. Compensating for it here would be a third identity
+  path, so this plugin does not.
+- The go-live tripwire suite moves with the route: it now asserts the **absence** of any
+  endpoint comparison in this path, the request bound, the echo gate, the slot
+  revalidation, and that a zero reading is not flagged as a fault.
+
+---
+
 ## [0.10.181] - 2026-11-04
 
 ### Added
