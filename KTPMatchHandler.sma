@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.182"
+#define PLUGIN_VERSION "0.10.183"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -152,22 +152,26 @@ new g_acRosterMatchId[64];           // match_id the in-flight roster POST belon
 #define AC_ROSTER_TTL_TAG "^"ttlSeconds^":"
 #define AC_ROSTER_SESSIONS_TAG "^"sessions^":["
 #define AC_ROSTER_ACTIVE_TAG "^"active^":"
-// The ids this server ASKED about, captured when the request is built and never
-// re-derived: every reply row is matched back against the exact bytes sent, so no
-// second spelling of an account exists on this side to disagree with the API's.
-#define AC_LIVE_ID_SIZE 44
-new g_acLiveIds[MAX_PLAYERS][AC_LIVE_ID_SIZE];
-// Slot that owned each id when it was sent. Slots recycle, so the callback re-reads
-// the authid and compares before it names anybody.
-new g_acLiveSlots[MAX_PLAYERS];
-new g_acLiveNum;                     // ids in the request in flight; 0 = none asked
-new g_acLiveUnsendable;              // players on teams whose authid carries no account part
 // The API refuses a longer list outright, so the roster is bounded under its cap at
 // compile time instead of clamped at run time — a clamp would drop a player from the
 // reading and then report the remainder as the whole team.
+// NOT tied to the API's constant by anything mechanical: it is a copy, and the
+// consequence of drift is a 400 reported as AC_ROSTER_REFUSED.
 #define AC_LIVE_API_MAX_IDS 64
 #define AC_LIVE_MAX_IDS MAX_PLAYERS
 #assert AC_LIVE_MAX_IDS <= AC_LIVE_API_MAX_IDS
+// The ids this server ASKED about, captured when the request is built and never
+// re-derived: every reply row is matched back against the exact bytes sent, so no
+// second spelling of an account exists on this side to disagree with the API's.
+// Every array here and in the render is sized from the cap rather than from
+// MAX_PLAYERS, so raising the cap cannot overflow one with the assert still passing.
+#define AC_LIVE_ID_SIZE 44
+new g_acLiveIds[AC_LIVE_MAX_IDS][AC_LIVE_ID_SIZE];
+// Slot that owned each id when it was sent. Slots recycle, so the callback re-reads
+// the authid and compares before it names anybody.
+new g_acLiveSlots[AC_LIVE_MAX_IDS];
+new g_acLiveNum;                     // ids in the request in flight; 0 = none asked
+new g_acLiveUnsendable;              // players on teams whose authid carries no account part
 // Request arithmetic as constants, same rule as the announce body above: the buffer
 // is DERIVED from the worst case, so a full roster cannot truncate it.
 #define AC_LIVE_ID_BYTES (AC_LIVE_ID_SIZE - 1)
@@ -184,7 +188,11 @@ new g_acLiveBody[AC_LIVE_BODY_MAX + 1];
 #define AC_ROSTER_CLIENTVER_BYTES 48
 #define AC_ROSTER_LASTSEEN_BYTES 10
 #define AC_ROSTER_ROW_FIELD_BYTES (AC_ROSTER_CLIENTVER_BYTES + AC_ROSTER_LASTSEEN_BYTES)
-#define AC_ROSTER_ROW_MAX (AC_ROSTER_ROW_LITERAL_BYTES + AC_LIVE_ID_BYTES + AC_ROSTER_ROW_FIELD_BYTES)
+// The +1 is the comma BETWEEN rows, and leaving it out is why a hand count is not
+// a budget: the literal above measures one row's own braces and keys, and a reply
+// of them needs a separator each. Evaluated by a test rather than counted again.
+#define AC_ROSTER_ROW_SEPARATOR_BYTES 1
+#define AC_ROSTER_ROW_MAX (AC_ROSTER_ROW_LITERAL_BYTES + AC_LIVE_ID_BYTES + AC_ROSTER_ROW_FIELD_BYTES + AC_ROSTER_ROW_SEPARATOR_BYTES)
 #define AC_ROSTER_ENVELOPE_BYTES 32
 #define AC_ROSTER_BODY_SIZE (AC_ROSTER_ENVELOPE_BYTES + (AC_LIVE_MAX_IDS * AC_ROSTER_ROW_MAX) + 1)
 new g_acRosterBody[AC_ROSTER_BODY_SIZE];
@@ -3247,14 +3255,14 @@ stock ac_roster_render(httpCode, bytes) {
         return;
     }
 
-    new bool:listed[MAX_PLAYERS];
+    new bool:listed[AC_LIVE_MAX_IDS];
     for (new i = 0; i < g_acLiveNum; i++) listed[i] = false;
 
-    new liveIds[MAX_PLAYERS], liveNum = 0;
-    new blindIds[MAX_PLAYERS], blindNum = 0;
+    new liveIds[AC_LIVE_MAX_IDS], liveNum = 0;
+    new blindIds[AC_LIVE_MAX_IDS], blindNum = 0;
     new rows = 0, objects = 0, echoed = 0;
-    new ordinalOff = 0, recycled = 0;
-    new blindUnparsed = 0, activeUnparsed = 0;
+    new ordinalOff = 0, notConnected = 0, authidChanged = 0;
+    new blindUnparsed = 0, activeMissing = 0;
     new sidTag[] = AC_ROSTER_SID_TAG;
 
     // Walk the array one OBJECT at a time, not one key at a time. Anchoring a flag
@@ -3315,10 +3323,15 @@ stock ac_roster_render(httpCode, bytes) {
 
         // No null branch here, deliberately: liveness is not nullable on this route, so
         // a null would BE the contract change this control exists to catch.
+        //
+        // And NO tag-presence precondition either, unlike the blind flag above. This
+        // route promises active on EVERY row, so a key renamed out from under us would
+        // leave that counter at zero while every row read not-live — a false "nobody is
+        // running the client" with no control firing at all, which is the exact failure
+        // the move off the endpoint was made to remove.
         new bool:activeTrue  = (contain(g_acRosterBody[objStart], "^"active^":true")  != -1);
         new bool:activeFalse = (contain(g_acRosterBody[objStart], "^"active^":false") != -1);
-        if (!activeTrue && !activeFalse
-            && contain(g_acRosterBody[objStart], AC_ROSTER_ACTIVE_TAG) != -1) activeUnparsed++;
+        if (!activeTrue && !activeFalse) activeMissing++;
 
         g_acRosterBody[objEnd] = saved;
         p = (g_acRosterBody[objEnd] == '}') ? objEnd + 1 : objEnd;
@@ -3344,13 +3357,16 @@ stock ac_roster_render(httpCode, bytes) {
 
         // A slot is not an identity: it can hold a different person by the time this
         // reply lands, so the authid is re-read and compared before anyone is named.
-        new nowSid[AC_LIVE_ID_SIZE];
-        nowSid[0] = EOS;
-        if (is_user_connected(g_acLiveSlots[hit])) {
-            get_user_authid(g_acLiveSlots[hit], nowSid, charsmax(nowSid));
+        // Told apart, because they mean different things to a captain reading a low
+        // count: one left, the other is a different person in the same slot.
+        if (!is_user_connected(g_acLiveSlots[hit])) {
+            notConnected++;
+            continue;
         }
+        new nowSid[AC_LIVE_ID_SIZE];
+        get_user_authid(g_acLiveSlots[hit], nowSid, charsmax(nowSid));
         if (!equal(nowSid, g_acLiveIds[hit])) {
-            recycled++;
+            authidChanged++;
             continue;
         }
 
@@ -3365,18 +3381,18 @@ stock ac_roster_render(httpCode, bytes) {
     // never reaches this line at all. Each count carries its own control: objects
     // against rows for the id key, echoed against rows for the echo contract, and
     // the unparsed counts for the flags they qualify.
-    log_ktp("event=AC_ROSTER_PARSE match_id=%s http=%d bytes=%d truncated=%s sessions_marker=present ttl=%d objects=%d rows=%d echoed=%d on_teams=%d matched=%d blind=%d blind_unparsed=%d active_unparsed=%d ordinal_off=%d slots_recycled=%d unsendable_ids=%d",
+    log_ktp("event=AC_ROSTER_PARSE match_id=%s http=%d bytes=%d truncated=%s sessions_marker=present ttl=%d objects=%d rows=%d echoed=%d on_teams=%d matched=%d blind=%d blind_unparsed=%d active_missing=%d ordinal_off=%d slots_not_connected=%d slots_authid_changed=%d unsendable_ids=%d",
         g_acRosterMatchId, httpCode, bytes,
         truncated ? "yes" : "no", ttl, objects, rows, echoed, g_acLiveNum,
-        matched, blindNum, blindUnparsed, activeUnparsed,
-        ordinalOff, recycled, g_acLiveUnsendable);
+        matched, blindNum, blindUnparsed, activeMissing,
+        ordinalOff, notConnected, authidChanged, g_acLiveUnsendable);
 
     // Objects walked but not one id read. The id key moving on the wire lands here,
     // and nothing else does — the flag controls miss it, because a flag parses fine
     // in an object whose id does not.
     if (objects > 0 && rows == 0) {
-        log_ktp("event=AC_ROSTER_NO_IDS match_id=%s objects=%d blind_unparsed=%d active_unparsed=%d",
-            g_acRosterMatchId, objects, blindUnparsed, activeUnparsed);
+        log_ktp("event=AC_ROSTER_NO_IDS match_id=%s objects=%d blind_unparsed=%d active_missing=%d",
+            g_acRosterMatchId, objects, blindUnparsed, activeMissing);
     }
 
     if (blindUnparsed > 0) {
@@ -3385,32 +3401,40 @@ stock ac_roster_render(httpCode, bytes) {
     }
 
     // The liveness field moving is the one that fails reassuringly: every row would
-    // read not-live, which is a plausible answer rather than an obvious fault.
-    if (activeUnparsed > 0) {
-        log_ktp("event=AC_ROSTER_ACTIVE_UNPARSED match_id=%s rows=%d active_unparsed=%d",
-            g_acRosterMatchId, rows, activeUnparsed);
+    // read not-live, which is a plausible answer rather than an obvious fault. So it
+    // gates the reading below rather than only logging — a reply this already judged
+    // unreadable must not print a count.
+    if (activeMissing > 0) {
+        log_ktp("event=AC_ROSTER_ACTIVE_MISSING match_id=%s rows=%d active_missing=%d",
+            g_acRosterMatchId, rows, activeMissing);
     }
 
-    // The reply does not answer THIS request. A row per submitted id, each echoing
-    // the bytes sent, is the route's contract, and a reading printed off a reply
-    // that broke it is the failure this change exists to remove. A truncated body
-    // lands here too, which is why the short-list caveat is no longer the whole
-    // remedy for one.
-    if (rows != g_acLiveNum || echoed != rows) {
-        log_ktp("event=AC_ROSTER_ECHO_MISMATCH match_id=%s objects=%d rows=%d echoed=%d on_teams=%d truncated=%s",
-            g_acRosterMatchId, objects, rows, echoed, g_acLiveNum, truncated ? "yes" : "no");
-        ac_roster_announce_unavailable();
-        return;
-    }
-
-    // No "rows present but none matched" line here. Under id scoping every submitted
-    // id answers, so matched=0 behind the echo gate IS the reading — nobody on teams
-    // is running the client — and flagging it would make a correct answer look like
-    // a broken call. The echo gate is what tells a broken call apart now.
+    // Currency FIRST, because a match that ended inside the request window is not a
+    // broken reply: checked after the gate it logs a contract break against the API
+    // on an ordinary cancel, with an empty match_id, and nothing says which happened.
     new staleReason[24];
     if (ac_roster_not_current_reason(staleReason, charsmax(staleReason))) {
         log_ktp("event=AC_ROSTER_DISCARDED reason=%s requested='%s' current='%s'",
             staleReason, g_acRosterMatchId, g_matchId);
+        return;
+    }
+
+    // The reply does not answer THIS request. A row per submitted id, each echoing
+    // the bytes sent and carrying a liveness this can read, is the route's contract,
+    // and a reading printed off a reply that broke it is the failure this change
+    // exists to remove. A truncated body lands here too, which is why the short-list
+    // caveat is no longer the whole remedy for one.
+    //
+    // No "rows present but none matched" condition here, deliberately. Under id
+    // scoping every submitted id answers, so matched=0 behind this gate IS the
+    // reading — nobody on teams is running the client — and flagging it would make
+    // a correct answer look like a broken call. This gate is what tells a broken
+    // call apart, which is why a missing liveness field has to be part of it.
+    if (rows != g_acLiveNum || echoed != rows || activeMissing > 0) {
+        log_ktp("event=AC_ROSTER_ECHO_MISMATCH match_id=%s objects=%d rows=%d echoed=%d on_teams=%d active_missing=%d truncated=%s",
+            g_acRosterMatchId, objects, rows, echoed, g_acLiveNum, activeMissing,
+            truncated ? "yes" : "no");
+        ac_roster_announce_unavailable();
         return;
     }
 
@@ -3435,11 +3459,12 @@ public ac_roster_callback(CURL:curl, CURLcode:code) {
 
     new httpCode;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, httpCode);
-    // A 4xx is a DEFINITE answer and must not read as an unreachable API: the
-    // request itself was refused, which means the route's contract moved under a
-    // roster this plugin bounds under the id cap at compile time and never sends
-    // empty. Players get the same fail-open notice either way; an operator gets
-    // a line that says which of the two happened.
+    // A 4xx is a DEFINITE answer and must not read as an unreachable API: the request
+    // itself was refused. Which refusal it was is in http= and nowhere else — an
+    // expired server secret, a build without this route and a rate limit all land
+    // here, so this line must not claim a cause it cannot establish. What the bounds
+    // above DO rule out is an over-long or empty list of ids. Players get the same
+    // fail-open notice either way.
     if (httpCode >= 400 && httpCode < 500) {
         log_ktp("event=AC_ROSTER_REFUSED http=%d match_id=%s on_teams=%d body_max=%d",
             httpCode, g_acRosterMatchId, g_acLiveNum, AC_LIVE_BODY_MAX);

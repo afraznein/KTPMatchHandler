@@ -219,11 +219,28 @@ def test_the_id_count_is_bounded_under_the_api_cap_at_compile_time() -> None:
     assert "g_acLiveNum < AC_LIVE_MAX_IDS" in body, (
         "the array write needs the bound even where the assert makes it unreachable"
     )
+    # Structural, not test-held: raising the cap must not overflow an array declared
+    # from MAX_PLAYERS while the assert above still passes.
+    assert "new g_acLiveIds[AC_LIVE_MAX_IDS][AC_LIVE_ID_SIZE]" in SOURCE
+    assert "new g_acLiveSlots[AC_LIVE_MAX_IDS]" in SOURCE
+    render = _function_body("stock ac_roster_render(")
+    for decl in ("listed[AC_LIVE_MAX_IDS]", "liveIds[AC_LIVE_MAX_IDS]",
+                 "blindIds[AC_LIVE_MAX_IDS]"):
+        assert decl in render, f"{decl} is still sized from MAX_PLAYERS"
 
 
 def test_the_api_cap_matches_the_merged_route() -> None:
-    """Tripwire on KTPAntiCheat.Api/Endpoints/AcEndpoints.cs MaxLiveSessionIds."""
+    """A REMINDER, not a tripwire, and the docstring says so because the difference
+    matters: this suite cannot reach the other repo, so it asserts this plugin's own
+    copy of KTPAntiCheat.Api/Endpoints/AcEndpoints.cs `MaxLiveSessionIds` and cannot
+    notice the API lowering its cap. What makes the drift survivable is that the
+    consequence is a 400, reported as AC_ROSTER_REFUSED, rather than a wrong reading."""
     assert _define_num("AC_LIVE_API_MAX_IDS") == "64"
+    source_note = SOURCE[SOURCE.index("#define AC_LIVE_API_MAX_IDS") - 400 :
+                         SOURCE.index("#define AC_LIVE_API_MAX_IDS")]
+    assert "NOT tied" in source_note, (
+        "the copy must say it is a copy, or the next reader takes it for a tie"
+    )
 
 
 def test_the_full_worst_case_request_fits_the_derived_buffer() -> None:
@@ -289,7 +306,8 @@ def test_the_row_echo_is_the_gate_that_replaced_the_endpoint_echo() -> None:
     per submitted id, each echoing the bytes sent, is the route's contract."""
     body = _function_body("stock ac_roster_render(")
     assert re.search(
-        r"if\s*\(\s*rows\s*!=\s*g_acLiveNum\s*\|\|\s*echoed\s*!=\s*rows\s*\)", body
+        r"if\s*\(\s*rows\s*!=\s*g_acLiveNum\s*\|\|\s*echoed\s*!=\s*rows"
+        r"\s*\|\|\s*activeMissing\s*>\s*0\s*\)", body
     ), "the echo contract must gate the announce, not merely be logged"
     gate = body.index("AC_ROSTER_ECHO_MISMATCH")
     assert gate < body.index('announce_all("Anti-cheat check at go-live'), (
@@ -315,8 +333,9 @@ def test_the_control_line_carries_the_markers_beside_the_counts() -> None:
         "on_teams=",
         "matched=",
         "blind_unparsed=",
-        "active_unparsed=",
-        "slots_recycled=",
+        "active_missing=",
+        "slots_not_connected=",
+        "slots_authid_changed=",
         "bytes=",
         "truncated=",
     ):
@@ -354,6 +373,40 @@ def test_a_truncated_body_is_not_read_as_a_short_roster() -> None:
     )
 
 
+def test_the_full_worst_case_reply_fits_the_derived_buffer() -> None:
+    """EVALUATED, not symbol-checked, because the request-side twin of this test is
+    what caught the only numeric defect in this change: the row literal measures one
+    row's own braces and keys, so a reply of them also needs a separator each, and a
+    hand count missed every one of them. Render it and compare."""
+    def num(name: str) -> int:
+        return int(_define_num(name))
+
+    id_bytes = num("AC_LIVE_ID_SIZE") - 1
+    cver = num("AC_ROSTER_CLIENTVER_BYTES")
+    lastseen = num("AC_ROSTER_LASTSEEN_BYTES")
+    literal = num("AC_ROSTER_ROW_LITERAL_BYTES")
+    sep = num("AC_ROSTER_ROW_SEPARATOR_BYTES")
+    envelope = num("AC_ROSTER_ENVELOPE_BYTES")
+    max_ids = int(re.search(r"^#define\s+MAX_PLAYERS\s+(\d+)", SOURCE, re.M).group(1))
+
+    row = (
+        '{"steamId":"%s","active":false,"clientVersion":"%s",'
+        '"lastSeenSecondsAgo":%s,"endedGracefully":false,"captureBlind":false}'
+        % ("i" * id_bytes, "v" * cver, "9" * lastseen)
+    )
+    rendered = '{"ttlSeconds":90,"sessions":[' + ",".join([row] * max_ids) + "]}"
+
+    row_max = literal + id_bytes + cver + lastseen + sep
+    charsmax = envelope + max_ids * row_max  # BODY_SIZE is that + 1; charsmax is size-1
+    assert len(rendered) <= charsmax, (
+        f"a full reply renders to {len(rendered)} against charsmax {charsmax}"
+    )
+    # CONTROL — the literal really does exclude the separator, which is the whole
+    # reason the +1 exists. Without it the budget is short by one per gap.
+    assert len(row) == literal + id_bytes + cver + lastseen
+    assert envelope >= len('{"ttlSeconds":90,"sessions":[]}')
+
+
 def test_the_reply_buffer_is_sized_for_a_row_per_submitted_id() -> None:
     """This route answers about every id sent, not only the live ones, so a full
     server is the ordinary case. The size the endpoint-scoped read needed would now
@@ -362,7 +415,8 @@ def test_the_reply_buffer_is_sized_for_a_row_per_submitted_id() -> None:
     assert "AC_LIVE_MAX_IDS" in size and "AC_ROSTER_ROW_MAX" in size
     assert not re.fullmatch(r"\d+", size), f"{size!r} is a literal"
     row = _define_num("AC_ROSTER_ROW_MAX")
-    for part in ("AC_ROSTER_ROW_LITERAL_BYTES", "AC_LIVE_ID_BYTES", "AC_ROSTER_ROW_FIELD_BYTES"):
+    for part in ("AC_ROSTER_ROW_LITERAL_BYTES", "AC_LIVE_ID_BYTES",
+                 "AC_ROSTER_ROW_FIELD_BYTES", "AC_ROSTER_ROW_SEPARATOR_BYTES"):
         assert part in row, f"the reply row omits {part}"
     fields = _define_num("AC_ROSTER_ROW_FIELD_BYTES")
     assert "AC_ROSTER_CLIENTVER_BYTES" in fields and "AC_ROSTER_LASTSEEN_BYTES" in fields
@@ -406,7 +460,9 @@ def test_a_slot_is_revalidated_before_anybody_is_named() -> None:
     assert re.search(
         r"if\s*\(\s*!equal\(\s*nowSid\s*,\s*g_acLiveIds\[hit\]\s*\)\s*\)", body
     ), "the authid must be re-read and compared, not trusted to the slot"
-    assert "recycled++" in body, "and the mismatch must be counted"
+    # Told apart: a player who left and a different person in his slot mean different
+    # things to a captain reading a low count.
+    assert "notConnected++" in body and "authidChanged++" in body
     revalidate = body.index("nowSid")
     assert revalidate < body.index("blindIds[blindNum++]"), (
         "the compare must precede the naming or it is decoration"
@@ -420,14 +476,54 @@ def test_the_liveness_flag_is_read_and_its_zero_is_a_measurement() -> None:
     body = _function_body("stock ac_roster_render(")
     assert '^"active^":true' in body
     assert '^"active^":false' in body, "the false literal is the control"
-    assert "activeUnparsed++" in body
-    assert re.search(r"if\s*\(\s*!activeTrue\s*&&\s*!activeFalse", body), (
-        "the counter must fire only when NEITHER literal matched"
+    assert "activeMissing++" in body
+    assert re.search(r"if\s*\(\s*!activeTrue\s*&&\s*!activeFalse\s*\)\s*activeMissing\+\+;", body), (
+        "the counter must fire whenever NEITHER literal matched"
     )
     assert re.search(r"if\s*\(\s*!activeTrue\s*\)\s*continue;", body), (
         "a row that is not active must not be named live"
     )
-    assert "AC_ROSTER_ACTIVE_UNPARSED" in _log_events(body)
+    assert "AC_ROSTER_ACTIVE_MISSING" in _log_events(body)
+
+
+def test_a_renamed_liveness_key_cannot_announce_a_false_zero() -> None:
+    """The one hole the echo gate did not close on its own, and the worst-shaped one:
+    rename `active` and every row reads not-live, the row count and the echo still
+    agree, and chat announces "0 of N" — a false "nobody is running the client" with
+    no control firing. So the absence is counted with NO tag-presence precondition,
+    unlike the blind flag, and it gates the reading."""
+    body = _function_body("stock ac_roster_render(")
+    counter = re.search(r"if\s*\(\s*!activeTrue\s*&&\s*!activeFalse([^)]*)\)\s*activeMissing", body)
+    assert counter, "the liveness counter is not where this test thinks it is"
+    assert "AC_ROSTER_ACTIVE_TAG" not in counter.group(1), (
+        "a tag-presence precondition makes the counter blind to a RENAMED key, which "
+        "is exactly the case that announces a false zero"
+    )
+    # CONTROL — the blind flag keeps its precondition, so the asymmetry is deliberate
+    # rather than the predicate simply having been dropped everywhere.
+    assert re.search(r"!blindTrue\s*&&\s*!blindFalse\s*&&\s*!blindNull\s*\n?\s*&&\s*contain\(", body), (
+        "the blind flag must still require its key to be present"
+    )
+    # And it must gate, not merely log: a reply already judged unreadable must not
+    # print a count.
+    assert "activeMissing > 0" in body
+    gate = body.index("AC_ROSTER_ECHO_MISMATCH")
+    assert gate < body.index('announce_all("Anti-cheat check at go-live')
+
+
+def test_a_match_that_ended_mid_request_is_not_logged_as_a_contract_break() -> None:
+    """Currency is checked BEFORE the echo gate. The reset zeroes g_acLiveNum, so a
+    reply in flight across a teardown would otherwise fail the gate and accuse the API
+    of breaking its contract — with an empty match_id — on an ordinary cancel."""
+    body = _function_body("stock ac_roster_render(")
+    assert body.index("ac_roster_not_current_reason(staleReason") < body.index(
+        "AC_ROSTER_ECHO_MISMATCH"
+    ), "a stale reply must be discarded before it can look like a broken reply"
+    # CONTROL — the measurement is still recorded first, so a discarded reply is not
+    # an unmeasured one.
+    assert body.index("event=AC_ROSTER_PARSE") < body.index(
+        "ac_roster_not_current_reason(staleReason"
+    )
 
 
 def test_the_match_scoped_id_list_dies_with_match_identity() -> None:

@@ -6,6 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.183] - 2026-11-09
+
+Review follow-up to 0.10.182. The first item is the one that mattered: 0.10.182 left a
+false zero reachable, which is the class of wrong answer the move off the endpoint was
+made to remove.
+
+### Fixed
+
+- **A RENAMED `active` key announced "0 of N" with no control firing.** The liveness
+  counter only incremented when the key was *present* and its value unreadable, so a key
+  renamed out from under us left it at zero while every row read not-live — the row count
+  and the echo still agreed, the gate passed, and chat announced that nobody on teams was
+  running the client. `active_missing` now has **no tag-presence precondition** and is
+  **part of the echo gate** rather than only a log line, so a reply already judged
+  unreadable cannot print a count. The blind flag keeps its precondition deliberately:
+  that direction is benign, since a lost blind flag reads as live-not-blind rather than
+  absent. The asymmetry is pinned in both directions.
+
+- **Currency is checked BEFORE the echo gate.** The teardown reset zeroes the submitted-id
+  list, so a reply in flight across a cancel failed the gate and logged a contract break
+  against the API — with an empty `match_id` — on an ordinary end of match. The
+  measurement line is still emitted first, so a discarded reply is not an unmeasured one.
+
+- **The reply budget was short of its own stated worst case by the separator between
+  rows.** `AC_ROSTER_ROW_LITERAL_BYTES` measures one row's own braces and keys; a reply of
+  them needs a comma each, and a hand count missed every one of them. Measured: a full
+  roster at the stated field widths rendered past `charsmax(g_acRosterBody)`, which the
+  echo gate would have turned into no reading at all on a full server. The separator is
+  now a named term, and **both** budgets are pinned by a test that RENDERS the worst case
+  and compares — the request side had that evaluated test, the reply side only checked
+  which symbols appeared in the define, and that is exactly where the defect was.
+
+### Changed
+
+- **Every array in this path is sized from the id cap rather than `MAX_PLAYERS`**, so
+  raising the cap cannot overflow one with the `#assert` still passing.
+
+- **A player who left is told apart from a different person in the same slot**
+  (`slots_not_connected` / `slots_authid_changed`). Both take a live player out of the
+  numerator while the denominator keeps him, so a captain reads a low count either way;
+  the log now says which happened.
+
+- **The `AC_ROSTER_REFUSED` comment no longer claims a cause it cannot establish.** An
+  expired server secret, a build without the route and a rate limit all land on that
+  branch; `http=` is the only thing that distinguishes them. What the compile-time bounds
+  do rule out is an over-long or empty list of ids.
+
+- **The API-cap test's docstring says it is a reminder, not a tripwire.** This suite cannot
+  reach the other repo, so it asserts this plugin's own copy of the cap and cannot notice
+  the API lowering its own. What makes the drift survivable is that the consequence is a
+  400, reported as `AC_ROSTER_REFUSED`, rather than a wrong reading — and the source now
+  says it is a copy, so the next reader does not take it for a tie.
+
+### Known, not fixed here
+
+- **`clientVersion` is unbounded server-side**, so the per-row budget is an assumption
+  rather than a bound: one authenticated client reporting a multi-kilobyte version string
+  fills the reply buffer, drops rows, and denies the reading to everyone through the echo
+  gate. Detectable — `truncated=yes` sits on the mismatch line. **This plugin never parses
+  `clientVersion` at all**, so clamping or omitting it on the route removes the hazard and
+  a large part of the per-row budget at once. That is an API-side change.
+
+---
+
 ## [0.10.182] - 2026-11-09
 
 ### Changed
