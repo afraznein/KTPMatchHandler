@@ -227,6 +227,37 @@ pre-start nobody sat through — exclude those before quoting a percentile.
 per team **per match**, not per half). It is set once at match start and carried across the halftime
 side swap — a team that spends 4:00 in H1 starts H2 with 1:00. OT gets its own separate budget.
 
+### The AC roster announce at go-live — a FLOOR, not a census
+
+`send_ac_roster_report()` runs on the match-start path and reads who has a live anti-cheat session
+once, as the period goes live. 🔑 **It is a REPORT and nothing in it can refuse a go-live** — every
+path returns without touching match state. It prints only who IS live, deliberately: naming who is
+not is accusation-adjacent, and the live list tells captains the same thing while labelling nobody.
+
+⚠️ **A reading is a LOWER BOUND on who is running the client, not a census.** The roster refreshes on
+its own beat while a session stays live for a longer staleness window, so a client started shortly
+before go-live is absent from the announce and present in reality. The chat line says so out loud,
+and the same caveat binds anyone reading the log afterwards. ➡️ **Re-read before acting on a zero** —
+one reading cannot tell *not running* from *not yet published*.
+
+⛔ **`captureBlind` is a THIRD state, and a boolean hides it.** *AC live, capture blind* is neither
+compliant nor absent, which is why it gets its own announce list instead of being folded into the
+live one; collapsing the report to a yes/no silently files a blind-capture player under one of the
+other two. 🔑 **And `blind=0` is a measurement only while `blind_unparsed=0`** — the parse counts a
+session whose flag key is present but matches neither literal, because a wire spelling that moved
+would otherwise read as nobody being blind.
+
+🔴 **Sessions present but none resolved to an on-team player is a FAILURE SHAPE, not a compliance
+reading.** In the source's own words it is *the universe-digit class of failure returning, not a
+compliance reading*: GoldSrc renders one universe digit while the client can report another for the
+same account, which once read a live player as not running the client at all. `AC_ROSTER_NONE_MATCHED`
+is logged for exactly that shape. ➡️ **Judge it on the discriminating fields, never on `matched`
+alone** — `objects` against `sessions` catches the id key moving (`AC_ROSTER_NO_IDS` fires on it),
+`blind_unparsed` catches the flag moving, and `unresolvable_ids` counts on-team players whose own
+authid yielded no account part. **Those all clean while `matched` is zero puts the fault in
+resolution, not in the players**, so the response is to investigate the join — never to report
+non-compliance.
+
 ## Score Restoration
 
 - Direct `dodx_set_team_score()` can crash if called during map changes
