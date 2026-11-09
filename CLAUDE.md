@@ -227,6 +227,45 @@ pre-start nobody sat through — exclude those before quoting a percentile.
 per team **per match**, not per half). It is set once at match start and carried across the halftime
 side swap — a team that spends 4:00 in H1 starts H2 with 1:00. OT gets its own separate budget.
 
+### The AC roster announce at go-live — a FLOOR, not a census
+
+`send_ac_roster_report()` runs on the match-start path and reads who has a live anti-cheat session
+once, as the period goes live. 🔑 **It is a REPORT and nothing in it can refuse a go-live** — every
+path returns without touching match state. It prints only who IS live, deliberately: naming who is
+not is accusation-adjacent, and the live list tells captains the same thing while labelling nobody.
+
+⚠️ **A reading is a LOWER BOUND on who is running the client, not a census.** The roster refreshes on
+its own beat while a session stays live for a longer staleness window, so a client started shortly
+before go-live is absent from the announce and present in reality. The chat line says so out loud,
+and the same caveat binds anyone reading the log afterwards. ➡️ **Re-read before acting on a zero** —
+one reading cannot tell *not running* from *not yet published*.
+
+⛔ **`captureBlind` is a THIRD state, and a boolean hides it.** *AC live, capture blind* is neither
+compliant nor absent, which is why it gets its own announce list instead of being folded into the
+live one; collapsing the report to a yes/no silently files a blind-capture player under one of the
+other two. 🔑 **And `blind=0` is a measurement only while `blind_unparsed=0`** — the parse counts a
+session whose flag key is present but matches neither literal, because a wire spelling that moved
+would otherwise read as nobody being blind.
+
+🔴 **Sessions present but none resolved to an on-team player is a FAILURE SHAPE, not a compliance
+reading.** `AC_ROSTER_NONE_MATCHED` is logged for exactly that shape: the body parsed, sessions were
+read, and not one of them matched a player on a team. ➡️ **Judge it on the discriminating fields,
+never on `matched` alone** — `objects` against `sessions` catches the id key moving
+(`AC_ROSTER_NO_IDS` fires on it), `blind_unparsed` catches the flag moving, and `unresolvable_ids`
+counts on-team players whose own authid yielded no account part. **Those all clean while `matched` is
+zero means the ids were read and compared correctly**, so the fault is in ATTRIBUTION — not in this
+plugin and not in the players.
+🔑 **A session's endpoint is established UPSTREAM, not by the game server, and it may not reflect
+where the player actually is** — so this shape can be a roster answer describing people who are live
+somewhere else. ➡️ **Investigate which instance the sessions were filed under; do not go hunting the
+id spelling.**
+⛔ **The "universe-digit class of failure" framing — which the source comment at the
+`AC_ROSTER_NONE_MATCHED` site still carries — was MEASURED WRONG on 2026-11-08 and must not be
+revived.** `ac_steam_tail` keeps only the part after the first colon, so the universe digit is never
+compared at all and cannot be the cause. **That is checkable from this repo's own source, which is
+why it is written here rather than left to be re-argued.**
+⛔ **Never read this shape as non-compliance. It is not a reading of the players.**
+
 ## Score Restoration
 
 - Direct `dodx_set_team_score()` can crash if called during map changes
