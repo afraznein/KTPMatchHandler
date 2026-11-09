@@ -3300,13 +3300,21 @@ stock ac_roster_render(httpCode, bytes) {
         }
 
         // Both flags get the treatment the counts already have: a zero has to be a
-        // measurement. Key present but neither literal matching means the wire
-        // spelling moved, which would otherwise read as nobody live and nobody blind.
+        // measurement. Key present but no literal matching means the wire spelling
+        // moved, which would otherwise read as nobody live and nobody blind.
+        //
+        // null is a THIRD legitimate spelling for the blind flag and not a moved key.
+        // This route answers about every id submitted, so a row for a player with no
+        // session carries null here — counting that as unparsed would fire the control
+        // on an ordinary reading and report a wire change that did not happen.
         new bool:blindTrue  = (contain(g_acRosterBody[objStart], "^"captureBlind^":true")  != -1);
         new bool:blindFalse = (contain(g_acRosterBody[objStart], "^"captureBlind^":false") != -1);
-        if (!blindTrue && !blindFalse
+        new bool:blindNull  = (contain(g_acRosterBody[objStart], "^"captureBlind^":null")  != -1);
+        if (!blindTrue && !blindFalse && !blindNull
             && contain(g_acRosterBody[objStart], "^"captureBlind^"") != -1) blindUnparsed++;
 
+        // No null branch here, deliberately: liveness is not nullable on this route, so
+        // a null would BE the contract change this control exists to catch.
         new bool:activeTrue  = (contain(g_acRosterBody[objStart], "^"active^":true")  != -1);
         new bool:activeFalse = (contain(g_acRosterBody[objStart], "^"active^":false") != -1);
         if (!activeTrue && !activeFalse

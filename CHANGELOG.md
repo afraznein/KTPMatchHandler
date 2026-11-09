@@ -54,6 +54,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   live, which is a plausible answer rather than an obvious fault — so `event=AC_ROSTER_ACTIVE_UNPARSED`
   exists to make its zero a measurement.
 
+- **`captureBlind: null` is a third legitimate spelling, not a moved key.** The field is
+  nullable on this route and is null for every submitted id with no session — which this
+  route makes the *ordinary* case — so carrying the old blind-flag control across
+  unchanged would have fired `event=AC_ROSTER_BLIND_UNPARSED` on any reading where
+  somebody was not running the client, reporting a wire change that did not happen.
+  Liveness deliberately has no null branch: `active` is not nullable there, so a null
+  would **be** the contract change its control exists to catch.
+
 - **A 4xx is logged as a definite refusal, not as an unreachable API.** Both still fail
   open to the same chat line, so the log is the only place they can be told apart:
   `event=AC_ROSTER_REFUSED` carries the code, the roster size and the body budget. After

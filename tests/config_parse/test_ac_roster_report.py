@@ -665,9 +665,29 @@ def test_a_blind_flag_that_stops_matching_is_counted_not_silently_cleared() -> N
     assert '^"captureBlind^":false' in body, "the false literal is the control"
     assert "blindUnparsed++" in body
     assert re.search(
-        r"if\s*\(\s*!blindTrue\s*&&\s*!blindFalse", body
-    ), "the counter must fire only when NEITHER literal matched"
+        r"if\s*\(\s*!blindTrue\s*&&\s*!blindFalse\s*&&\s*!blindNull", body
+    ), "the counter must fire only when NO literal matched"
     assert "AC_ROSTER_BLIND_UNPARSED" in _log_events(body)
+
+
+def test_a_null_blind_flag_is_a_spelling_and_not_a_moved_key() -> None:
+    """The control inverts without this. captureBlind is nullable on this route and is
+    null for every submitted id with no session, so a reading where somebody is not
+    running the client would report a wire change that did not happen -- on a route
+    whose whole point is that such a row is now the ordinary case."""
+    body = _function_body("stock ac_roster_render(")
+    assert '^"captureBlind^":null' in body, (
+        "null must be recognised, or the blind control fires on an ordinary reading"
+    )
+    assert "blindNull" in body
+
+    # The field really is nullable in the fixture, so this is not a hypothetical.
+    assert '"captureBlind":null' in _SESSIONS
+
+    # And liveness deliberately has NO null branch: active is not nullable there, so a
+    # null would be the contract change its control exists to catch.
+    assert '^"active^":null' not in body
+    assert not re.search(r"!activeTrue\s*&&\s*!activeFalse\s*&&\s*!activeNull", body)
 
 
 def test_the_chat_lists_are_capped_so_a_report_cannot_overflow_a_client() -> None:
