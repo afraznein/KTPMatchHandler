@@ -248,15 +248,23 @@ session whose flag key is present but matches neither literal, because a wire sp
 would otherwise read as nobody being blind.
 
 🔴 **Sessions present but none resolved to an on-team player is a FAILURE SHAPE, not a compliance
-reading.** In the source's own words it is *the universe-digit class of failure returning, not a
-compliance reading*: GoldSrc renders one universe digit while the client can report another for the
-same account, which once read a live player as not running the client at all. `AC_ROSTER_NONE_MATCHED`
-is logged for exactly that shape. ➡️ **Judge it on the discriminating fields, never on `matched`
-alone** — `objects` against `sessions` catches the id key moving (`AC_ROSTER_NO_IDS` fires on it),
-`blind_unparsed` catches the flag moving, and `unresolvable_ids` counts on-team players whose own
-authid yielded no account part. **Those all clean while `matched` is zero puts the fault in
-resolution, not in the players**, so the response is to investigate the join — never to report
-non-compliance.
+reading.** `AC_ROSTER_NONE_MATCHED` is logged for exactly that shape: the body parsed, sessions were
+read, and not one of them matched a player on a team. ➡️ **Judge it on the discriminating fields,
+never on `matched` alone** — `objects` against `sessions` catches the id key moving
+(`AC_ROSTER_NO_IDS` fires on it), `blind_unparsed` catches the flag moving, and `unresolvable_ids`
+counts on-team players whose own authid yielded no account part. **Those all clean while `matched` is
+zero means the ids were read and compared correctly**, so the fault is in ATTRIBUTION — not in this
+plugin and not in the players.
+🔑 **A session's endpoint is established UPSTREAM, not by the game server, and it may not reflect
+where the player actually is** — so this shape can be a roster answer describing people who are live
+somewhere else. ➡️ **Investigate which instance the sessions were filed under; do not go hunting the
+id spelling.**
+⛔ **The "universe-digit class of failure" framing — which the source comment at the
+`AC_ROSTER_NONE_MATCHED` site still carries — was MEASURED WRONG on 2026-11-08 and must not be
+revived.** `ac_steam_tail` keeps only the part after the first colon, so the universe digit is never
+compared at all and cannot be the cause. **That is checkable from this repo's own source, which is
+why it is written here rather than left to be re-argued.**
+⛔ **Never read this shape as non-compliance. It is not a reading of the players.**
 
 ## Score Restoration
 
