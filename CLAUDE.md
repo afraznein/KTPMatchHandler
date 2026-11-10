@@ -244,27 +244,42 @@ one reading cannot tell *not running* from *not yet published*.
 compliant nor absent, which is why it gets its own announce list instead of being folded into the
 live one; collapsing the report to a yes/no silently files a blind-capture player under one of the
 other two. 🔑 **And `blind=0` is a measurement only while `blind_unparsed=0`** — the parse counts a
-session whose flag key is present but matches neither literal, because a wire spelling that moved
-would otherwise read as nobody being blind.
+row whose flag key is present but matches none of `true`, `false` or `null`, because a wire spelling
+that moved would otherwise read as nobody being blind. `null` is a legitimate spelling here: the
+route answers for every id sent, so a player with no session gets a row with a null flag.
 
-🔴 **Sessions present but none resolved to an on-team player is a FAILURE SHAPE, not a compliance
-reading.** `AC_ROSTER_NONE_MATCHED` is logged for exactly that shape: the body parsed, sessions were
-read, and not one of them matched a player on a team. ➡️ **Judge it on the discriminating fields,
-never on `matched` alone** — `objects` against `sessions` catches the id key moving
-(`AC_ROSTER_NO_IDS` fires on it), `blind_unparsed` catches the flag moving, and `unresolvable_ids`
-counts on-team players whose own authid yielded no account part. **Those all clean while `matched` is
-zero means the ids were read and compared correctly**, so the fault is in ATTRIBUTION — not in this
-plugin and not in the players.
-🔑 **A session's endpoint is established UPSTREAM, not by the game server, and it may not reflect
-where the player actually is** — so this shape can be a roster answer describing people who are live
-somewhere else. ➡️ **Investigate which instance the sessions were filed under; do not go hunting the
-id spelling.**
-⛔ **The "universe-digit class of failure" framing — which the source comment at the
-`AC_ROSTER_NONE_MATCHED` site still carries — was MEASURED WRONG on 2026-11-08 and must not be
-revived.** `ac_steam_tail` keeps only the part after the first colon, so the universe digit is never
-compared at all and cannot be the cause. **That is checkable from this repo's own source, which is
-why it is written here rather than left to be re-argued.**
-⛔ **Never read this shape as non-compliance. It is not a reading of the players.**
+🔑 **Since 0.10.183 the reading asks BY PLAYER ID (`POST /api/ac/live-sessions`), not by server
+endpoint.** The endpoint a session carries is asserted by the client and verified by nothing, and a
+client that cannot tell which server it is on guesses — so the endpoint-scoped read it replaced
+described people live somewhere else and missed the people actually on the server. An id-scoped
+question cannot be wrong about an endpoint it never consults.
+⛔ **So nothing in this path may reason about `serverEndpoint`** — filtering on it client-side
+rebuilds the old defect behind a correct API. Rows are matched on the exact bytes this server sent
+(that is what the echo is for), and the universe digit is NOT folded here: a fold on this side is a
+second identity path that can disagree with the API's own.
+
+🔴 **Under id scoping, `matched=0` behind the contract gate IS the reading** — nobody on a team is
+running the client. There is deliberately no "rows present, none matched" fault event any more,
+because flagging it would make a correct answer look like a broken call. ➡️ **What tells a broken
+call apart is the contract, so judge `AC_ROSTER_PARSE` on it before believing `matched`:**
+`rows == on_teams == echoed` and `active_missing=0`. Any break logs `AC_ROSTER_ECHO_MISMATCH` and the
+announce says the reading is unavailable rather than printing a count. `AC_ROSTER_ACTIVE_MISSING`
+means the liveness key moved — the one failure that would otherwise read as a plausible *nobody is
+live* — and it gates the reading instead of only logging. `AC_ROSTER_NO_IDS` means objects arrived
+but no id parsed. `AC_ROSTER_REFUSED` is a 4xx: a definite refusal, not an unreachable API.
+
+⛔ **A pre-0.10.183 log line is not a reading of anyone.** Lines carrying `endpoint=`,
+`endpoint_echo=`, `sessions=` or `AC_ROSTER_NONE_MATCHED` came from the endpoint-scoped read, which
+measurably reported a small fraction of the players who were provably live on the server — including
+on fires that returned an EMPTY roster, not only on the ones that returned the wrong people. **Never
+quote those lines as an adoption or compliance figure.** The universe-digit explanation once given
+for them is also wrong: the old matcher compared only the part after the first colon, so that digit
+was never compared at all.
+
+⚠️ **`AC_ROSTER_PARSE` is longer than `log_ktp`'s 255-character buffer, so its tail is cut on every
+fire** — expect `slots_authid_changed` and `unsendable_ids` to be missing or truncated, and do not
+read that as a malformed line. `unsendable_ids` is also on the `AC_ROSTER_SEND` line; every field the
+contract check above uses sits well before the cut.
 
 ## Score Restoration
 
