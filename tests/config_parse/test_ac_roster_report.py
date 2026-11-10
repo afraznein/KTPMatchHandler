@@ -319,12 +319,11 @@ def test_the_row_echo_is_the_gate_that_replaced_the_endpoint_echo() -> None:
 def test_the_control_line_carries_the_markers_beside_the_counts() -> None:
     """A reader must be able to tell a real zero from a call that never landed."""
     body = _function_body("stock ac_roster_render(")
-    parse = next(
-        fmt
-        for fmt in re.findall(r'log_ktp\(\s*"((?:\^"|[^"\n])*)"', body)
-        if "event=AC_ROSTER_PARSE" in fmt
-    )
+    formats = re.findall(r'log_ktp\(\s*"((?:\^"|[^"\n])*)"', body)
+    parse = next(fmt for fmt in formats if "event=AC_ROSTER_PARSE " in fmt)
+    slots = next(fmt for fmt in formats if "event=AC_ROSTER_SLOTS " in fmt)
     for field in (
+        "match_id=",
         "sessions_marker=",
         "ttl=",
         "objects=",
@@ -334,12 +333,21 @@ def test_the_control_line_carries_the_markers_beside_the_counts() -> None:
         "matched=",
         "blind_unparsed=",
         "active_missing=",
-        "slots_not_connected=",
-        "slots_authid_changed=",
         "bytes=",
         "truncated=",
     ):
         assert field in parse, f"AC_ROSTER_PARSE omits {field!r}"
+    # The slot counters ride a second line so they cannot crowd the contract fields
+    # out of the buffer; the shared match_id is what pairs the two.
+    for field in (
+        "match_id=",
+        "ordinal_off=",
+        "slots_not_connected=",
+        "slots_authid_changed=",
+        "unsendable_ids=",
+    ):
+        assert field in slots, f"AC_ROSTER_SLOTS omits {field!r}"
+    assert body.index("event=AC_ROSTER_PARSE ") < body.index("event=AC_ROSTER_SLOTS ")
     assert "endpoint" not in parse, (
         "the endpoint has no place in this line; its echo is not the control any more"
     )
@@ -445,7 +453,7 @@ def test_submission_order_is_a_control_and_not_the_matching() -> None:
     assert re.search(r"if\s*\(\s*hit\s*!=\s*row\s*\)\s*ordinalOff\+\+;", body)
     assert "ordinal_off=" in next(
         fmt for fmt in re.findall(r'log_ktp\(\s*"((?:\^"|[^"\n])*)"', body)
-        if "event=AC_ROSTER_PARSE" in fmt
+        if "event=AC_ROSTER_SLOTS " in fmt
     )
     assert not re.search(r"g_acLiveIds\[\s*row\s*\]", body), (
         "nothing may index the sent list by the row's position"
