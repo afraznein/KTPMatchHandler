@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.183"
+#define PLUGIN_VERSION "0.10.184"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -389,6 +389,16 @@ new g_13QueueId[32];                            // The queue ID entered by capta
 new g_13QueueIdFirst[32];                       // First entry (for confirmation comparison)
 new g_13InputState = 0;                         // 0=none, 1=waiting first input, 2=waiting confirm
 new g_13CaptainId = 0;                          // Player ID of captain entering queue ID
+// Words a captain types at this prompt by reflex; any of them would become the Queue ID.
+// tests/config_parse/test_13_queue_id_guard.py holds this to every chat command registered here.
+new const g_13ReservedWords[][] = {
+    "12man", "abort", "cancel", "cfg", "cmd", "cmds", "commands", "confirm", "draft",
+    "draftot", "ext", "extend", "forcereset", "go", "h2restart", "ktp", "ktpot", "names", "no",
+    "nodc", "notconfirm", "notready", "otbreak", "override_ready_limits", "pause", "prestatus",
+    "rdy", "ready", "resetnames", "restarthalf", "resume", "score", "scrim", "setallies",
+    "setaxis", "setstate", "skip", "status", "stopdc", "tac", "tactical", "tech", "technical",
+    "testmatch", "unready", "whoneedsready", "yes"
+};
 
 // ---------- Force Reset Confirmation ----------
 new g_forceResetPending = 0;                    // Player ID who initiated force reset (0 = none)
@@ -827,7 +837,8 @@ new bool:g_pfnChangeLevelProcessed = false; // Debounce: skip all pfnChangeLevel
 
 // ================= Utilities =================
 stock log_ktp(const fmt[], any:...) {
-    new msg[256];
+    // Static keeps this off the plugin stack; the size is held by test_log_ktp_buffer.py.
+    static msg[512];
     vformat(msg, charsmax(msg), fmt, 2);
     log_amx("[KTP] %s", msg);
 }
@@ -3381,11 +3392,12 @@ stock ac_roster_render(httpCode, bytes) {
     // never reaches this line at all. Each count carries its own control: objects
     // against rows for the id key, echoed against rows for the echo contract, and
     // the unparsed counts for the flags they qualify.
-    log_ktp("event=AC_ROSTER_PARSE match_id=%s http=%d bytes=%d truncated=%s sessions_marker=present ttl=%d objects=%d rows=%d echoed=%d on_teams=%d matched=%d blind=%d blind_unparsed=%d active_missing=%d ordinal_off=%d slots_not_connected=%d slots_authid_changed=%d unsendable_ids=%d",
+    log_ktp("event=AC_ROSTER_PARSE match_id=%s http=%d bytes=%d truncated=%s sessions_marker=present ttl=%d objects=%d rows=%d echoed=%d on_teams=%d matched=%d blind=%d blind_unparsed=%d active_missing=%d",
         g_acRosterMatchId, httpCode, bytes,
         truncated ? "yes" : "no", ttl, objects, rows, echoed, g_acLiveNum,
-        matched, blindNum, blindUnparsed, activeMissing,
-        ordinalOff, notConnected, authidChanged, g_acLiveUnsendable);
+        matched, blindNum, blindUnparsed, activeMissing);
+    log_ktp("event=AC_ROSTER_SLOTS match_id=%s ordinal_off=%d slots_not_connected=%d slots_authid_changed=%d unsendable_ids=%d",
+        g_acRosterMatchId, ordinalOff, notConnected, authidChanged, g_acLiveUnsendable);
 
     // Objects walked but not one id read. The id key moving on the wire lands here,
     // and nothing else does — the flag controls miss it, because a flag parses fine
@@ -8647,7 +8659,7 @@ stock handle_13_queue_id_input(id, const input[]) {
     // prompt invited it ("Type it again to confirm"). Refuse and keep waiting.
     if (input[0] == '.' || input[0] == '/') {
         client_print(id, print_chat, "[KTP] '%s' is a command, not a Queue ID. Type the Queue ID from the queue bot (or 'cancel').", input);
-        log_ktp("event=13COMMUNITY_QUEUE_ID_REJECTED_COMMAND input_state=%d captain_id=%d", g_13InputState, id);
+        log_ktp("event=13COMMUNITY_QUEUE_ID_REJECTED_COMMAND kind=prefix input_state=%d captain_id=%d", g_13InputState, id);
         return PLUGIN_HANDLED;
     }
 
@@ -8666,6 +8678,16 @@ stock handle_13_queue_id_input(id, const input[]) {
     if (!sanitized[0]) {
         client_print(id, print_chat, "[KTP] Invalid input. Use only letters, numbers, dash, underscore.");
         return PLUGIN_HANDLED;
+    }
+
+    // The bare word passes the prefix check above: "confirm" typed without the dot
+    // still became the Queue ID, and a reused id inherits an old match's stats interval.
+    for (new w = 0; w < sizeof(g_13ReservedWords); w++) {
+        if (equali(sanitized, g_13ReservedWords[w])) {
+            client_print(id, print_chat, "[KTP] '%s' is a command word, not a Queue ID. Type the Queue ID from the queue bot (or 'cancel').", sanitized);
+            log_ktp("event=13COMMUNITY_QUEUE_ID_REJECTED_COMMAND kind=word word=%s input_state=%d captain_id=%d", g_13ReservedWords[w], g_13InputState, id);
+            return PLUGIN_HANDLED;
+        }
     }
 
     if (g_13InputState == 1) {
@@ -8690,7 +8712,7 @@ stock handle_13_queue_id_input(id, const input[]) {
         show_hudmessage(0, "12man QUEUE ID: %s^n^n(Awaiting confirmation...)", sanitized);
 
         client_print(id, print_chat, "[KTP] Queue ID received: %s", sanitized);
-        client_print(id, print_chat, "[KTP] Type the same Queue ID again to confirm (not .confirm):");
+        client_print(id, print_chat, "[KTP] Now type that same Queue ID a second time:");
 
         g_13InputState = 2; // Move to confirmation state
 

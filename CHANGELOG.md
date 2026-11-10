@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.184] - 2026-11-10
+
+### Fixed
+
+- **A bare command word no longer becomes a 1.3 Queue ID.** The 0.10.180 guard refused
+  input only when it started with `.` or `/`, so a captain typing `confirm` without the
+  dot still produced a match id like `1.3-confirm-ATL1`. That id had been used before,
+  so the half was attached to an old match's interval and the stats daemon rejected
+  every capture line in it. The prompt now refuses, case-insensitively, every chat
+  command this plugin registers plus `yes`, `no`, `unready` and `abort`, at both the
+  first entry and the confirmation. A test derives the registered commands from the
+  source and fails if the refused list misses one. The confirmation prompt no longer
+  contains the word "confirm".
+
+- **`AC_ROSTER_PARSE` lost its tail on every go-live.** `log_ktp` formatted into a
+  256-cell buffer and that line needed more, so `slots_authid_changed` and
+  `unsendable_ids` were cut off. The slot counters now go out on their own
+  `AC_ROSTER_SLOTS` line, and `log_ktp`'s buffer is 512 cells and static, so it costs
+  no stack. A new test renders every `log_ktp` call at its worst case (each `%d` at
+  int32 width, each `%s` at the size of the buffer passed to it, resolved through
+  callers for unsized parameters) and fails if any exceeds the buffer. At 256 it
+  failed on several lines besides this one.
+
+---
+
 ## [0.10.183] - 2026-11-09
 
 Review follow-up to 0.10.182. The first item is the one that mattered: 0.10.182 left a
