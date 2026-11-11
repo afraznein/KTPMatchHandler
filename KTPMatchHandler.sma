@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.184"
+#define PLUGIN_VERSION "0.10.185"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -1423,7 +1423,9 @@ stock handle_first_half_end() {
     // This fires at the actual moment gameplay ends (scoreboard appears), BEFORE map change/warmup
     // Without this, H1's end_time gets set to H2's start_time (after warmup), causing warmup kills
     // to be incorrectly attributed to H1
-    log_message("KTP_HALF_END (matchid ^"%s^") (map ^"%s^") (half ^"1st^")", g_matchId, g_matchMap);
+    // event_epoch is the capture streams' clock, so the daemon can close the half
+    // when it ended rather than when it got round to reading this line.
+    log_message("KTP_HALF_END (matchid ^"%s^") (map ^"%s^") (half ^"1st^") (event_epoch ^"%d^")", g_matchId, g_matchMap, get_systime());
 
     // Save first half scores
     save_first_half_scores();
@@ -1898,7 +1900,7 @@ public task_delayed_match_start_log() {
     if (g_matchStartLogFired) return;
     g_matchStartLogFired = true;
 
-    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^")", g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
+    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^") (event_epoch ^"%d^")", g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType, get_systime());
     log_ktp("event=DELAYED_MATCH_START_LOG matchid=%s map=%s half=%s type=%d", g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
 }
 
@@ -2089,11 +2091,15 @@ public task_roundlive_match_context() {
     if (g_matchStartLogFired) return;
     g_matchStartLogFired = true;
 
+    // Read before activation: the go-live snapshot is stamped after this, so the
+    // half's start can never land a second later than its own first events.
+    new startEpoch = get_systime();
+
     ktp_activate_initial_roundlive_stats();
 
     // Log KTP_MATCH_START for HLStatsX (fires on round-live instead of fixed timer)
-    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^")",
-        g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
+    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^") (event_epoch ^"%d^")",
+        g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType, startEpoch);
     log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s type=%d",
         g_delayedMatchId, g_delayedMap, g_delayedHalf, _:g_matchType);
 }
@@ -11599,8 +11605,9 @@ public cmd_test_fire_match_start_log(id) {
         formatex(halfText, charsmax(halfText), "%d", g_currentHalf);
     }
 
-    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^")",
-        g_matchId, g_currentMap, halfText, _:g_matchType);
+    new startEpoch = get_systime();
+    log_message("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^") (event_epoch ^"%d^")",
+        g_matchId, g_currentMap, halfText, _:g_matchType, startEpoch);
     log_ktp("event=ROUNDLIVE_MATCH_START_LOG matchid=%s map=%s half=%s type=%d",
         g_matchId, g_currentMap, halfText, _:g_matchType);
 
@@ -11612,8 +11619,8 @@ public cmd_test_fire_match_start_log(id) {
     // HLStatsX UDP via logaddress_add. Surfaced 2026-05-06 first Tier 2
     // run — test_8 timed out waiting on a substring that lived in a
     // different log dir.
-    log_amx("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^") [test-mode mirror]",
-        g_matchId, g_currentMap, halfText, _:g_matchType);
+    log_amx("KTP_MATCH_START (matchid ^"%s^") (map ^"%s^") (half ^"%s^") (type ^"%d^") (event_epoch ^"%d^") [test-mode mirror]",
+        g_matchId, g_currentMap, halfText, _:g_matchType, startEpoch);
 
     console_print(id, "KTP_TEST_ROUNDLIVE_LOG: ok match_id=%s half=%s", g_matchId, halfText);
     return PLUGIN_HANDLED;

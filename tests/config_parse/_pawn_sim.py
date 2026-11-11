@@ -18,6 +18,8 @@ from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parents[2] / "KTPMatchHandler.sma"
 DEFINED = {"HAS_DODX"}
+# Wall clock at sim time 0; get_systime() advances with the sim clock.
+SYSTIME_BASE = 1_793_000_000
 # Pawn stocks that wrap engine output; the simulator records them instead.
 AS_NATIVE = {"log_ktp", "ktp_activate_initial_roundlive_stats", "update_match_scores_from_dodx",
              "announce_all", "safe_sid", "clear_saved_scores", "task_delayed_score_restore"}
@@ -434,6 +436,9 @@ class Sim:
             return self._event_arg
         if name == "get_gametime":
             return self.now
+        if name == "get_systime":
+            self.order.append("get_systime")
+            return SYSTIME_BASE + int(self.now)
         if name == "log_ktp":
             self.ktp_log.append((self.now, pawn_format(args[0], args[1:])))
             return 0

@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.185] - 2026-11-11
+
+### Changed
+
+- **`KTP_MATCH_START` and `KTP_HALF_END` now carry `(event_epoch "%d")`.** HLStatsX
+  stamped a half's start with its own `NOW()` when it got round to reading the line,
+  while every capture stream carries the producer's `get_systime()`. Any ingest backlog
+  of a second or more therefore put the go-live snapshot before the half's start, and
+  the daemon rejected those rows with *found 0 event-time match intervals*. The two
+  lines now carry the same clock the capture streams use, so a daemon that reads it
+  can write the boundary when it happened. The go-live epoch is read before the stats
+  activation, so the half's start can never fall a second after its own first events.
+
+  The property is appended last and nothing else on either line changed, so the
+  current daemon parses both exactly as before and ignores the new field. Deploy order
+  does not matter: this plugin and the daemon change that reads the field are
+  independent. `cmd_test_fire_match_start_log` and its `log_amx` mirror carry it too,
+  so Tier 2 sees the production line.
+
+---
+
 ## [0.10.184] - 2026-11-10
 
 ### Fixed

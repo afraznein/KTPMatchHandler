@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from ._pawn_sim import Sim, Source
+from ._pawn_sim import SYSTIME_BASE, Sim, Source
 
 T = 300.0
 H2_START = 'KTP_MATCH_START (matchid "KTP-TEST-1") (map "dod_test") (half "2nd half") (type "1")'
@@ -54,7 +54,7 @@ def test_countdown_kills_are_not_counted_and_the_half_goes_live_on_the_round(sou
     sim.round_state(T + 15.0, 1)      # the restarted half's first round
     assert not sim.paused
     assert sim.hl("KTP_MATCH_START") == [T + 15.0]
-    assert sim.hl_log[-1][1] == H2_START
+    assert sim.hl_log[-1][1] == f'{H2_START} (event_epoch "{SYSTIME_BASE + int(T + 15.0)}")'
     assert sim.daemon_round_live() == 1
     assert [c[0] for c in sim.called("ktp_activate_initial_roundlive_stats")] == [T + 15.0]
 
