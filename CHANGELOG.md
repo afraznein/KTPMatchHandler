@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased]
+
+### Added (test-mode build only)
+
+- **`amx_ktp_test_13_queue_id_input <1|2> <input>`** puts the 1.3 Queue ID prompt in
+  the given input state and calls `handle_13_queue_id_input()`, then prints
+  `KTP_TEST_13_QUEUE_ID: ok input_state=<n> first=<s> queue_id=<s>`. The prompt is
+  otherwise reachable only through a menu pick and the captain's chat, which the Tier 2
+  harness has no client for, so the command-word refusal could only be asserted from
+  the source. State 2 starts with an empty first entry, so the confirm branch (which
+  opens a menu for the caller) is unreachable from it. `amx_ktp_test_reset` now also
+  closes an open prompt and its timeout task.
+
+  Compiled only with `KTP_TEST_MODE=1`; the release build does not contain it, so
+  there is no version bump and no fleet wave.
+
+---
+
 ## [0.10.185] - 2026-11-11
 
 ### Changed

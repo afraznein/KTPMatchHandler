@@ -5991,6 +5991,8 @@ public plugin_init() {
         "[TEST-MODE] — bypass .restarthalf confirmation; call execute_restart_half() directly with synthetic admin metadata (requires live h2)");
     register_concmd("amx_ktp_test_setstate", "cmd_test_setstate", ADMIN_RCON,
         "[TEST-MODE] <half> <allies> <axis> <h1team1> <h1team2> — bypass .setstate retype-confirm; runs the same gate + score validation, then execute_setstate()");
+    register_concmd("amx_ktp_test_13_queue_id_input", "cmd_test_13_queue_id_input", ADMIN_RCON,
+        "[TEST-MODE] <1|2> <input> — put the 1.3 Queue ID prompt in that input state and call handle_13_queue_id_input(); prints the resulting state");
     register_concmd("amx_ktp_test_reset",         "cmd_test_reset",         ADMIN_RCON,
         "[TEST-MODE] reset all match state to idle (test teardown helper)");
     register_concmd("amx_ktp_test_get_state",     "cmd_test_get_state",     ADMIN_RCON,
@@ -11878,6 +11880,50 @@ public cmd_test_end_match(id) {
     return PLUGIN_HANDLED;
 }
 
+// The captain check lives in the chat hook, so the handler needs only an input state, no client.
+// State 2 starts with an empty first entry, which no sanitized input equals: the confirm
+// branch opens a menu, and an rcon caller has no player to show it to.
+public cmd_test_13_queue_id_input(id) {
+    if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
+
+    if (read_argc() != 3) {
+        console_print(id, "KTP_TEST_13_QUEUE_ID: ERROR usage=<1|2> <input>");
+        return PLUGIN_HANDLED;
+    }
+
+    new arg[8], input[128];
+    read_argv(1, arg, charsmax(arg));
+    read_argv(2, input, charsmax(input));
+    trim(input);
+
+    new inputState = str_to_num(arg);
+    if ((inputState != 1 && inputState != 2) || arg[1] != EOS) {
+        console_print(id, "KTP_TEST_13_QUEUE_ID: ERROR bad_state arg='%s'", arg);
+        return PLUGIN_HANDLED;
+    }
+    if (!input[0]) {
+        console_print(id, "KTP_TEST_13_QUEUE_ID: ERROR empty_input");
+        return PLUGIN_HANDLED;
+    }
+    // Same refusal the 12man type menu applies before it opens the prompt.
+    if (g_matchLive || g_preStartPending || g_matchPending) {
+        console_print(id, "KTP_TEST_13_QUEUE_ID: ERROR match_in_progress");
+        return PLUGIN_HANDLED;
+    }
+
+    g_is13CommunityMatch = true;
+    g_13CaptainId = 0;
+    g_13QueueId[0] = EOS;
+    g_13QueueIdFirst[0] = EOS;
+    g_13InputState = inputState;
+
+    handle_13_queue_id_input(id, input);
+
+    console_print(id, "KTP_TEST_13_QUEUE_ID: ok input_state=%d first=%s queue_id=%s",
+        g_13InputState, g_13QueueIdFirst, g_13QueueId);
+    return PLUGIN_HANDLED;
+}
+
 // Reset all match state to idle. Used by test teardown / setup-between-tests
 // to guarantee a clean slate. Mirrors the cleanup ktp_forcereset performs
 // without the confirmation dance.
@@ -11913,6 +11959,14 @@ public cmd_test_reset(id) {
     // stale prior-test value (e.g., 100/50 leftover from end_match).
     g_lastEmbedScore[1] = -1;
     g_lastEmbedScore[2] = -1;
+    // An open Queue ID prompt left by amx_ktp_test_13_queue_id_input would
+    // otherwise time out into the next test's log.
+    g_13InputState = 0;
+    g_13QueueIdFirst[0] = EOS;
+    g_13QueueId[0] = EOS;
+    g_is13CommunityMatch = false;
+    g_13CaptainId = 0;
+    remove_task(g_task13InputTimeoutId);
     log_ktp("event=TEST_RESET");
     console_print(id, "KTP_TEST_RESET: ok");
     return PLUGIN_HANDLED;
