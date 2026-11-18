@@ -276,10 +276,17 @@ quote those lines as an adoption or compliance figure.** The universe-digit expl
 for them is also wrong: the old matcher compared only the part after the first colon, so that digit
 was never compared at all.
 
-⚠️ **`AC_ROSTER_PARSE` is longer than `log_ktp`'s 255-character buffer, so its tail is cut on every
-fire** — expect `slots_authid_changed` and `unsendable_ids` to be missing or truncated, and do not
-read that as a malformed line. `unsendable_ids` is also on the `AC_ROSTER_SEND` line; every field the
-contract check above uses sits well before the cut.
+✅ **Since 0.10.184 `AC_ROSTER_PARSE` arrives whole.** The slot counters (`ordinal_off`,
+`slots_not_connected`, `slots_authid_changed`, `unsendable_ids`) moved to their own
+`AC_ROSTER_SLOTS` line, logged right after it with the same `match_id`, and `log_ktp` now formats
+into a static `msg[512]`. `tests/config_parse/test_log_ktp_buffer.py` renders every `log_ktp` call at
+its worst case and fails if one stops fitting, so a new field that overruns is caught in CI rather
+than in the log. `unsendable_ids` is also on the `AC_ROSTER_SEND` line.
+⛔ **A 0.10.183-or-older PARSE line that ends early is the old 256-cell overrun, not a malformed
+reply** — it cut `slots_authid_changed` and `unsendable_ids` on every fire, while every contract field
+sat before the cut. ⚠️ **The `truncated=` field on the line is the HTTP reply's flag (the body filled
+its buffer), not the log line's** — `truncated=no` says nothing about whether the line itself is
+whole; its length and its last field do.
 
 ## Score Restoration
 
