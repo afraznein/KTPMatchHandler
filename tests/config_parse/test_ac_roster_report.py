@@ -488,9 +488,11 @@ def test_the_liveness_flag_is_read_and_its_zero_is_a_measurement() -> None:
     assert re.search(r"if\s*\(\s*!activeTrue\s*&&\s*!activeFalse\s*\)\s*activeMissing\+\+;", body), (
         "the counter must fire whenever NEITHER literal matched"
     )
-    assert re.search(r"if\s*\(\s*!activeTrue\s*\)\s*continue;", body), (
+    not_live = re.search(r"if\s*\(\s*!activeTrue\s*\)\s*\{([^}]*)\}", body)
+    assert not_live and "continue;" in not_live.group(1), (
         "a row that is not active must not be named live"
     )
+    assert "liveIds" not in not_live.group(1) and "blindIds" not in not_live.group(1)
     assert "AC_ROSTER_ACTIVE_MISSING" in _log_events(body)
 
 
@@ -815,8 +817,10 @@ def test_the_capped_line_still_fits_the_dod_chat_width() -> None:
     assert wrap, "the wrap threshold is not where this test thinks it is"
     threshold = int(wrap.group(1))
 
-    labels = re.findall(r'ac_roster_announce_names\(\s*"([^"]+)"', SOURCE)
-    longest_label = max(len(x) for x in labels)
+    public = re.findall(r'ac_roster_announce_names\(\s*0\s*,\s*"([^"]+)"', SOURCE)
+    admin = re.findall(r'ac_roster_tell_admins\(\s*"([^"]+)"', SOURCE)
+    assert public and admin, "both the public and the admin labels must be measured"
+    longest_label = max(len(x) for x in public + admin)
     suffix = len(" (+99 more)")
     prefix = len("[KTP] ") + longest_label + len(" ") + len("\n")
     assert threshold + suffix + prefix <= 190, (
@@ -871,18 +875,74 @@ def test_capture_blind_is_rendered_as_a_third_state() -> None:
     assert re.search(r"if\s*\(\s*liveNum\s*>\s*0\s*\)\s*ac_roster_announce_names\(", body)
 
 
-def test_only_the_live_are_named() -> None:
+def test_only_the_live_are_named_in_public_chat() -> None:
     """Naming who is not running the client in open chat is accusation-adjacent."""
     body = _function_body("stock ac_roster_render(")
-    labels = re.findall(r'ac_roster_announce_names\(\s*"([^"]+)"', body)
+    labels = re.findall(r'ac_roster_announce_names\(\s*0\s*,\s*"([^"]+)"', body)
     assert labels, "the report must name somebody"
+    # CONTROL — every list call in the render is accounted for, so a public list
+    # passed some other target spelling cannot slip past the label check.
+    assert len(labels) == len(re.findall(r"ac_roster_announce_names\(", body))
     for label in labels:
         lowered = label.lower()
-        for forbidden in ("not ", "missing", "no ac", "absent", "non-compliant", "without"):
+        for forbidden in ("not ", "missing", "no ac", "no live", "absent", "non-compliant", "without"):
             assert forbidden not in lowered, (
                 f"label {label!r} names the absent; the report lists who IS live and "
                 "lets absence speak"
             )
+
+
+def test_the_not_live_list_reaches_admins_only() -> None:
+    """The operator's ruling: admins get the names the public report withholds, one
+    client at a time, and nobody else does."""
+    tell = _strip_comments(_function_body("stock ac_roster_tell_admins("))
+    assert "get_user_flags(players[i]) & ADMIN_RCON" in tell, (
+        "admins are the plugin's existing ADMIN_RCON holders, not a new flag"
+    )
+    assert "ac_roster_announce_names(players[i]," in tell
+    for forbidden in ("announce_all(", "client_print(0", "ac_roster_announce_names(0"):
+        assert forbidden not in tell, f"{forbidden!r} would put the not-live list in public chat"
+
+    render = _function_body("stock ac_roster_render(")
+    calls = re.findall(r'ac_roster_tell_admins\(\s*"[^"]+"\s*,\s*(\w+)\s*,\s*(\w+)\s*\)', render)
+    assert calls == [("noneIds", "noneNum")], "the admin list carries the not-live, once"
+    admin_at = render.index("ac_roster_tell_admins(")
+    assert render.index("AC_ROSTER_ECHO_MISMATCH") < admin_at, "a broken reply names nobody"
+    assert render.index('"Not being listed is not proof') < admin_at, (
+        "the public output comes first and is unchanged"
+    )
+    # A not-live player is named only after his slot is revalidated, like the live.
+    assert re.search(
+        r"if\s*\(\s*rowSlot\[hit\]\s*==\s*AC_SLOT_PRESENT\s*\)\s*noneIds\[noneNum\+\+\]", render
+    )
+    assert render.index("nowSid") < render.index("noneIds[noneNum++]")
+
+    # Public lines keep the exact call they always made.
+    line = _strip_comments(_function_body("stock ac_roster_print_line("))
+    assert 'announce_all("%s %s", label, line)' in line
+    assert re.search(r"if\s*\(\s*target\s*\)\s*client_print\(\s*target\s*,", line)
+
+
+def test_every_on_team_player_gets_one_log_line_behind_the_gate() -> None:
+    """For auditing a match afterwards. Behind the echo and currency gates, so a reply
+    that does not answer this request never produces a claim about a player."""
+    render = _function_body("stock ac_roster_render(")
+    assert SOURCE.count("event=AC_ROSTER_PLAYER ") == 1
+    player = next(
+        fmt for fmt in re.findall(r'log_ktp\(\s*"((?:\^"|[^"\n])*)"', render)
+        if "event=AC_ROSTER_PLAYER " in fmt
+    )
+    for field in ("match_id=", "steamid=", "state=", "slot="):
+        assert field in player, f"AC_ROSTER_PLAYER omits {field!r}"
+    at = render.index("event=AC_ROSTER_PLAYER ")
+    assert render.index("AC_ROSTER_ECHO_MISMATCH") < at
+    assert render.index("ac_roster_not_current_reason(staleReason") < at
+    loop = render.rfind("for (", 0, at)
+    assert "i < g_acLiveNum" in render[loop:at], "one line per submitted id"
+    call = render[at : render.index(";", at)]
+    for state in ('"live"', '"capture_blind"', '"no_session"', '"present"', '"left"', '"changed"'):
+        assert state in call, f"{state} is not a value the line can carry"
+    assert "g_acLiveIds[i]" in call, "the id logged is the one this server sent"
 
 
 def test_absence_is_not_worded_as_proof() -> None:
