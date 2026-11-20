@@ -3127,11 +3127,11 @@ stock ac_announce_state_reset() {
 
 // ================= AC live-session roster at go-live =================
 // Who has a LIVE anti-cheat session on this server, read once when the match goes
-// live and printed to everyone. A REPORT, not a gate: every path below returns
+// live: the live list goes to everyone, the not-live list to ADMIN_RCON holders only. A REPORT, not a gate: every path below returns
 // without touching match state, and nothing here can refuse a go-live.
 //
-// Deliberately prints only who IS live. Naming who is not is accusation-adjacent,
-// and the live list gives captains the same information while labelling nobody.
+// Public chat names only who IS live. Naming who is not is accusation-adjacent, so
+// that list stays with admins, and the per-player log records every state.
 //
 // It asks BY PLAYER ID. The endpoint-scoped read it replaced asked which clients
 // claimed to be on this address, off a field the client asserts and nothing
@@ -3219,7 +3219,7 @@ stock ac_roster_announce_unavailable() {
     announce_all("Anti-cheat check at go-live: no reading taken (roster unavailable). The match is unaffected.");
 }
 
-// Chat lines this report may spend on ONE list. client_print(0, ...) is not a
+// Chat lines this report may spend on ONE list, not on the whole report. client_print(0, ...) is not a
 // broadcast — it is a reliable per-client usermsg — and a reliable overflow drops
 // the player with "Reliable channel overflowed". A report that kicked somebody at
 // go-live would be worse than any failure this feature is allowed to have, so the

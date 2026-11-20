@@ -43,9 +43,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   his slot with the same authid when the reply landed, which is why a `live` player can
   be missing from the chat list. A reply that fails either gate logs no per-player line.
 
-  Nothing downstream parses `AC_ROSTER_*`. HLStatsX files an unrecognised AMXX line
-  under `hlstats_Events_Admin` (cut at 255 characters), and this line's worst case
-  stays under that. No Discord notice was added: the only admin-flavoured Discord path
+  Nothing downstream parses `AC_ROSTER_*`. `log_ktp` writes through `log_amx`, and the
+  fleet runs `amxx_logging 1`, so these lines land in `addons/ktpamx/logs` only;
+  HLStatsX never sees them. No Discord notice was added: the only admin-flavoured Discord path
   posts to the ops channel and falls back to the competitive match channel when that
   is unset, so it cannot promise an admin-only audience.
 

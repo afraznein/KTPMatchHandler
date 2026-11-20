@@ -250,7 +250,8 @@ slot=present|left|changed` per on-team player. `state` is the API's answer for t
 whether chat could still name him (so a `live` row with `slot=left` is absent from the chat list by
 design). A reply that fails either gate logs NO per-player line, so their absence beside an
 `AC_ROSTER_ECHO_MISMATCH` or `AC_ROSTER_DISCARDED` is correct. Nothing downstream parses `AC_ROSTER_*`;
-HLStatsX files these as generic `hlstats_Events_Admin` rows.
+`log_ktp` goes through `log_amx` and the fleet runs `amxx_logging 1`, so these lines live in
+`addons/ktpamx/logs` only; HLStatsX never ingests them, and an empty HLStatsX search is expected.
 
 ⚠️ **A reading is a LOWER BOUND on who is running the client, not a census.** The roster refreshes on
 its own beat while a session stays live for a longer staleness window, so a client started shortly
