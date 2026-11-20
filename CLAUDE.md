@@ -231,8 +231,26 @@ side swap — a team that spends 4:00 in H1 starts H2 with 1:00. OT gets its own
 
 `send_ac_roster_report()` runs on the match-start path and reads who has a live anti-cheat session
 once, as the period goes live. 🔑 **It is a REPORT and nothing in it can refuse a go-live** — every
-path returns without touching match state. It prints only who IS live, deliberately: naming who is
-not is accusation-adjacent, and the live list tells captains the same thing while labelling nobody.
+path returns without touching match state. Public chat prints only who IS live, deliberately: naming
+who is not is accusation-adjacent, and the live list tells captains the same thing while labelling nobody.
+
+🔑 **Since 0.10.186 the not-live names go to ADMINS ONLY** (operator ruling). After the public output,
+`ac_roster_tell_admins()` sends `No live AC session (admins only):` to each connected `ADMIN_RCON`
+holder with `client_print(id, ...)`, through the same `ac_roster_announce_names()` wrapping and
+`AC_ROSTER_MAX_LINES` cap (target `0` is the public path, any other value is one client). With no
+admin connected, nothing goes to chat. ⛔ **Never pass that list target `0` or route it through
+`announce_all`** — the tests assert the public labels never name absence and the admin helper never
+reaches client 0. A not-live player is named only if his slot still holds the same authid.
+⚠️ **No Discord copy, on purpose:** `send_discord_admin_embed()` posts to the ops channel and falls
+back to the competitive match channel when that is unset, so it cannot promise an admin-only audience.
+
+📋 **Per-player audit line, since 0.10.186:** every reading that passes the currency and echo gates
+logs one `event=AC_ROSTER_PLAYER match_id=<id> steamid=<id as sent> state=live|capture_blind|no_session
+slot=present|left|changed` per on-team player. `state` is the API's answer for the id; `slot` is
+whether chat could still name him (so a `live` row with `slot=left` is absent from the chat list by
+design). A reply that fails either gate logs NO per-player line, so their absence beside an
+`AC_ROSTER_ECHO_MISMATCH` or `AC_ROSTER_DISCARDED` is correct. Nothing downstream parses `AC_ROSTER_*`;
+HLStatsX files these as generic `hlstats_Events_Admin` rows.
 
 ⚠️ **A reading is a LOWER BOUND on who is running the client, not a census.** The roster refreshes on
 its own beat while a session stays live for a longer staleness window, so a client started shortly

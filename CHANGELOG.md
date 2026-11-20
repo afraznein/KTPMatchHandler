@@ -24,6 +24,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.186] - 2026-11-20
+
+### Added
+
+- **Admins now see who has no live AC session at go-live.** After the public roster
+  output, each connected `ADMIN_RCON` holder gets a private chat list headed
+  `No live AC session (admins only):` naming the on-team players whose row came back
+  not live. It goes out per admin with `client_print(id, ...)`, through the same
+  wrapping and `AC_ROSTER_MAX_LINES` cap as the public lists, so an admin receives at
+  most one more capped list. With no admin connected nothing is sent. A not-live
+  player is named only if his slot still holds the same authid, the same check the
+  live lists already make. The public lines are unchanged, byte for byte.
+- **One `AC_ROSTER_PLAYER` log line per on-team player** on every reading that passes
+  the echo and currency gates:
+  `event=AC_ROSTER_PLAYER match_id=<id> steamid=<id as sent> state=live|capture_blind|no_session slot=present|left|changed`.
+  `state` is the API's answer for that id. `slot` says whether the player was still in
+  his slot with the same authid when the reply landed, which is why a `live` player can
+  be missing from the chat list. A reply that fails either gate logs no per-player line.
+
+  Nothing downstream parses `AC_ROSTER_*`. HLStatsX files an unrecognised AMXX line
+  under `hlstats_Events_Admin` (cut at 255 characters), and this line's worst case
+  stays under that. No Discord notice was added: the only admin-flavoured Discord path
+  posts to the ops channel and falls back to the competitive match channel when that
+  is unset, so it cannot promise an admin-only audience.
+
+---
+
 ## [0.10.185] - 2026-11-11
 
 ### Changed

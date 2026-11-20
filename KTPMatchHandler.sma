@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.185"
+#define PLUGIN_VERSION "0.10.186"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -3227,10 +3227,18 @@ stock ac_roster_announce_unavailable() {
 // a 24-plus-player scrim ever sees the "+N more".
 #define AC_ROSTER_MAX_LINES 2
 
-// One labelled list, wrapped and capped. The binding width is 190 — UTIL_ClientPrint
-// truncates DoD chat there with no strlen check — against which the "[KTP] " prefix,
-// the label and the newline AMXX appends all come off first.
-stock ac_roster_announce_names(const label[], const ids[], count) {
+// What the reply said about one submitted id, and what its slot held when it landed.
+#define AC_ROW_NO_SESSION 0
+#define AC_ROW_LIVE 1
+#define AC_ROW_BLIND 2
+#define AC_SLOT_PRESENT 0
+#define AC_SLOT_LEFT 1
+#define AC_SLOT_CHANGED 2
+
+// One labelled list, wrapped and capped, to everybody (target 0) or to one client.
+// The binding width is 190 — UTIL_ClientPrint truncates DoD chat there with no strlen
+// check — against which the "[KTP] " prefix, the label and the newline come off first.
+stock ac_roster_announce_names(target, const label[], const ids[], count) {
     new line[160], name[32];
     new idx = 0, lines = 0;
     for (new i = 0; i < count; i++) {
@@ -3240,7 +3248,7 @@ stock ac_roster_announce_names(const label[], const ids[], count) {
                 formatex(line[idx], charsmax(line) - idx, " (+%d more)", count - i);
                 break;
             }
-            announce_all("%s %s", label, line);
+            ac_roster_print_line(target, label, line);
             lines++;
             idx = 0;
             line[0] = EOS;
@@ -3248,7 +3256,23 @@ stock ac_roster_announce_names(const label[], const ids[], count) {
         if (idx > 0) idx += formatex(line[idx], charsmax(line) - idx, ", ");
         idx += formatex(line[idx], charsmax(line) - idx, "%s", name);
     }
-    if (line[0]) announce_all("%s %s", label, line);
+    if (line[0]) ac_roster_print_line(target, label, line);
+}
+
+stock ac_roster_print_line(target, const label[], const line[]) {
+    if (target) client_print(target, print_chat, "[KTP] %s %s", label, line);
+    else announce_all("%s %s", label, line);
+}
+
+// Per admin and never to client 0: naming who is not running the client in open
+// chat is accusation-adjacent, so this list exists only for ADMIN_RCON holders.
+stock ac_roster_tell_admins(const label[], const ids[], count) {
+    new players[MAX_PLAYERS], num;
+    get_players(players, num, "ch");
+    for (new i = 0; i < num; i++) {
+        if (get_user_flags(players[i]) & ADMIN_RCON)
+            ac_roster_announce_names(players[i], label, ids, count);
+    }
 }
 
 // Parse the reply, match every row back to the id this server sent, and print.
@@ -3273,10 +3297,16 @@ stock ac_roster_render(httpCode, bytes) {
     }
 
     new bool:listed[AC_LIVE_MAX_IDS];
-    for (new i = 0; i < g_acLiveNum; i++) listed[i] = false;
+    new rowState[AC_LIVE_MAX_IDS], rowSlot[AC_LIVE_MAX_IDS];
+    for (new i = 0; i < g_acLiveNum; i++) {
+        listed[i] = false;
+        rowState[i] = AC_ROW_NO_SESSION;
+        rowSlot[i] = AC_SLOT_PRESENT;
+    }
 
     new liveIds[AC_LIVE_MAX_IDS], liveNum = 0;
     new blindIds[AC_LIVE_MAX_IDS], blindNum = 0;
+    new noneIds[AC_LIVE_MAX_IDS], noneNum = 0;
     new rows = 0, objects = 0, echoed = 0;
     new ordinalOff = 0, notConnected = 0, authidChanged = 0;
     new blindUnparsed = 0, activeMissing = 0;
@@ -3370,19 +3400,30 @@ stock ac_roster_render(httpCode, bytes) {
         // disagreement is logged rather than acted on.
         if (hit != row) ordinalOff++;
 
-        if (!activeTrue) continue;
-
         // A slot is not an identity: it can hold a different person by the time this
         // reply lands, so the authid is re-read and compared before anyone is named.
+        // Every row, not only the live: the admin list names the not-live too.
+        if (!is_user_connected(g_acLiveSlots[hit])) {
+            rowSlot[hit] = AC_SLOT_LEFT;
+        } else {
+            new nowSid[AC_LIVE_ID_SIZE];
+            get_user_authid(g_acLiveSlots[hit], nowSid, charsmax(nowSid));
+            if (!equal(nowSid, g_acLiveIds[hit])) rowSlot[hit] = AC_SLOT_CHANGED;
+        }
+
+        if (!activeTrue) {
+            if (rowSlot[hit] == AC_SLOT_PRESENT) noneIds[noneNum++] = g_acLiveSlots[hit];
+            continue;
+        }
+        rowState[hit] = blindTrue ? AC_ROW_BLIND : AC_ROW_LIVE;
+
         // Told apart, because they mean different things to a captain reading a low
         // count: one left, the other is a different person in the same slot.
-        if (!is_user_connected(g_acLiveSlots[hit])) {
+        if (rowSlot[hit] == AC_SLOT_LEFT) {
             notConnected++;
             continue;
         }
-        new nowSid[AC_LIVE_ID_SIZE];
-        get_user_authid(g_acLiveSlots[hit], nowSid, charsmax(nowSid));
-        if (!equal(nowSid, g_acLiveIds[hit])) {
+        if (rowSlot[hit] == AC_SLOT_CHANGED) {
             authidChanged++;
             continue;
         }
@@ -3456,12 +3497,22 @@ stock ac_roster_render(httpCode, bytes) {
         return;
     }
 
+    // Behind the gate, so a broken reply never yields a claim about anyone. state is
+    // the reply's answer for the id; slot says whether chat could still name him.
+    for (new i = 0; i < g_acLiveNum; i++) {
+        log_ktp("event=AC_ROSTER_PLAYER match_id=%s steamid=%s state=%s slot=%s",
+            g_acRosterMatchId, g_acLiveIds[i],
+            rowState[i] == AC_ROW_LIVE ? "live" : (rowState[i] == AC_ROW_BLIND ? "capture_blind" : "no_session"),
+            rowSlot[i] == AC_SLOT_PRESENT ? "present" : (rowSlot[i] == AC_SLOT_LEFT ? "left" : "changed"));
+    }
+
     announce_all("Anti-cheat check at go-live: %d of %d players on teams have a live AC session.",
         matched, g_acLiveNum);
-    if (liveNum > 0) ac_roster_announce_names("AC live:", liveIds, liveNum);
-    if (blindNum > 0) ac_roster_announce_names("AC live, capture blind:", blindIds, blindNum);
+    if (liveNum > 0) ac_roster_announce_names(0, "AC live:", liveIds, liveNum);
+    if (blindNum > 0) ac_roster_announce_names(0, "AC live, capture blind:", blindIds, blindNum);
     if (truncated) announce_all("The roster reply was longer than this list can hold, so the list above may be short.");
     announce_all("Not being listed is not proof: the roster refreshes every 30s, so a client started in the last minute can read as absent.");
+    if (noneNum > 0) ac_roster_tell_admins("No live AC session (admins only):", noneIds, noneNum);
 }
 
 public ac_roster_callback(CURL:curl, CURLcode:code) {
