@@ -241,6 +241,13 @@ new g_acNudgeAskSlots[AC_ARM_MAX_IDS];
 new g_acNudgeAskNum;
 new g_acNudgeAskNonce[AC_ARM_NONCE_SIZE];
 new g_acNudgeBody[AC_LIVE_BODY_MAX + 1];
+new g_acNudgeSeq;                        // bumped per read; the reply carries it back to prove which read it answers
+// When each id was first armed this episode. A client needs time to see the arm, start
+// and send its first beat, so the nudge does not ask about an id until this long after.
+#define AC_NUDGE_ARM_GRACE AC_ARM_INTERVAL
+new g_acArmSeenIds[AC_NUDGE_MEMO_MAX][AC_LIVE_ID_SIZE];
+new g_acArmSeenAt[AC_NUDGE_MEMO_MAX];
+new g_acArmSeenNum;
 #if defined HAS_CURL
 new curl_slist: g_acCurlHeaders = SList_Empty;  // persistent headers slist (never freed — async safety)
 #endif
@@ -3720,12 +3727,33 @@ stock ac_arm_state_reset() {
     g_acNudgedNum = 0;
     g_acNudgeAskNum = 0;
     g_acNudgeAskNonce[0] = EOS;
+    g_acArmSeenNum = 0;
 }
 
 // Opaque to the API and the client: it only has to differ between episodes.
+// A new episode starts every id's arm clock again.
 stock ac_arm_mint_nonce() {
     formatex(g_acArmNonce, charsmax(g_acArmNonce), "%08x%04x%04x",
         get_systime(), random_num(0, 0xFFFF), random_num(0, 0xFFFF));
+    g_acArmSeenNum = 0;
+}
+
+// Seconds since this id first went out in an arm this episode, or -1 if it has not.
+stock ac_arm_seen_for(const sid[], now) {
+    for (new i = 0; i < g_acArmSeenNum; i++) {
+        if (equal(g_acArmSeenIds[i], sid)) return now - g_acArmSeenAt[i];
+    }
+    return -1;
+}
+
+stock ac_arm_mark_seen(now) {
+    for (new i = 0; i < g_acArmNum; i++) {
+        if (g_acArmSeenNum >= AC_NUDGE_MEMO_MAX) return;
+        if (ac_arm_seen_for(g_acArmIds[i], now) >= 0) continue;
+        copy(g_acArmSeenIds[g_acArmSeenNum], charsmax(g_acArmSeenIds[]), g_acArmIds[i]);
+        g_acArmSeenAt[g_acArmSeenNum] = now;
+        g_acArmSeenNum++;
+    }
 }
 
 // The on-team players, read from this server's own slots. Returns an order-free
@@ -3811,10 +3839,12 @@ stock ac_arm_tick() {
         if (since < AC_ARM_ROSTER_DEBOUNCE) return;
         new sig = ac_arm_collect();
         if (sig == g_acArmSig && g_acArmNum == g_acArmSigNum) return;
+        // No nudge read here: a joiner was armed this instant and could not have
+        // started yet, and a reconnect wave would spend the API's per-host budget.
         ac_arm_send(phase, "roster_change");
-    } else {
-        ac_arm_send(phase, "interval");
+        return;
     }
+    ac_arm_send(phase, "interval");
     if (g_matchPending) ac_nudge_read();
 }
 
@@ -3879,25 +3909,30 @@ stock ac_arm_send(const phase[], const reason[]) {
 
     log_ktp("event=AC_ARM_SEND phase=%s reason=%s match_type=%s nonce=%s on_teams=%d unsendable_ids=%d body_bytes=%d body_max=%d",
         phase, reason, acMatchType, g_acArmNonce, g_acArmNum, g_acArmUnsendable, at, AC_ARM_BODY_MAX);
-    curl_easy_perform(curl, "ac_arm_callback");
+    // The nonce rides with the request, so the reply is logged against the episode it
+    // armed rather than whichever one is current when it lands.
+    curl_easy_perform(curl, "ac_arm_callback", g_acArmNonce, sizeof(g_acArmNonce));
+    ac_arm_mark_seen(g_acArmLastSent);
 }
 
 // Logs and lets go. The reply decides nothing on this side.
-public ac_arm_callback(CURL:curl, CURLcode:code) {
+public ac_arm_callback(CURL:curl, CURLcode:code, const data[]) {
+    new nonce[AC_ARM_NONCE_SIZE];
+    copy(nonce, charsmax(nonce), data);
     if (code != CURLE_OK) {
         new error[128];
         curl_easy_strerror(code, error, charsmax(error));
-        log_ktp("event=AC_ARM_FAILED reason=curl curl_code=%d error='%s' nonce=%s", _:code, error, g_acArmNonce);
+        log_ktp("event=AC_ARM_FAILED reason=curl curl_code=%d error='%s' nonce=%s", _:code, error, nonce);
     } else {
         new httpCode;
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, httpCode);
         if (httpCode >= 200 && httpCode < 300) {
-            log_ktp("event=AC_ARM_OK http=%d nonce=%s", httpCode, g_acArmNonce);
+            log_ktp("event=AC_ARM_OK http=%d nonce=%s", httpCode, nonce);
         } else if (httpCode >= 400 && httpCode < 500) {
             // A definite refusal: an API without the route, the switch off, or a bad secret.
-            log_ktp("event=AC_ARM_REFUSED http=%d nonce=%s", httpCode, g_acArmNonce);
+            log_ktp("event=AC_ARM_REFUSED http=%d nonce=%s", httpCode, nonce);
         } else {
-            log_ktp("event=AC_ARM_FAILED reason=http http=%d nonce=%s", httpCode, g_acArmNonce);
+            log_ktp("event=AC_ARM_FAILED reason=http http=%d nonce=%s", httpCode, nonce);
         }
     }
     curl_easy_cleanup(curl);
@@ -3917,7 +3952,9 @@ stock bool:ac_nudge_already(const sid[]) {
     return false;
 }
 
-// Asks about the players ac_arm_send just collected, minus those already told.
+// Asks about the players ac_arm_send just collected, minus those already told and
+// those armed too recently to have started: reading a client as absent before it
+// could have answered the arm would spend its one nudge on a false reading.
 stock ac_nudge_read() {
     if (!g_matchPending || !g_acArmActive || !is_official_match_type(g_matchType)) return;
 #if defined KTP_TEST_MODE
@@ -3929,14 +3966,22 @@ stock ac_nudge_read() {
     if (!g_acApiBaseUrl[0] || !g_acServerSecret[0]) return;
 
     g_acNudgeAskNum = 0;
+    new now = get_systime();
+    new young = 0;
     for (new i = 0; i < g_acArmNum; i++) {
         if (ac_nudge_already(g_acArmIds[i])) continue;
+        new armedFor = ac_arm_seen_for(g_acArmIds[i], now);
+        if (armedFor < AC_NUDGE_ARM_GRACE) {
+            young++;
+            continue;
+        }
         copy(g_acNudgeAskIds[g_acNudgeAskNum], charsmax(g_acNudgeAskIds[]), g_acArmIds[i]);
         g_acNudgeAskSlots[g_acNudgeAskNum] = g_acArmSlots[i];
         g_acNudgeAskNum++;
     }
     if (!g_acNudgeAskNum) return;
     copy(g_acNudgeAskNonce, charsmax(g_acNudgeAskNonce), g_acArmNonce);
+    g_acNudgeSeq++;
 
     new at = formatex(g_acNudgeBody, charsmax(g_acNudgeBody), "{^"steamIds^":[");
     for (new i = 0; i < g_acNudgeAskNum; i++) {
@@ -3966,12 +4011,21 @@ stock ac_nudge_read() {
     curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_acNudgeBody);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
 
-    log_ktp("event=AC_NUDGE_SEND nonce=%s asked=%d already_told=%d body_bytes=%d body_max=%d",
-        g_acNudgeAskNonce, g_acNudgeAskNum, g_acNudgedNum, at, AC_LIVE_BODY_MAX);
-    curl_easy_perform(curl, "ac_nudge_callback");
+    log_ktp("event=AC_NUDGE_SEND nonce=%s asked=%d already_told=%d armed_too_recently=%d body_bytes=%d body_max=%d",
+        g_acNudgeAskNonce, g_acNudgeAskNum, g_acNudgedNum, young, at, AC_LIVE_BODY_MAX);
+    // The ask list lives in globals the next read overwrites, so the reply carries the
+    // read's sequence number and a reply to an older read is discarded.
+    new seq[1];
+    seq[0] = g_acNudgeSeq;
+    curl_easy_perform(curl, "ac_nudge_callback", seq, sizeof(seq));
 }
 
-public ac_nudge_callback(CURL:curl, CURLcode:code) {
+public ac_nudge_callback(CURL:curl, CURLcode:code, const data[]) {
+    if (data[0] != g_acNudgeSeq) {
+        log_ktp("event=AC_NUDGE_DISCARDED reason=superseded seq=%d current=%d", data[0], g_acNudgeSeq);
+        curl_easy_cleanup(curl);
+        return;
+    }
     if (code != CURLE_OK) {
         new error[128];
         curl_easy_strerror(code, error, charsmax(error));
@@ -4009,6 +4063,11 @@ stock ac_nudge_render(bytes) {
         return;
     }
 
+    // A reply that filled the buffer may have lost rows; the go-live render refuses it too.
+    if (bytes >= AC_ROSTER_BODY_SIZE - 1) {
+        log_ktp("event=AC_NUDGE_UNREADABLE reason=truncated bytes=%d asked=%d", bytes, g_acNudgeAskNum);
+        return;
+    }
     new arrTag[] = AC_ROSTER_SESSIONS_TAG;
     new p = contain(g_acRosterBody, arrTag);
     new ttl = ac_roster_parse_ttl();
@@ -11813,6 +11872,9 @@ public cmd_test_setup_match(id) {
     g_preStartPending = true;
     g_matchPending = false;
     g_matchLive = false;
+#if defined HAS_CURL
+    ac_arm_state_reset();   // bypasses the password accept, so no earlier pre-start's nonce may carry
+#endif
 
     // Mirror production per-type Discord-flag setting. Production:
     //   - SCRIM (cmd_start_scrim) sets g_disableDiscord=true
@@ -12469,6 +12531,9 @@ public cmd_test_13_queue_id_input(id) {
 public cmd_test_reset(id) {
     if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
     g_matchType = MATCH_TYPE_COMPETITIVE;
+#if defined HAS_CURL
+    ac_arm_state_reset();
+#endif
     g_preStartPending = false;
     g_matchPending = false;
     g_matchLive = false;

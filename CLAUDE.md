@@ -338,13 +338,19 @@ entry point re-checks `is_official_match_type(g_matchType)`, and the episode lat
 official check alone is not the gate — the latch is.
 
 **The nudge** is the fallback for clients that cannot auto-start. In an official pending
-phase, each beat asks `/api/ac/live-sessions` about the on-team players not yet told this
-phase, behind the same contract gate as the go-live reading, and sends each no-session
+phase, pending entry and each 30 s beat (⛔ never a roster-change send) ask
+`/api/ac/live-sessions` about the on-team players not yet told this phase AND armed at
+least `AC_NUDGE_ARM_GRACE` seconds ago, behind the same contract gate as the go-live reading, and sends each no-session
 player ONE `client_print(slot, ...)` line. ⛔ **Never route it through `announce_all` or
 client 0, and never name the player to anyone else** — the 2026-11-21 ruling widened the
 0.10.186 admin-only rule to this one private line and no further. A reply that fails the
 gate, or lands after the nonce moved, nudges nobody (the safe direction: telling a player
-who IS running the client to start it is the wrong way to fail). It parses into the shared
+who IS running the client to start it is the wrong way to fail). ⚠️ **The grace is load-bearing:** the
+API reports `active` only after a client's first beat, so a read in the same tick as a
+player's first arm always says *no session* and spends his one nudge on a false reading.
+And `/api/ac/live-sessions` shares the API's per-IP `plugin-write` budget with live
+match batches, so a nudge read per roster change would let a reconnect wave cost real
+data. It parses into the shared
 `g_acRosterBody`, which is safe only because each callback fills and parses it in one
 synchronous call.
 

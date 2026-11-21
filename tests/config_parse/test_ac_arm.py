@@ -386,3 +386,55 @@ def test_a_clock_that_moved_back_is_due_not_deferred(source) -> None:
     sim.g["g_acArmLastSent"] = SYSTIME_BASE + 10_000
     sim.tick_until(101)
     assert sim.reasons()[-1] == (101, "prestart", "interval", "n1")
+
+
+def test_a_roster_change_in_pending_arms_but_does_not_read_for_the_nudge(source) -> None:
+    """A joiner was armed that instant and could not have started yet; reading him then
+    would spend his one nudge on a false 'no session'."""
+    sim = ArmSim(source)
+    sim.now = 100.0
+    sim.g["g_matchPending"] = True
+    sim.call("ac_arm_on_pending", [])
+    assert sim.nudges == [(100.0, "n1")]
+    sim.roster.append("STEAM_0:0:9")
+    sim.tick_until(110)
+    assert sim.reasons()[-1] == (105, "pending", "roster_change", "n1")
+    assert sim.nudges == [(100.0, "n1")]
+    sim.tick_until(135)
+    assert sim.reasons()[-1] == (135, "pending", "interval", "n1")
+    assert sim.nudges[-1] == (135.0, "n1")
+
+
+def test_the_nudge_skips_ids_armed_too_recently_to_have_started() -> None:
+    read = _function_body("stock ac_nudge_read(")
+    assert "ac_arm_seen_for(g_acArmIds[i], now)" in read
+    assert "armedFor < AC_NUDGE_ARM_GRACE" in read
+    assert read.index("armedFor < AC_NUDGE_ARM_GRACE") < read.index("copy(g_acNudgeAskIds")
+    assert re.search(r"^#define AC_NUDGE_ARM_GRACE AC_ARM_INTERVAL", SOURCE, re.M)
+    send = _function_body("stock ac_arm_send(")
+    assert send.index('curl_easy_perform(curl, "ac_arm_callback"') < send.index("ac_arm_mark_seen(")
+    assert "g_acArmSeenNum = 0;" in _function_body("stock ac_arm_mint_nonce(")
+    assert "g_acArmSeenNum = 0;" in _function_body("stock ac_arm_state_reset(")
+
+
+def test_a_reply_to_an_older_read_is_discarded() -> None:
+    read = _function_body("stock ac_nudge_read(")
+    assert "g_acNudgeSeq++;" in read
+    assert 'curl_easy_perform(curl, "ac_nudge_callback", seq, sizeof(seq))' in read
+    cb = _function_body("public ac_nudge_callback(")
+    gate = cb.index("data[0] != g_acNudgeSeq")
+    assert gate < cb.index("curl_get_response_body")
+    assert cb.index("return;", gate) < cb.index("curl_get_response_body")
+    arm = _function_body("public ac_arm_callback(")
+    assert "copy(nonce, charsmax(nonce), data)" in arm
+    assert "g_acArmNonce" not in arm, "log the nonce the request carried, not the current one"
+
+
+def test_the_nudge_refuses_a_truncated_reply() -> None:
+    render = _function_body("stock ac_nudge_render(")
+    assert render.index("bytes >= AC_ROSTER_BODY_SIZE - 1") < render.index("client_print(slot")
+
+
+def test_the_test_mode_setters_close_the_episode() -> None:
+    for fn in ("public cmd_test_setup_match(", "public cmd_test_reset("):
+        assert "ac_arm_state_reset();" in _function_body(fn)

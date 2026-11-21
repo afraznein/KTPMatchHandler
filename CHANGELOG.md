@@ -35,7 +35,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Private ready-up nudge.** In an official pending phase, each on-team player the
   `/api/ac/live-sessions` read says has no AC session gets one chat line, to him
   alone: `Start your KTP AC client - this official match is about to go live.` Once
-  per player per pending phase, keyed on authid. The read reuses the go-live roster
+  per player per pending phase, keyed on authid. It asks only about players armed at
+  least 30 s earlier in the episode (time for an auto-starting client to see the arm,
+  start and report), and only on pending entry and the 30 s beat, never on a
+  roster-change send, so a joiner is not read as absent before his client could
+  answer, and a reconnect wave does not spend the API's per-host request budget.
+  The reply carries the read's sequence number, so a reply to an older read is
+  discarded. The read reuses the go-live roster
   route and its contract gate (one row per id asked, each echoing the bytes sent,
   liveness readable on every row); a reply that fails the gate nudges nobody, and a
   reply that lands after the phase moved is discarded. Each slot's authid is re-read
