@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.186** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.187** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -23,6 +23,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 - **Ready-Up System**: Configurable player count per team (default: 6)
 - **Auto-Config Execution**: Map-specific AND match-type-specific server settings
 - **Player Roster Logging**: Full team rosters with SteamIDs and IPs logged to Discord
+- **AC Auto-Start Arm** (v0.10.187+): `.ktp`/`.ktpOT` tell the anti-cheat API who is on teams from the password accept through go-live, so a signed-in AC client can start its session before the match is live; at ready-up, each on-team player with no AC session gets one private chat line asking him to start it. Report-only: neither can hold up or change a match
 - **Match State Tracking**: Full visibility into match progress
 
 ### HLStatsX Integration (v0.7.0+)
@@ -1227,7 +1228,7 @@ For support and questions, please open an issue on GitHub.
 
 ## Status
 
-- **Current Version**: v0.10.186
+- **Current Version**: v0.10.187
 - **Status**: Production (fleet-wide on KTP-ReHLDS extension mode; score persistence in live verification)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + KTPAMXX 2.7.x (extension mode, no Metamod)
 - **Last Updated**: August 2026
@@ -1239,7 +1240,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.186                    ║
+║             KTP MATCH HANDLER v0.10.187                    ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1277,4 +1278,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.186** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.187** - Making competitive Day of Defeat matches better, one pause at a time.

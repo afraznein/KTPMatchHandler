@@ -8,6 +8,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.10.187] - 2026-11-21
+
+### Added
+
+- **AC auto-start arm for `.ktp` and `.ktpOT`.** `POST /api/ac/arm` tells the
+  anti-cheat API which players are on teams for an official match about to go live,
+  so a signed-in AC client can start its own session first. Body:
+  `{"serverEndpoint","matchType","phase","nonce","steamIds":[...]}`, with at most 32
+  ids, sent with the same `X-Server-Secret` headers as `/api/match/announce`.
+  It is sent at the password accept (pre-start), on entry to every pending phase,
+  every 30 s through pre-start and pending (riding the existing once-a-second HUD
+  ticks), on a roster change (no sooner than 5 s after the last send), and once at
+  go-live. Go-live is instant on the last `.ready`, which is why the arm starts at the
+  password and not there. `phase` is `prestart`, `pending` or `live`.
+  The nonce names one episode to the client. The pre-start a `.ktp` opens and the
+  1st-half pending it leads into share one, so a manual stop in pre-start holds
+  through ready-up; every 2nd-half and OT pending gets a fresh one.
+  **Report-only:** no path touches match state or waits on the reply. A failure logs
+  `AC_ARM_FAILED` (or `AC_ARM_REFUSED` for a 4xx) and the next beat tries again.
+  `.scrim`, `.12man`, `.draft` and `.draftOT` never arm: they take no password, so
+  anyone could arm a whole server with them. A `.testmatch` suppresses the send, like
+  every other AC call.
+- **Private ready-up nudge.** In an official pending phase, each on-team player the
+  `/api/ac/live-sessions` read says has no AC session gets one chat line, to him
+  alone: `Start your KTP AC client - this official match is about to go live.` Once
+  per player per pending phase, keyed on authid. The read reuses the go-live roster
+  route and its contract gate (one row per id asked, each echoing the bytes sent,
+  liveness readable on every row); a reply that fails the gate nudges nobody, and a
+  reply that lands after the phase moved is discarded. Each slot's authid is re-read
+  before anyone is told. Nothing reaches public chat and nobody is named to anyone
+  else (operator ruling 2026-11-21, which widens the 0.10.186 admin-only rule to this
+  one private line).
+- Log events: `AC_ARM_SEND`, `AC_ARM_OK`, `AC_ARM_REFUSED`, `AC_ARM_FAILED`,
+  `AC_ARM_SKIP` (no one on teams yet, as on a 2nd-half restore before anyone has
+  reconnected), `AC_NUDGE_SEND`, `AC_NUDGE_PLAYER`, `AC_NUDGE_DONE`,
+  `AC_NUDGE_DISCARDED`, `AC_NUDGE_UNREADABLE`, `AC_NUDGE_FAILED`. Like `AC_ROSTER_*`,
+  they land in `addons/ktpamx/logs` only.
+
+### Deploy order
+
+The API's `/api/ac/arm` (with its kill switch) ships first. Until it does, every send
+logs `AC_ARM_REFUSED` with the API's 4xx and changes nothing. With the API's switch off the posts
+are equally harmless.
+
 ### Added (test-mode build only)
 
 - **`amx_ktp_test_13_queue_id_input <1|2> <input>`** puts the 1.3 Queue ID prompt in
@@ -19,8 +65,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   opens a menu for the caller) is unreachable from it. `amx_ktp_test_reset` now also
   closes an open prompt and its timeout task.
 
-  Compiled only with `KTP_TEST_MODE=1`; the release build does not contain it, so
-  there is no version bump and no fleet wave.
+  Compiled only with `KTP_TEST_MODE=1`; the release build does not contain it. It
+  merged after 0.10.186 and is listed here because 0.10.187 is the first release cut
+  from a tree that carries it.
 
 ---
 
