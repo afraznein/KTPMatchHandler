@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.186"
+#define PLUGIN_VERSION "0.10.187"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -207,6 +207,47 @@ new g_acRosterBody[AC_ROSTER_BODY_SIZE];
 // than trusted. Both buffers must hold the worst case plus its EOS.
 #assert AC_BODY_MAX_BYTES + 1 <= 512
 #assert AC_BODY_MAX_BYTES + 1 <= 256
+// AC auto-start arm, official matches only. Report-only, like the roster read.
+#define AC_ARM_INTERVAL 30               // seconds between re-sends through pre-start and pending
+#define AC_ARM_ROSTER_DEBOUNCE 5         // a roster change re-sends no sooner than this after the last send
+#define AC_ARM_MAX_IDS 32                // the API refuses a longer steamIds list
+#assert MAX_PLAYERS <= AC_ARM_MAX_IDS
+// The nudge read reuses the live-sessions request and reply buffers, which are sized for AC_LIVE_MAX_IDS.
+#assert AC_ARM_MAX_IDS <= AC_LIVE_MAX_IDS
+#define AC_ARM_PHASE_SIZE 12
+#define AC_ARM_NONCE_SIZE 20
+//   {"serverEndpoint":"","matchType":"","phase":"","nonce":"","steamIds":[]}  = 72 literal bytes
+#define AC_ARM_LITERAL_BYTES 72
+#define AC_ARM_BODY_MAX (AC_ARM_LITERAL_BYTES + 47 + (AC_MATCH_TYPE_SIZE - 1) + (AC_ARM_PHASE_SIZE - 1) + (AC_ARM_NONCE_SIZE - 1) + (AC_ARM_MAX_IDS * AC_LIVE_ROW_MAX))
+new g_acArmBody[AC_ARM_BODY_MAX + 1];
+new bool:g_acArmActive;                  // an official pre-start/pending episode is open
+new g_acArmNonce[AC_ARM_NONCE_SIZE];     // opaque id of the episode; fresh per pending phase
+new g_acArmPhase[AC_ARM_PHASE_SIZE];     // the episode's phase marker: prestart, pending or live
+new g_acArmLastSent;                     // get_systime() of the last send; 0 = none this episode
+new g_acArmSig;                          // on-team roster fingerprint at the last send
+new g_acArmSigNum = -1;                  // and its size, so an empty roster still has a fingerprint
+new g_acArmIds[AC_ARM_MAX_IDS][AC_LIVE_ID_SIZE];
+new g_acArmSlots[AC_ARM_MAX_IDS];
+new g_acArmNum;
+new g_acArmUnsendable;
+// Ready-up nudge. Authids already told this pending phase, so nobody hears it twice.
+#define AC_NUDGE_MEMO_MAX 64
+new g_acNudged[AC_NUDGE_MEMO_MAX][AC_LIVE_ID_SIZE];
+new g_acNudgedNum;
+// The read in flight: who it asked about, the slot each id was read from, and the
+// episode it belongs to, so a reply that lands after the phase moved nudges nobody.
+new g_acNudgeAskIds[AC_ARM_MAX_IDS][AC_LIVE_ID_SIZE];
+new g_acNudgeAskSlots[AC_ARM_MAX_IDS];
+new g_acNudgeAskNum;
+new g_acNudgeAskNonce[AC_ARM_NONCE_SIZE];
+new g_acNudgeBody[AC_LIVE_BODY_MAX + 1];
+new g_acNudgeSeq;                        // bumped per read; the reply carries it back to prove which read it answers
+// When each id was first armed this episode. A client needs time to see the arm, start
+// and send its first beat, so the nudge does not ask about an id until this long after.
+#define AC_NUDGE_ARM_GRACE AC_ARM_INTERVAL
+new g_acArmSeenIds[AC_NUDGE_MEMO_MAX][AC_LIVE_ID_SIZE];
+new g_acArmSeenAt[AC_NUDGE_MEMO_MAX];
+new g_acArmSeenNum;
 #if defined HAS_CURL
 new curl_slist: g_acCurlHeaders = SList_Empty;  // persistent headers slist (never freed — async safety)
 #endif
@@ -3123,6 +3164,8 @@ stock ac_announce_state_reset() {
     // matched against the previous roster's players.
     g_acLiveNum = 0;
     g_acLiveUnsendable = 0;
+    // The arm episode is match-scoped too; every exit that clears identity ends it.
+    ac_arm_state_reset();
 }
 
 // ================= AC live-session roster at go-live =================
@@ -3654,6 +3697,479 @@ stock send_ac_roster_report(const matchId[]) {
     log_ktp("event=AC_ROSTER_SEND match_id=%s on_teams=%d unsendable_ids=%d body_bytes=%d body_max=%d",
         matchId, g_acLiveNum, g_acLiveUnsendable, at, AC_LIVE_BODY_MAX);
     curl_easy_perform(curl, "ac_roster_callback");
+}
+
+// ================= AC auto-start arm (official matches) =================
+// Tells the AC API which players are on teams for an official match that is about to
+// go live, so a signed-in client can start its own session first. It arms at the .ktp
+// password accept, not at go-live: go-live is instant on the last .ready, which leaves
+// a client no time to start. REPORT-ONLY, like the roster read: nothing here touches
+// match state, waits on a reply or acts on one, and a failure is logged and retried on
+// the next beat.
+//
+// .ktp and .ktpOT only. The other types take no password, so arming on them would let
+// anyone start recording on every signed-in client on the server.
+//
+// The nonce names one episode to the client, which will not auto-start again for a
+// nonce it was stopped under by hand. The pre-start a .ktp opens and the 1st-half
+// pending it leads into share one, so a manual stop in pre-start holds through
+// ready-up; every other pending phase (2nd half, each OT round) gets a fresh one.
+
+stock ac_arm_state_reset() {
+    g_acArmActive = false;
+    g_acArmNonce[0] = EOS;
+    g_acArmPhase[0] = EOS;
+    g_acArmLastSent = 0;
+    g_acArmSig = 0;
+    g_acArmSigNum = -1;
+    g_acArmNum = 0;
+    g_acArmUnsendable = 0;
+    g_acNudgedNum = 0;
+    g_acNudgeAskNum = 0;
+    g_acNudgeAskNonce[0] = EOS;
+    g_acArmSeenNum = 0;
+}
+
+// Opaque to the API and the client: it only has to differ between episodes.
+// A new episode starts every id's arm clock again.
+stock ac_arm_mint_nonce() {
+    formatex(g_acArmNonce, charsmax(g_acArmNonce), "%08x%04x%04x",
+        get_systime(), random_num(0, 0xFFFF), random_num(0, 0xFFFF));
+    g_acArmSeenNum = 0;
+}
+
+// Seconds since this id first went out in an arm this episode, or -1 if it has not.
+stock ac_arm_seen_for(const sid[], now) {
+    for (new i = 0; i < g_acArmSeenNum; i++) {
+        if (equal(g_acArmSeenIds[i], sid)) return now - g_acArmSeenAt[i];
+    }
+    return -1;
+}
+
+stock ac_arm_mark_seen(now) {
+    for (new i = 0; i < g_acArmNum; i++) {
+        if (g_acArmSeenNum >= AC_NUDGE_MEMO_MAX) return;
+        if (ac_arm_seen_for(g_acArmIds[i], now) >= 0) continue;
+        copy(g_acArmSeenIds[g_acArmSeenNum], charsmax(g_acArmSeenIds[]), g_acArmIds[i]);
+        g_acArmSeenAt[g_acArmSeenNum] = now;
+        g_acArmSeenNum++;
+    }
+}
+
+// The on-team players, read from this server's own slots. Returns an order-free
+// fingerprint of the set, so a slot shuffle is not a roster change and a join, a leave
+// or a move to spectator is. Side is left out: the API is not told it.
+stock ac_arm_collect() {
+    g_acArmNum = 0;
+    g_acArmUnsendable = 0;
+    new players[MAX_PLAYERS], pnum;
+    get_match_participants(players, pnum);
+    new sig = 0;
+    for (new i = 0; i < pnum && g_acArmNum < AC_ARM_MAX_IDS; i++) {
+        new side = get_user_team(players[i]);
+        if (side != 1 && side != 2) continue;
+        new sid[AC_LIVE_ID_SIZE];
+        get_user_authid(players[i], sid, charsmax(sid));
+        // Same sendability test as the roster read; whatever passes goes out byte for byte.
+        if (contain(sid, ":") == -1) {
+            g_acArmUnsendable++;
+            continue;
+        }
+        copy(g_acArmIds[g_acArmNum], charsmax(g_acArmIds[]), sid);
+        g_acArmSlots[g_acArmNum] = players[i];
+        g_acArmNum++;
+        new h = 5381;
+        for (new c = 0; sid[c]; c++) h = h * 33 + sid[c];
+        sig += h;
+    }
+    return sig;
+}
+
+stock bool:ac_arm_current_phase(out[], maxlen) {
+    if (g_preStartPending) { copy(out, maxlen, "prestart"); return true; }
+    if (g_matchPending)    { copy(out, maxlen, "pending");  return true; }
+    out[0] = EOS;
+    return false;
+}
+
+// .ktp / .ktpOT password accepted. Any other start closes a stale episode instead.
+stock ac_arm_on_prestart() {
+    ac_arm_state_reset();
+    if (!is_official_match_type(g_matchType)) return;
+    g_acArmActive = true;
+    ac_arm_mint_nonce();
+    copy(g_acArmPhase, charsmax(g_acArmPhase), "prestart");
+    ac_arm_send("prestart", "ktp_accept");
+}
+
+// Every way into a pending phase lands here: the confirm that ends a pre-start, and the
+// 2nd-half and OT restores. Only the pending a .ktp pre-start leads into keeps its nonce.
+stock ac_arm_on_pending() {
+    if (!is_official_match_type(g_matchType)) {
+        ac_arm_state_reset();
+        return;
+    }
+    if (!g_acArmActive || !equal(g_acArmPhase, "prestart")) ac_arm_mint_nonce();
+    g_acArmActive = true;
+    copy(g_acArmPhase, charsmax(g_acArmPhase), "pending");
+    g_acNudgedNum = 0;   // once per player per pending phase
+    ac_arm_send("pending", "pending_entry");
+    ac_nudge_read();
+}
+
+// One last send as the period goes live; the beat stops with pending, so the arm then
+// lapses on the API's TTL.
+stock ac_arm_on_live() {
+    if (!g_acArmActive || !is_official_match_type(g_matchType)) return;
+    copy(g_acArmPhase, charsmax(g_acArmPhase), "live");
+    ac_arm_send("live", "go_live");
+}
+
+// Driven from the pre-start and pending HUD ticks, which already run once a second
+// through exactly the window this covers. AMXX tasks stop during a pause, so a paused
+// ready-up stops re-arming and resumes within a second of the unpause.
+stock ac_arm_tick() {
+    if (!g_acArmActive || !is_official_match_type(g_matchType)) return;
+    new phase[AC_ARM_PHASE_SIZE];
+    if (!ac_arm_current_phase(phase, charsmax(phase))) return;
+
+    new since = get_systime() - g_acArmLastSent;
+    // A negative gap is a clock that moved, so it is due rather than "not yet".
+    if (g_acArmLastSent && since >= 0 && since < AC_ARM_INTERVAL) {
+        if (since < AC_ARM_ROSTER_DEBOUNCE) return;
+        new sig = ac_arm_collect();
+        if (sig == g_acArmSig && g_acArmNum == g_acArmSigNum) return;
+        // No nudge read here: a joiner was armed this instant and could not have
+        // started yet, and a reconnect wave would spend the API's per-host budget.
+        ac_arm_send(phase, "roster_change");
+        return;
+    }
+    ac_arm_send(phase, "interval");
+    if (g_matchPending) ac_nudge_read();
+}
+
+stock ac_arm_send(const phase[], const reason[]) {
+    // Collected and stamped before every early return, so the beat stays at its own
+    // cadence on a server that cannot send, and the nudge read below always works from
+    // a fresh roster.
+    new sig = ac_arm_collect();
+    g_acArmLastSent = get_systime();
+    g_acArmSig = sig;
+    g_acArmSigNum = g_acArmNum;
+
+#if defined KTP_TEST_MODE
+    if (g_testMatchActive) {
+        log_ktp("event=TESTMATCH_OUTBOUND_SUPPRESSED sink=ac_arm phase=%s", phase);
+        return;
+    }
+#endif
+    if (!g_acApiBaseUrl[0] || !g_acServerSecret[0] || !g_acServerEndpoint[0]) return;
+
+    // Nobody to arm yet: a 2nd-half restore runs before anyone has reconnected. The
+    // join that follows is a roster change and sends then.
+    if (!g_acArmNum) {
+        log_ktp("event=AC_ARM_SKIP reason=no_roster phase=%s unsendable_ids=%d nonce=%s",
+            phase, g_acArmUnsendable, g_acArmNonce);
+        return;
+    }
+
+    new acMatchType[AC_MATCH_TYPE_SIZE];
+    get_ac_match_type_key(g_matchType, acMatchType, charsmax(acMatchType));
+
+    new at = formatex(g_acArmBody, charsmax(g_acArmBody),
+        "{^"serverEndpoint^":^"%s^",^"matchType^":^"%s^",^"phase^":^"%s^",^"nonce^":^"%s^",^"steamIds^":[",
+        g_acServerEndpoint, acMatchType, phase, g_acArmNonce);
+    for (new i = 0; i < g_acArmNum; i++) {
+        // Derived from the worst case, so this never fires; checked anyway so a size
+        // changed later fails loudly rather than arming fewer players than it says.
+        if (charsmax(g_acArmBody) - at < AC_LIVE_ROW_MAX + 2) {
+            log_ktp("event=AC_ARM_FAILED reason='body_headroom' phase=%s on_teams=%d written=%d body_max=%d",
+                phase, g_acArmNum, i, AC_ARM_BODY_MAX);
+            return;
+        }
+        if (i) at += formatex(g_acArmBody[at], charsmax(g_acArmBody) - at, ",");
+        at += formatex(g_acArmBody[at], charsmax(g_acArmBody) - at, "^"%s^"", g_acArmIds[i]);
+    }
+    at += formatex(g_acArmBody[at], charsmax(g_acArmBody) - at, "]}");
+
+    new url[256];
+    formatex(url, charsmax(url), "%s/api/ac/arm", g_acApiBaseUrl);
+
+    new CURL:curl = curl_easy_init();
+    if (!curl) {
+        log_ktp("event=AC_ARM_FAILED reason='curl_init_failed' phase=%s on_teams=%d", phase, g_acArmNum);
+        return;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_acCurlHeaders);
+    curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_acArmBody);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
+
+    log_ktp("event=AC_ARM_SEND phase=%s reason=%s match_type=%s nonce=%s on_teams=%d unsendable_ids=%d body_bytes=%d body_max=%d",
+        phase, reason, acMatchType, g_acArmNonce, g_acArmNum, g_acArmUnsendable, at, AC_ARM_BODY_MAX);
+    // The nonce rides with the request, so the reply is logged against the episode it
+    // armed rather than whichever one is current when it lands.
+    curl_easy_perform(curl, "ac_arm_callback", g_acArmNonce, sizeof(g_acArmNonce));
+    ac_arm_mark_seen(g_acArmLastSent);
+}
+
+// Logs and lets go. The reply decides nothing on this side.
+public ac_arm_callback(CURL:curl, CURLcode:code, const data[]) {
+    new nonce[AC_ARM_NONCE_SIZE];
+    copy(nonce, charsmax(nonce), data);
+    if (code != CURLE_OK) {
+        new error[128];
+        curl_easy_strerror(code, error, charsmax(error));
+        log_ktp("event=AC_ARM_FAILED reason=curl curl_code=%d error='%s' nonce=%s", _:code, error, nonce);
+    } else {
+        new httpCode;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, httpCode);
+        if (httpCode >= 200 && httpCode < 300) {
+            log_ktp("event=AC_ARM_OK http=%d nonce=%s", httpCode, nonce);
+        } else if (httpCode >= 400 && httpCode < 500) {
+            // A definite refusal: an API without the route, the switch off, or a bad secret.
+            log_ktp("event=AC_ARM_REFUSED http=%d nonce=%s", httpCode, nonce);
+        } else {
+            log_ktp("event=AC_ARM_FAILED reason=http http=%d nonce=%s", httpCode, nonce);
+        }
+    }
+    curl_easy_cleanup(curl);
+    // g_acCurlHeaders is persistent — never free here (async-safety, same principle as g_curlHeaders).
+}
+
+// ================= Ready-up nudge (official matches) =================
+// One private chat line, at ready-up, to each on-team player the live-sessions read
+// says has no AC session: the fallback for a client that cannot auto-start. It goes to
+// that player only, never to chat at large, because naming who is not running the
+// client in open chat is accusation-adjacent. Once per player per pending phase.
+
+stock bool:ac_nudge_already(const sid[]) {
+    for (new i = 0; i < g_acNudgedNum; i++) {
+        if (equal(g_acNudged[i], sid)) return true;
+    }
+    return false;
+}
+
+// Asks about the players ac_arm_send just collected, minus those already told and
+// those armed too recently to have started: reading a client as absent before it
+// could have answered the arm would spend its one nudge on a false reading.
+stock ac_nudge_read() {
+    if (!g_matchPending || !g_acArmActive || !is_official_match_type(g_matchType)) return;
+#if defined KTP_TEST_MODE
+    if (g_testMatchActive) {
+        log_ktp("event=TESTMATCH_OUTBOUND_SUPPRESSED sink=ac_nudge nonce=%s", g_acArmNonce);
+        return;
+    }
+#endif
+    if (!g_acApiBaseUrl[0] || !g_acServerSecret[0]) return;
+
+    g_acNudgeAskNum = 0;
+    new now = get_systime();
+    new young = 0;
+    for (new i = 0; i < g_acArmNum; i++) {
+        if (ac_nudge_already(g_acArmIds[i])) continue;
+        new armedFor = ac_arm_seen_for(g_acArmIds[i], now);
+        if (armedFor < AC_NUDGE_ARM_GRACE) {
+            young++;
+            continue;
+        }
+        copy(g_acNudgeAskIds[g_acNudgeAskNum], charsmax(g_acNudgeAskIds[]), g_acArmIds[i]);
+        g_acNudgeAskSlots[g_acNudgeAskNum] = g_acArmSlots[i];
+        g_acNudgeAskNum++;
+    }
+    if (!g_acNudgeAskNum) return;
+    copy(g_acNudgeAskNonce, charsmax(g_acNudgeAskNonce), g_acArmNonce);
+    g_acNudgeSeq++;
+
+    new at = formatex(g_acNudgeBody, charsmax(g_acNudgeBody), "{^"steamIds^":[");
+    for (new i = 0; i < g_acNudgeAskNum; i++) {
+        if (charsmax(g_acNudgeBody) - at < AC_LIVE_ROW_MAX + 2) {
+            log_ktp("event=AC_NUDGE_FAILED reason='body_headroom' asked=%d written=%d body_max=%d",
+                g_acNudgeAskNum, i, AC_LIVE_BODY_MAX);
+            g_acNudgeAskNum = 0;
+            return;
+        }
+        if (i) at += formatex(g_acNudgeBody[at], charsmax(g_acNudgeBody) - at, ",");
+        at += formatex(g_acNudgeBody[at], charsmax(g_acNudgeBody) - at, "^"%s^"", g_acNudgeAskIds[i]);
+    }
+    at += formatex(g_acNudgeBody[at], charsmax(g_acNudgeBody) - at, "]}");
+
+    new url[256];
+    formatex(url, charsmax(url), "%s/api/ac/live-sessions", g_acApiBaseUrl);
+
+    new CURL:curl = curl_easy_init();
+    if (!curl) {
+        log_ktp("event=AC_NUDGE_FAILED reason='curl_init_failed' asked=%d", g_acNudgeAskNum);
+        return;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, g_acCurlHeaders);
+    curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, g_acNudgeBody);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3);
+
+    log_ktp("event=AC_NUDGE_SEND nonce=%s asked=%d already_told=%d armed_too_recently=%d body_bytes=%d body_max=%d",
+        g_acNudgeAskNonce, g_acNudgeAskNum, g_acNudgedNum, young, at, AC_LIVE_BODY_MAX);
+    // The ask list lives in globals the next read overwrites, so the reply carries the
+    // read's sequence number and a reply to an older read is discarded.
+    new seq[1];
+    seq[0] = g_acNudgeSeq;
+    curl_easy_perform(curl, "ac_nudge_callback", seq, sizeof(seq));
+}
+
+public ac_nudge_callback(CURL:curl, CURLcode:code, const data[]) {
+    if (data[0] != g_acNudgeSeq) {
+        log_ktp("event=AC_NUDGE_DISCARDED reason=superseded seq=%d current=%d", data[0], g_acNudgeSeq);
+        curl_easy_cleanup(curl);
+        return;
+    }
+    if (code != CURLE_OK) {
+        new error[128];
+        curl_easy_strerror(code, error, charsmax(error));
+        log_ktp("event=AC_NUDGE_FAILED reason=curl curl_code=%d error='%s' nonce=%s asked=%d",
+            _:code, error, g_acNudgeAskNonce, g_acNudgeAskNum);
+        curl_easy_cleanup(curl);
+        return;
+    }
+    new httpCode;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, httpCode);
+    if (httpCode < 200 || httpCode >= 300) {
+        log_ktp("event=AC_NUDGE_FAILED reason=http http=%d nonce=%s asked=%d",
+            httpCode, g_acNudgeAskNonce, g_acNudgeAskNum);
+        curl_easy_cleanup(curl);
+        return;
+    }
+    // Shares the roster reply buffer. Safe because each callback fills and parses it
+    // in one synchronous call, so the two readings never interleave in it.
+    g_acRosterBody[0] = EOS;
+    new bytes = curl_get_response_body(curl, g_acRosterBody, charsmax(g_acRosterBody));
+    curl_easy_cleanup(curl);
+    g_acRosterBody[AC_ROSTER_BODY_SIZE - 1] = EOS;
+    ac_nudge_render(bytes);
+    // g_acCurlHeaders is persistent — never free here (async-safety, same principle as g_curlHeaders).
+}
+
+// Same contract gate as the go-live reading: one row per id asked, each echoing the
+// bytes sent, liveness readable on every row. A reply that breaks it nudges nobody,
+// because telling a player who IS running the client to start it is the wrong
+// direction to fail in.
+stock ac_nudge_render(bytes) {
+    if (!g_matchPending || !g_acArmActive || !g_acNudgeAskNonce[0] || !equal(g_acNudgeAskNonce, g_acArmNonce)) {
+        log_ktp("event=AC_NUDGE_DISCARDED reason=phase_moved requested=%s current=%s pending=%d",
+            g_acNudgeAskNonce, g_acArmNonce, g_matchPending ? 1 : 0);
+        return;
+    }
+
+    // A reply that filled the buffer may have lost rows; the go-live render refuses it too.
+    if (bytes >= AC_ROSTER_BODY_SIZE - 1) {
+        log_ktp("event=AC_NUDGE_UNREADABLE reason=truncated bytes=%d asked=%d", bytes, g_acNudgeAskNum);
+        return;
+    }
+    new arrTag[] = AC_ROSTER_SESSIONS_TAG;
+    new p = contain(g_acRosterBody, arrTag);
+    new ttl = ac_roster_parse_ttl();
+    if (p == -1 || ttl <= 0) {
+        log_ktp("event=AC_NUDGE_UNREADABLE reason=unparsed bytes=%d sessions_marker=%s ttl=%d asked=%d",
+            bytes, p == -1 ? "absent" : "present", ttl, g_acNudgeAskNum);
+        return;
+    }
+    p += strlen(arrTag);
+
+    new bool:listed[AC_ARM_MAX_IDS], bool:live[AC_ARM_MAX_IDS];
+    for (new i = 0; i < g_acNudgeAskNum; i++) {
+        listed[i] = false;
+        live[i] = false;
+    }
+    new rows = 0, echoed = 0, activeMissing = 0;
+    new sidTag[] = AC_ROSTER_SID_TAG;
+
+    while (g_acRosterBody[p] && g_acRosterBody[p] != ']') {
+        if (g_acRosterBody[p] != '{') {
+            p++;
+            continue;
+        }
+        new objStart = p + 1;
+        new objEnd = ac_roster_object_end(objStart);
+        new saved = g_acRosterBody[objEnd];
+        g_acRosterBody[objEnd] = EOS;
+
+        new sid[AC_LIVE_ID_SIZE];
+        sid[0] = EOS;
+        new rel = contain(g_acRosterBody[objStart], sidTag);
+        if (rel != -1) {
+            new at = objStart + rel + strlen(sidTag);
+            new n = 0;
+            while (g_acRosterBody[at + n] && g_acRosterBody[at + n] != '"' && n < charsmax(sid)) {
+                sid[n] = g_acRosterBody[at + n];
+                n++;
+            }
+            sid[n] = EOS;
+        }
+        new bool:activeTrue  = (contain(g_acRosterBody[objStart], "^"active^":true")  != -1);
+        new bool:activeFalse = (contain(g_acRosterBody[objStart], "^"active^":false") != -1);
+        if (!activeTrue && !activeFalse) activeMissing++;
+
+        g_acRosterBody[objEnd] = saved;
+        p = (g_acRosterBody[objEnd] == '}') ? objEnd + 1 : objEnd;
+
+        if (!sid[0]) continue;
+        rows++;
+        for (new i = 0; i < g_acNudgeAskNum; i++) {
+            if (listed[i] || !equal(g_acNudgeAskIds[i], sid)) continue;
+            listed[i] = true;
+            live[i] = activeTrue;
+            echoed++;
+            break;
+        }
+    }
+
+    if (rows != g_acNudgeAskNum || echoed != rows || activeMissing > 0) {
+        log_ktp("event=AC_NUDGE_UNREADABLE reason=contract rows=%d echoed=%d asked=%d active_missing=%d",
+            rows, echoed, g_acNudgeAskNum, activeMissing);
+        return;
+    }
+
+    new liveNum = 0, nudged = 0, gone = 0, offTeam = 0, memoFull = 0;
+    for (new i = 0; i < g_acNudgeAskNum; i++) {
+        if (live[i]) {
+            liveNum++;
+            continue;
+        }
+        // A slot is not an identity: re-read the authid before telling anyone anything.
+        new slot = g_acNudgeAskSlots[i];
+        if (!is_user_connected(slot)) {
+            gone++;
+            continue;
+        }
+        new nowSid[AC_LIVE_ID_SIZE];
+        get_user_authid(slot, nowSid, charsmax(nowSid));
+        if (!equal(nowSid, g_acNudgeAskIds[i])) {
+            gone++;
+            continue;
+        }
+        new side = get_user_team(slot);
+        if (side != 1 && side != 2) {
+            offTeam++;
+            continue;
+        }
+        if (ac_nudge_already(nowSid)) continue;
+        // Without a memo slot the once-per-phase limit cannot hold, so say nothing.
+        if (g_acNudgedNum >= AC_NUDGE_MEMO_MAX) {
+            memoFull++;
+            continue;
+        }
+        copy(g_acNudged[g_acNudgedNum], charsmax(g_acNudged[]), nowSid);
+        g_acNudgedNum++;
+        client_print(slot, print_chat, "[KTP] Start your KTP AC client - this official match is about to go live.");
+        log_ktp("event=AC_NUDGE_PLAYER nonce=%s steamid=%s", g_acNudgeAskNonce, nowSid);
+        nudged++;
+    }
+
+    log_ktp("event=AC_NUDGE_DONE nonce=%s asked=%d live=%d nudged=%d gone=%d off_team=%d memo_full=%d already_told=%d",
+        g_acNudgeAskNonce, g_acNudgeAskNum, liveNum, nudged, gone, offTeam, memoFull, g_acNudgedNum);
 }
 
 // Mark a match ended on the KTPAntiCheat API. Idempotent — only updates rows with ended_at IS NULL.
@@ -5283,6 +5799,9 @@ stock hud_human_targets(targets[MAX_PLAYERS]) {
 
 public pending_hud_tick() {
     if (!g_matchPending) { remove_task(g_taskPendingHudId); return; }
+#if defined HAS_CURL
+    ac_arm_tick();
+#endif
 
     new alliesPlayers, axisPlayers, alliesReady, axisReady;
     get_ready_counts(alliesPlayers, axisPlayers, alliesReady, axisReady);
@@ -5445,6 +5964,9 @@ stock show_continuation_pending_hud_internal(alliesReady, alliesPlayers, axisRea
 
 public prestart_hud_tick() {
     if (!g_preStartPending) { remove_task(g_taskPrestartHudId); return; }
+#if defined HAS_CURL
+    ac_arm_tick();
+#endif
 
     new matchLabel[16];
     get_match_type_label(matchLabel, charsmax(matchLabel));
@@ -5586,6 +6108,9 @@ public plugin_init() {
     g_changeLevelHandledTime = 0.0;
     g_pfnChangeLevelProcessed = false;  // per-intermission debounce; extension-mode globals persist, so clear it per map here
     g_scoreRestoreAfterConfig = false;  // its consumer task did not survive the map change
+#if defined HAS_CURL
+    ac_arm_state_reset();   // a restore in plugin_cfg opens the next episode itself
+#endif
 
     // Same reason: the shot-diagnostics flag is match-scoped, and a server that
     // came up mid-anything must not inherit an on-state from before. Fails
@@ -6377,6 +6902,10 @@ stock restore_match_context_from_localinfo() {
         // Start periodic unready player reminder
         remove_task(g_taskUnreadyReminderId);
         set_task(g_unreadyReminderSecs, "unready_reminder_tick", g_taskUnreadyReminderId, _, _, "b");
+
+#if defined HAS_CURL
+        ac_arm_on_pending();
+#endif
     }
     else if (isOvertime) {
         // ========== Overtime Restoration ==========
@@ -6463,6 +6992,10 @@ stock restore_match_context_from_localinfo() {
         // Start periodic unready player reminder
         remove_task(g_taskUnreadyReminderId);
         set_task(g_unreadyReminderSecs, "unready_reminder_tick", g_taskUnreadyReminderId, _, _, "b");
+
+#if defined HAS_CURL
+        ac_arm_on_pending();
+#endif
     }
 
     // NOTE: Don't clear mode here - keep it until match actually ends
@@ -8509,6 +9042,11 @@ stock match_start_with_args(id, const suppliedArgs[]) {
     // Log event
     log_ktp("event=PRESTART_BEGIN by='%s' steamid=%s ip=%s team=%s map=%s second_half=%d", name, safe_sid(sid), ip[0]?ip:"NA", team, map, g_secondHalfPending ? 1 : 0);
 
+    // Arm AC auto-start for .ktp/.ktpOT now; go-live is too late for a client to start.
+#if defined HAS_CURL
+    ac_arm_on_prestart();
+#endif
+
     // Announce pre-start with match type
     new matchTypeStr[16];
     switch (g_matchType) {
@@ -9114,6 +9652,9 @@ public cmd_cancel(id) {
         }
         clear_pause_session_state();
         prestart_reset();
+#if defined HAS_CURL
+        ac_arm_state_reset();   // no match id exists yet, so clear_match_id never runs here
+#endif
         disarm_ready_override("prestart_cancel");
         log_ktp("event=PRESTART_CANCEL by='%s' steamid=%s ip=%s team=%s map=%s", name, safe_sid(sid), ip[0]?ip:"NA", team, map);
         announce_all("Pre-Start cancelled by %s.", name);
@@ -10879,6 +11420,8 @@ public task_deferred_discord_fwd() {
         send_ac_match_announce(g_matchId);
         // Report-only: who has a live AC session as this period goes live.
         send_ac_roster_report(g_matchId);
+        // Last arm of the episode; report-only like the two above.
+        ac_arm_on_live();
         #endif
     }
 
@@ -11053,6 +11596,10 @@ stock enter_pending_phase(const initiator[]) {
     if (!g_secondHalfPending && !g_inOvertime) {
         announce_all("[HLTV] Captains: Ensure HLTV is connected before match start for auto-recording.");
     }
+
+#if defined HAS_CURL
+    ac_arm_on_pending();
+#endif
 }
 
 // ================= Server/RCON pause handlers =================
@@ -11325,6 +11872,9 @@ public cmd_test_setup_match(id) {
     g_preStartPending = true;
     g_matchPending = false;
     g_matchLive = false;
+#if defined HAS_CURL
+    ac_arm_state_reset();   // bypasses the password accept, so no earlier pre-start's nonce may carry
+#endif
 
     // Mirror production per-type Discord-flag setting. Production:
     //   - SCRIM (cmd_start_scrim) sets g_disableDiscord=true
@@ -11981,6 +12531,9 @@ public cmd_test_13_queue_id_input(id) {
 public cmd_test_reset(id) {
     if (!(get_user_flags(id) & ADMIN_RCON)) return PLUGIN_HANDLED;
     g_matchType = MATCH_TYPE_COMPETITIVE;
+#if defined HAS_CURL
+    ac_arm_state_reset();
+#endif
     g_preStartPending = false;
     g_matchPending = false;
     g_matchLive = false;

@@ -307,6 +307,53 @@ sat before the cut. ⚠️ **The `truncated=` field on the line is the HTTP repl
 its buffer), not the log line's** — `truncated=no` says nothing about whether the line itself is
 whole; its length and its last field do.
 
+### AC auto-start arm and the ready-up nudge (0.10.187)
+
+`.ktp`/`.ktpOT` only. From the password accept through go-live the plugin POSTs
+`/api/ac/arm` (`serverEndpoint`, `matchType`, `phase`, `nonce`, up to 32 `steamIds`) so a
+signed-in AC client can start its own session before the period is live. It arms at the
+password, not at go-live, because go-live is instant on the last `.ready`.
+
+🔑 **It is a REPORT, exactly like the roster read.** No path touches match state, waits on
+the reply or acts on it; `AC_ARM_FAILED`/`AC_ARM_REFUSED` are logged and the next beat
+retries. ⛔ **Never let the arm reply gate a `.confirm`, a `.ready` or a go-live.**
+
+⚠️ **The beat rides `prestart_hud_tick` and `pending_hud_tick`** (30 s, or a roster change
+no sooner than 5 s after the last send) — so it stops during a pause, because AMXX tasks
+do, and it stops at go-live. After go-live the arm lapses on the API's TTL; that is the
+design, not a dropped heartbeat.
+
+🔑 **Nonce rule:** `ac_arm_on_prestart()` mints one at the password accept;
+`ac_arm_on_pending()` keeps it only when the episode's marker is still `prestart` (the
+1st-half pending the `.ktp` led into) and mints a fresh one for every other pending phase
+(2nd-half and OT restores). The client keys its *do not auto-start again after a manual
+stop* on the nonce, so changing this rule changes what a manual stop means.
+
+⛔ **Do not arm a non-official type.** `.scrim/.12man/.draft/.draftOT` take no password, so
+an arm there lets anyone start recording on every signed-in client on the server. Every
+entry point re-checks `is_official_match_type(g_matchType)`, and the episode latch
+(`g_acArmActive`) is cleared by `ac_arm_state_reset()` from `ac_announce_state_reset()`
+(every identity clear), the pre-start `.cancel` branch, and `plugin_init()`.
+⚠️ **`g_matchType` defaults to `MATCH_TYPE_COMPETITIVE` after a cancel**, which is why the
+official check alone is not the gate — the latch is.
+
+**The nudge** is the fallback for clients that cannot auto-start. In an official pending
+phase, pending entry and each 30 s beat (⛔ never a roster-change send) ask
+`/api/ac/live-sessions` about the on-team players not yet told this phase AND armed at
+least `AC_NUDGE_ARM_GRACE` seconds ago, behind the same contract gate as the go-live reading, and sends each no-session
+player ONE `client_print(slot, ...)` line. ⛔ **Never route it through `announce_all` or
+client 0, and never name the player to anyone else** — the 2026-11-21 ruling widened the
+0.10.186 admin-only rule to this one private line and no further. A reply that fails the
+gate, or lands after the nonce moved, nudges nobody (the safe direction: telling a player
+who IS running the client to start it is the wrong way to fail). ⚠️ **The grace is load-bearing:** the
+API reports `active` only after a client's first beat, so a read in the same tick as a
+player's first arm always says *no session* and spends his one nudge on a false reading.
+And `/api/ac/live-sessions` shares the API's per-IP `plugin-write` budget with live
+match batches, so a nudge read per roster change would let a reconnect wave cost real
+data. It parses into the shared
+`g_acRosterBody`, which is safe only because each callback fills and parses it in one
+synchronous call.
+
 ## Score Restoration
 
 - Direct `dodx_set_team_score()` can crash if called during map changes
