@@ -10,6 +10,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.10.188] - 2026-11-25
+
+### Added
+
+- **`ktp_match_aborted(matchId[], map[], matchType, reason[])` forward.** Fires on
+  the two match closes that fired no forward at all: a second-half `.cancel`
+  (`reason` `secondhalf_cancel`) and `.forcereset` (`forcereset`). It runs right
+  after `ktp_match_teardown_notify()` closes the match for HLStatsX and the AC API,
+  and before the match id, map and type are cleared. It does not fire when there is
+  no match id (a `.forcereset` from pre-start), and the pre-start `.cancel` branch
+  still fires nothing, because no match window was ever opened there.
+  Its consumer is KTPHLTVRecorder, which closes the demo window on it. Before this,
+  both exits left the window open until the renamer's orphan bound or 4 h abandon.
+  **Deliberately not `ktp_match_end`:** KTPAMXX `stats_logging` runs
+  `ksc_on_match_end` on that forward and KTPCvarChecker listens to it too, so firing
+  it here would record a cancelled match as finished. Abandon still fires
+  `ktp_match_end`, unchanged.
+  `matchType` is in the payload because the recorder's `MATCH_WINDOW_CLOSE` line
+  carries `match_type=`, which downstream parsers require; `reason` lets a consumer
+  tell the two closes apart without a second forward.
+- **`ktp_matchhandler.inc`**, a public include declaring every forward this plugin
+  registers (`ktp_match_start`, `ktp_match_side_map`, `ktp_half_end`,
+  `ktp_match_end`, `ktp_match_aborted`). A consumer that includes it gets a compile
+  error if its public handler's signature drifts. `MatchType` is the consumer's own
+  tag. `tests/config_parse/test_match_aborted_forward.py` checks each declaration
+  against its `CreateMultiForward` call, and pins where the new forward fires.
+
+---
+
 ## [0.10.187] - 2026-11-21
 
 ### Added

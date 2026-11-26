@@ -75,7 +75,7 @@ new bool:g_hasDodxStatsNatives = false;
 // identical output as before this flag landed (verified at v0.10.122).
 
 #define PLUGIN_NAME    "KTP Match Handler"
-#define PLUGIN_VERSION "0.10.187"
+#define PLUGIN_VERSION "0.10.188"
 #define PLUGIN_AUTHOR  "Nein_"
 
 // Minutes per OT half (ruleset §1.10). Bounds exist because mp_timelimit 0 means
@@ -546,6 +546,7 @@ new g_taskUnreadyReminderId = 55607;  // Periodic reminder of unready players
 new g_fwdMatchStart;    // ktp_match_start(matchId[], map[], matchType, half) - half: 1,2,101+
 new g_fwdMatchSideMap;  // ktp_match_side_map(matchId[], map[], matchType[], half, alliesSlot, axisSlot)
 new g_fwdMatchEnd;      // ktp_match_end(matchId[], map[], matchType, team1Score, team2Score)
+new g_fwdMatchAborted;  // ktp_match_aborted(matchId[], map[], matchType, reason[]) - 2nd-half .cancel and .forcereset only
 new g_fwdHalfEnd;       // ktp_half_end(matchId[], map[], matchType, half, team1Score, team2Score) - fires at 1st-half end (pre-changelevel)
 
 // ---------- Team Names (customizable) ----------
@@ -4807,6 +4808,13 @@ stock ktp_match_teardown_notify(const matchId[], const map[], const flushType[],
     ktp_apply_shot_detail(false);
 }
 
+// Lets window-keeping consumers (the HLTV recorder) close a match that ends without ktp_match_end.
+stock fire_match_aborted(const matchId[], const map[], const reason[]) {
+    if (!matchId[0]) return;
+    new ret;
+    ExecuteForward(g_fwdMatchAborted, ret, matchId, map, _:g_matchType, reason);
+}
+
 stock bool: ac_timeline_should_record() {
     if (g_acTimelineMatchActive) return true;                 // real match active
     if (get_pcvar_num(g_cvarAcBaselineMode) > 0) return true; // solo baseline session
@@ -6181,6 +6189,8 @@ public plugin_init() {
     g_fwdMatchSideMap = CreateMultiForward("ktp_match_side_map", ET_IGNORE,
         FP_STRING, FP_STRING, FP_STRING, FP_CELL, FP_CELL, FP_CELL);
     g_fwdMatchEnd = CreateMultiForward("ktp_match_end", ET_IGNORE, FP_STRING, FP_STRING, FP_CELL, FP_CELL, FP_CELL);
+    // A separate forward, not ktp_match_end: stats consumers treat that one as a finished match.
+    g_fwdMatchAborted = CreateMultiForward("ktp_match_aborted", ET_IGNORE, FP_STRING, FP_STRING, FP_CELL, FP_STRING);
     // ktp_half_end(matchId[], map[], matchType, half, team1Score, team2Score) — fires once at
     // 1st-half end (in handle_first_half_end, before the changelevel) so HUD/stats consumers get
     // an authoritative half-1-end signal. The log-line path (KTP_HALF_END) does not reach AMXX
@@ -9702,6 +9712,7 @@ public cmd_cancel(id) {
         // missing here: a cancelled match left ktp_ac_match_index.ended_at NULL
         // forever, and that orphan gets re-served as "current" to clients.
         ktp_match_teardown_notify(savedMatchId, g_currentMap, "secondhalf_cancel", "status", "cancelled");
+        fire_match_aborted(savedMatchId, g_currentMap, "secondhalf_cancel");
 
         // Defense in depth: with the official gate above, every type still
         // reaching this branch already had the indicator at 0 (go-live only sets
@@ -9985,6 +9996,7 @@ stock execute_force_reset(id, const name[], const sid[], const ip[]) {
     // Close the match for both sinks before clearing state — the AC half was
     // missing here too (same orphan class as .cancel).
     ktp_match_teardown_notify(g_matchId, g_currentMap, "forcereset", "status", "forcereset");
+    fire_match_aborted(g_matchId, g_currentMap, "forcereset");
 
     // Clear match identity (including 1.3 Community state)
     clear_match_id();

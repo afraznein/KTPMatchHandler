@@ -1,6 +1,6 @@
 # KTP Match Handler
 
-**Version 0.10.187** - Advanced competitive match management system for Day of Defeat servers
+**Version 0.10.188** - Advanced competitive match management system for Day of Defeat servers
 
 A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-powered pause controls with real-time HUD updates, Discord integration, HLStatsX stats integration, match type differentiation, half tracking with context persistence, and comprehensive logging capabilities.
 
@@ -35,7 +35,7 @@ A feature-rich AMX ModX plugin providing structured match workflows, ReAPI-power
 
 ### HLTV Recording Integration (v0.10.4+)
 - **Automatic Demo Recording**: [KTPHLTVRecorder](https://github.com/afraznein/KTPHLTVRecorder) hooks into match events
-- **Always-On Recording (1.7.0+)**: HLTV records continuously via its own config; the data-server renamer names demos `<type>_<matchid>_<half>` from the `ktp_match_start`/`ktp_match_end` forwards this plugin fires
+- **Always-On Recording (1.7.0+)**: HLTV records continuously via its own config; the data-server renamer names demos `<type>_<matchid>_<half>` from the `ktp_match_start`/`ktp_match_end` forwards this plugin fires; a second-half `.cancel` or `.forcereset` closes the window through `ktp_match_aborted` (v0.10.188+), which stats consumers do not see as a finished match. Consumer plugins `#include <ktp_matchhandler>` for the forward signatures
 - **Match Events**: KTPHLTVRecorder consumes the forwards and announces recording state in chat
 
 ### Advanced Pause System (ReAPI Native)
@@ -1228,7 +1228,7 @@ For support and questions, please open an issue on GitHub.
 
 ## Status
 
-- **Current Version**: v0.10.187
+- **Current Version**: v0.10.188
 - **Status**: Production (fleet-wide on KTP-ReHLDS extension mode; score persistence in live verification)
 - **Tested On**: KTP-ReHLDS + KTP-ReAPI + KTPAMXX 2.7.x (extension mode, no Metamod)
 - **Last Updated**: August 2026
@@ -1240,7 +1240,7 @@ For support and questions, please open an issue on GitHub.
 
 ```
 ╔════════════════════════════════════════════════════════════╗
-║             KTP MATCH HANDLER v0.10.187                    ║
+║             KTP MATCH HANDLER v0.10.188                    ║
 ║              Quick Command Reference                       ║
 ╠════════════════════════════════════════════════════════════╣
 ║  MATCH CONTROL                                             ║
@@ -1278,4 +1278,4 @@ For support and questions, please open an issue on GitHub.
 
 ---
 
-**KTP Match Handler v0.10.187** - Making competitive Day of Defeat matches better, one pause at a time.
+**KTP Match Handler v0.10.188** - Making competitive Day of Defeat matches better, one pause at a time.
